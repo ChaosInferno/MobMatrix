@@ -750,3 +750,71 @@ No formatter, linter, project-wide build, or project-wide test suite was run.
   copies; missing, extra, duplicate, and inconsistent metadata remains rejected.
 - Empty original-owner metadata is accepted only for explicit non-RANDOM/non-SWAP legacy/plain
   snapshots, where ownership is inferred from each card's current hand/board seat.
+
+## Task 6 final terminal recovery/catalog metadata fixes
+
+### Status
+
+Implemented terminal recovery status preservation and immutable catalog snapshot metadata
+validation.
+
+Implementation commit: `f4a9c0b` (`fix: preserve terminal custody status`).
+
+### TDD and focused verification
+
+Focused command used for the red and green runs:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact red result after adding both regressions and before the production implementation:
+
+```text
+> Task :test FAILED
+
+CardInventoryServiceTest > recoverPreservesAbortedTerminalStatus() FAILED
+    org.opentest4j.AssertionFailedError at CardInventoryServiceTest.java:69
+
+SqliteCustodyTest > catalogSnapshotMetadataCannotBeOverwritten() FAILED
+    org.opentest4j.AssertionFailedError at SqliteCustodyTest.java:443
+
+98 tests completed, 2 failed, 4 skipped
+
+FAILURE: Build failed with an exception.
+```
+
+Exact green result after implementation:
+
+```text
+> Task :test
+
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+The focused selection passed; the four Paper-registry codec tests were assumption-skipped
+because no running Paper server was available. SQLite emitted only the JVM
+restricted-native-access warning. No formatter, linter, project-wide build, or
+project-wide test suite was run.
+
+### Corrective coverage
+
+- `RecoveryResult.complete(operationId, status, copyIds)` now accepts and preserves only
+  terminal `RETURNED` or `ABORTED` statuses. `CardInventoryService.recover` uses the
+  durable operation status for terminal rows and the return result status after successful
+  restoration, so ABORTED remains ABORTED while complete.
+- Catalog snapshot persistence now reads and compares persisted `source`, `digest`, and
+  `metadata_json` before accepting an existing snapshot ID, in addition to comparing every
+  card-definition field. Altered metadata is rejected before any row update and the
+  original metadata remains unchanged.
+- The existing altered-definition rehydration regression now exercises a complete direct
+  repository save path, while the new metadata regression verifies source, digest, and JSON
+  changes are rejected atomically and matching metadata remains intact.
+
+### Thread-boundary notes and concerns
+
+Changes remain within the pure custody result API, Paper inventory recovery adapter, and
+JDBC catalog persistence boundary. No live Bukkit/Paper objects cross into storage or
+application. Existing Paper registry and SQLite native-access environment limitations remain
+as documented above.
