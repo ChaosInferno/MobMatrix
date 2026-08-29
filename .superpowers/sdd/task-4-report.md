@@ -241,3 +241,70 @@ Coverage:
 - Placement captures and emitted capture events are sorted row-major after BFS source resolution, preserving Combo source attribution and reachability.
 
 Implementation commit: `0bcfa0e` (`fix: harden draft and random setup`)
+
+## Cross-seat RANDOM custody fix
+
+RED command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest
+```
+
+RED result (before shared cross-seat validation):
+
+```text
+> Task :compileJava UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :classes UP-TO-DATE
+> Task :compileTestJava
+> Task :processTestResources NO-SOURCE
+> Task :testClasses
+
+> Task :test FAILED
+
+AdvancedRulesTest > randomStartRejectsPhysicalCopySharedAcrossSeatInventories() FAILED
+    org.opentest4j.AssertionFailedError at AdvancedRulesTest.java:183
+
+33 tests completed, 1 failed
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':test'.
+> There were failing tests. See the report at: file:///C:/Users/blaze/IdeaProjects/Aincraft-MobMatrix/build/reports/tests/test/index.html
+
+* Try:
+> Run with --scan to get a Build Scan
+
+BUILD FAILED in 1s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+GREEN command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest
+```
+
+GREEN result:
+
+```text
+> Task :compileJava
+> Task :processResources UP-TO-DATE
+> Task :classes
+> Task :compileTestJava UP-TO-DATE
+> Task :processTestResources NO-SOURCE
+> Task :testClasses UP-TO-DATE
+> Task :test
+
+BUILD SUCCESSFUL in 1s
+4 actionable tasks: 2 executed, 2 up-to-date
+Consider enabling configuration cache to speed up your build: https://docs.gradle.org/9.7.1/userguide/configuration_cache_enabling.html
+```
+
+Implementation:
+
+- Added a focused cross-seat duplicate UUID test that verifies a shared `CardCopyId` is rejected and neither supplied inventory list is mutated.
+- RANDOM setup now validates both inventories against one shared physical-copy UUID set before sampling. Unknown catalog IDs remain excluded from usable samples; duplicate UUIDs return `RANDOM_DUPLICATE_COPY`, and no fallback deck is created.
+
+Implementation commit: `c1472e9` (`fix: reject cross-seat random duplicates`)
