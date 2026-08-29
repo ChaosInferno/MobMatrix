@@ -64,12 +64,42 @@ final class MatchApplicationServiceTest {
     assertEquals(CardCustodyPort.Failure.MISMATCHED_OPERATION, result.failure());
   }
 
-  private static final class RecordingCustody implements CardCustodyPort {
-    private final List<String> calls = new ArrayList<>();
+  @Test
+  void randomStartReservesTheExactCopiesInThePureStartState() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardDefinition> definitions = new ArrayList<>();
+    List<CardCopy> one = new ArrayList<>();
+    List<CardCopy> two = new ArrayList<>();
+    for (int index = 1; index <= 10; index++) {
+      definitions.add(new CardDefinition(new CardId(index), "No. " + index, "Card " + index,
+          1, CardType.NORMAL, 1, 1, 1, 1, 0));
+      one.add(new CardCopy(new CardCopyId(UUID.randomUUID()), new CardId(index), oneOwner));
+      two.add(new CardCopy(new CardCopyId(UUID.randomUUID()), new CardId(index), twoOwner));
+    }
+    var match = new MatchEngine.StartMatch(new MatchId("random-custody"), new Deck(one.subList(0, 5)),
+        new Deck(two.subList(0, 5)), new CardCatalog(definitions, "random-v1"),
+        new MatchRules(org.aincraft.mobmatrix.domain.Rule.RANDOM), 7L,
+        Instant.parse("2026-01-01T00:00:00Z"), one, two);
+    MatchEngine.MatchTransition pure = MatchEngine.start(match);
+    List<CardCopyId> selectedOne = pure.state().hand(org.aincraft.mobmatrix.domain.PlayerSeat.ONE)
+        .stream().map(card -> card.copyId()).toList();
+    List<CardCopyId> selectedTwo = pure.state().hand(org.aincraft.mobmatrix.domain.PlayerSeat.TWO)
+        .stream().map(card -> card.copyId()).toList();
+    RecordingCustody custody = new RecordingCustody();
+    var result = new MatchApplicationService(custody).start(new MatchApplicationService.StartMatchRequest(
+        match, oneOwner, selectedOne, UUID.randomUUID(), twoOwner, selectedTwo, UUID.randomUUID()));
+    assertTrue(result.accepted());
+    assertEquals(List.of(selectedOne, selectedTwo), custody.preparedCopies);
+  }
 
+  private static final class RecordingCustody implements CardCustodyPort {
+    private final List<List<CardCopyId>> preparedCopies = new ArrayList<>();
+    private final List<String> calls = new ArrayList<>();
     @Override
     public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
       if (!calls.contains("prepare")) calls.add("prepare");
+      preparedCopies.add(List.copyOf(copyIds));
       return PrepareResult.success(operationId, owner, copyIds, List.of());
     }
 

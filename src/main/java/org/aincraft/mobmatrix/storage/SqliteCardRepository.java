@@ -255,10 +255,19 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       if (expected == null || !java.util.Arrays.equals(expected.bytes(), snapshot.bytes())) {
         throw new IllegalStateException("recovery snapshot does not match escrow snapshot");
       }
+      try (var restored = connection.prepareStatement(
+          "SELECT 1 FROM reservation_restored WHERE operation_id = ? AND copy_uuid = ?")) {
+        restored.setString(1, operationId.toString());
+        restored.setString(2, snapshot.copyId().value().toString());
+        try (var rows = restored.executeQuery()) {
+          if (rows.next()) return;
+        }
+      }
       try (var insert = connection.prepareStatement("""
           INSERT INTO recovery_rows(operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status)
           VALUES (?, ?, ?, ?, ?, 'PENDING')
-          ON CONFLICT(operation_id, copy_uuid) DO UPDATE SET item_bytes = excluded.item_bytes, status = 'PENDING'
+          ON CONFLICT(operation_id, copy_uuid) DO UPDATE SET item_bytes = excluded.item_bytes,
+            status = CASE WHEN recovery_rows.status = 'RESTORED' THEN 'RESTORED' ELSE 'PENDING' END
           """)) {
         insert.setString(1, operationId.toString());
         insert.setString(2, snapshot.copyId().value().toString());
@@ -302,21 +311,19 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         insert.setString(2, copyId.value().toString());
         insert.executeUpdate();
       }
+      try (var update = connection.prepareStatement(
+          "UPDATE recovery_rows SET status = 'RESTORED' WHERE operation_id = ? AND copy_uuid = ?")) {
+        update.setString(1, operationId.toString());
+        update.setString(2, copyId.value().toString());
+        update.executeUpdate();
+      }
     });
   }
-
   /** Compatibility alias for callers that track recovery rows separately. */
   public void markRecoveryRestored(UUID operationId, CardCopyId copyId) {
     markRestored(operationId, copyId);
-    try (var update = connection.prepareStatement(
-        "UPDATE recovery_rows SET status = 'RESTORED' WHERE operation_id = ? AND copy_uuid = ?")) {
-      update.setString(1, Objects.requireNonNull(operationId).toString());
-      update.setString(2, Objects.requireNonNull(copyId).value().toString());
-      update.executeUpdate();
-    } catch (SQLException exception) {
-      throw failure(exception);
-    }
   }
+
 
   private Reservation findReservationInternal(UUID operationId) throws SQLException {
     try (var query = connection.prepareStatement(
@@ -404,7 +411,9 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   private static List<CardCopyId> copyList(List<CardCopyId> copies) {
     Objects.requireNonNull(copies, "copy ids are required");
     Set<CardCopyId> unique = new HashSet<>();
-    for (CardCopyId copy : copies) if (copy == null || !unique.add(copy)) throw new IllegalArgumentException("duplicate copy id");
+    for (CardCopyId copy : copies) {
+      if (copy == null || !unique.add(copy)) throw new IllegalArgumentException("duplicate copy id");
+    }
     return List.copyOf(copies);
   }
 
@@ -412,7 +421,8 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     return to == OperationStatus.ABORTED && (from == OperationStatus.PREPARED
         || from == OperationStatus.ESCROWED || from == OperationStatus.RETURN_PENDING
         || from == OperationStatus.RETURNED)
-        || from == OperationStatus.PREPARED && to == OperationStatus.ESCROWED
+        || from == OperationStatus.PREPARED && (to == OperationStatus.ESCROWED
+        || to == OperationStatus.RETURN_PENDING)
         || from == OperationStatus.ESCROWED && to == OperationStatus.RETURN_PENDING
         || from == OperationStatus.RETURN_PENDING && to == OperationStatus.RETURNED;
   }

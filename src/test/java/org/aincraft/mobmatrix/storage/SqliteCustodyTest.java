@@ -59,6 +59,28 @@ final class SqliteCustodyTest {
     Files.deleteIfExists(path);
   }
   @Test
+  void markingRestoredClearsRecoveryInSameTransaction() throws Exception {
+    var path = Files.createTempFile("mobmatrix-recovery", ".sqlite");
+    UUID operation = UUID.randomUUID();
+    UUID ownerId = UUID.randomUUID();
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    CopyOwner owner = CopyOwner.player(ownerId);
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {9, 8, 7});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(operation, owner, List.of(copy), List.of(snapshot));
+      repository.addRecovery(operation, owner, snapshot);
+      assertEquals(1, repository.pendingRecovery().size());
+      repository.markRestored(operation, copy);
+      assertTrue(repository.pendingRecovery().isEmpty());
+      assertEquals(List.of(copy), repository.findReservation(operation).orElseThrow()
+          .restoredCopyIds());
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
   void journalPersistsRestoredCopiesAndRejectsArbitraryRecoveryOwners() throws Exception {
     var path = Files.createTempFile("mobmatrix-journal", ".sqlite");
     UUID operation = UUID.randomUUID();

@@ -60,7 +60,8 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
       throw new IllegalStateException("invalid custody transition");
     }
     if (status == CardCustodyPort.OperationStatus.RETURN_PENDING
-        && entry.status != CardCustodyPort.OperationStatus.ESCROWED) {
+        && entry.status != CardCustodyPort.OperationStatus.ESCROWED
+        && entry.status != CardCustodyPort.OperationStatus.PREPARED) {
       throw new IllegalStateException("invalid custody transition");
     }
     if (status == CardCustodyPort.OperationStatus.RETURNED

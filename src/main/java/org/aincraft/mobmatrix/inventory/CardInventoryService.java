@@ -4,6 +4,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -170,13 +171,21 @@ public final class CardInventoryService implements CardCustodyPort {
     if (operation.status == OperationStatus.RETURNED) {
       return ReturnResult.returned(operationId, operation.copyIds);
     }
-    if (operation.status != OperationStatus.ESCROWED && operation.status != OperationStatus.RETURN_PENDING) {
+    if (operation.status != OperationStatus.PREPARED && operation.status != OperationStatus.ESCROWED
+        && operation.status != OperationStatus.RETURN_PENDING) {
       return new ReturnResult(operationId, operation.status, operation.copyIds, List.of(), operation.copyIds,
           operation.copyIds, Failure.INVALID_STATE);
     }
-    if (operation.status == OperationStatus.ESCROWED) {
+    if (operation.status == OperationStatus.PREPARED || operation.status == OperationStatus.ESCROWED) {
       journal.transition(operationId, OperationStatus.RETURN_PENDING);
       operation.status = OperationStatus.RETURN_PENDING;
+      if (operation.status == OperationStatus.RETURN_PENDING) {
+        for (SerializedItemSnapshot snapshot : operation.snapshots) {
+          if (!operation.restored.contains(snapshot.copyId())) {
+            journal.addRecovery(operationId, operation.owner, snapshot);
+          }
+        }
+      }
     }
     Player player = players.find(operation.owner.playerId());
     if (player == null) {
@@ -191,7 +200,6 @@ public final class CardInventoryService implements CardCustodyPort {
     }
     return restore(operationId, operation, player.getInventory());
   }
-
   /** Attempts restoration into an explicitly supplied inventory on the primary thread. */
   public synchronized ReturnResult returnCopies(UUID operationId, Inventory inventory) {
     requirePrimaryThread();
@@ -199,13 +207,19 @@ public final class CardInventoryService implements CardCustodyPort {
     if (operation == null) return new ReturnResult(operationId, OperationStatus.ABORTED, List.of(), List.of(),
         List.of(), List.of(), Failure.MISMATCHED_OPERATION);
     if (operation.status == OperationStatus.RETURNED) return ReturnResult.returned(operationId, operation.copyIds);
-    if (operation.status != OperationStatus.ESCROWED && operation.status != OperationStatus.RETURN_PENDING) {
+    if (operation.status != OperationStatus.PREPARED && operation.status != OperationStatus.ESCROWED
+        && operation.status != OperationStatus.RETURN_PENDING) {
       return new ReturnResult(operationId, operation.status, operation.copyIds, List.of(), operation.copyIds,
           operation.copyIds, Failure.INVALID_STATE);
     }
-    if (operation.status == OperationStatus.ESCROWED) {
+    if (operation.status == OperationStatus.PREPARED || operation.status == OperationStatus.ESCROWED) {
       journal.transition(operationId, OperationStatus.RETURN_PENDING);
       operation.status = OperationStatus.RETURN_PENDING;
+      for (SerializedItemSnapshot snapshot : operation.snapshots) {
+        if (!operation.restored.contains(snapshot.copyId())) {
+          journal.addRecovery(operationId, operation.owner, snapshot);
+        }
+      }
     }
     return restore(operationId, operation, Objects.requireNonNull(inventory));
   }
@@ -220,9 +234,15 @@ public final class CardInventoryService implements CardCustodyPort {
       return RecoveryResult.complete(operationId, operation.copyIds);
     }
     if (operation.status == OperationStatus.PREPARED) {
-      CustodyResult escrow = escrow(operationId);
-      if (!escrow.accepted()) return new RecoveryResult(operationId, operation.status, operation.copyIds,
-          List.of(), operation.copyIds, escrow.failure());
+      // PREPARED may represent a crash after physical removal but before ESCROWED was durable.
+      // Treat it as a return in progress rather than retrying removal forever.
+      journal.transition(operationId, OperationStatus.RETURN_PENDING);
+      operation.status = OperationStatus.RETURN_PENDING;
+      for (SerializedItemSnapshot snapshot : operation.snapshots) {
+        if (!operation.restored.contains(snapshot.copyId())) {
+          journal.addRecovery(operationId, operation.owner, snapshot);
+        }
+      }
     }
     ReturnResult result = returnCopies(operationId);
     if (result.complete()) return RecoveryResult.complete(operationId, operation.copyIds);
@@ -276,17 +296,17 @@ public final class CardInventoryService implements CardCustodyPort {
     }
     return Set.copyOf(result);
   }
-  /**
-   * Paper listener adapter: all movement paths are rejected while a physical UUID is reserved.
-   * Call these methods from listeners on the primary thread; the application layer never sees
-   * Bukkit event types.
-   */
+
+
   public boolean handleInventoryClick(org.bukkit.event.inventory.InventoryClickEvent event) {
     requirePrimaryThread();
     Objects.requireNonNull(event, "event is required");
     boolean reserved = isReserved(event.getCurrentItem()) || isReserved(event.getCursor());
     if (event.getHotbarButton() >= 0) {
       reserved |= isReserved(event.getWhoClicked().getInventory().getItem(event.getHotbarButton()));
+    }
+    if (event.getClick() == org.bukkit.event.inventory.ClickType.SWAP_OFFHAND) {
+      reserved |= isReserved(event.getWhoClicked().getInventory().getItemInOffHand());
     }
     if (reserved) event.setCancelled(true);
     return reserved;
@@ -349,13 +369,31 @@ public final class CardInventoryService implements CardCustodyPort {
       if (operation.restored.contains(copy)) continue;
       Located alreadyPresent = scan.cards.get(copy);
       if (alreadyPresent != null) {
-        if (alreadyPresent.data.owner().equals(operation.owner)) {
+        if (!alreadyPresent.data.owner().equals(operation.owner)) {
+          journal.addRecovery(operationId, operation.owner, snapshot);
+          missing.add(copy);
+          continue;
+        }
+        byte[] currentBytes = serialize(alreadyPresent.item.clone());
+        if (Arrays.equals(currentBytes, snapshot.bytes())) {
           journal.markRestored(operationId, copy);
           operation.restored.add(copy);
           returned.add(copy);
         } else {
-          journal.addRecovery(operationId, operation.owner, snapshot);
-          missing.add(copy);
+          // Same UUID with changed metadata is not the escrowed physical card. Replace it
+          // with the durable bytes; never mark a modified item as restored.
+          ItemStack exact = deserialize(snapshot.bytes());
+          inventory.setItem(alreadyPresent.slot, null);
+          Map<Integer, ItemStack> leftovers = inventory.addItem(exact);
+          if (leftovers.isEmpty()) {
+            journal.markRestored(operationId, copy);
+            operation.restored.add(copy);
+            returned.add(copy);
+          } else {
+            inventory.setItem(alreadyPresent.slot, alreadyPresent.item);
+            journal.addRecovery(operationId, operation.owner, snapshot);
+            missing.add(copy);
+          }
         }
         continue;
       }
@@ -375,7 +413,8 @@ public final class CardInventoryService implements CardCustodyPort {
     if (missing.isEmpty() && operation.restored.containsAll(operation.copyIds)) {
       journal.transition(operationId, OperationStatus.RETURNED);
       operation.status = OperationStatus.RETURNED;
-      return new ReturnResult(operationId, OperationStatus.RETURNED, operation.copyIds, returned, List.of(), List.of(), Failure.NONE);
+      return new ReturnResult(operationId, OperationStatus.RETURNED, operation.copyIds, returned,
+          List.of(), List.of(), Failure.NONE);
     }
     for (CardCopyId copy : operation.copyIds) {
       if (!operation.restored.contains(copy) && !missing.contains(copy)) {

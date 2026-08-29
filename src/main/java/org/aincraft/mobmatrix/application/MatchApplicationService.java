@@ -44,40 +44,59 @@ public final class MatchApplicationService {
     if (validation != Failure.NONE) {
       return MatchStartResult.rejected(request.match().matchId(), validation);
     }
-    StartResult one = prepare(request.oneOwner(), request.oneCopies(), request.oneOperationId());
-    if (!one.accepted()) return MatchStartResult.rejected(request.match().matchId(), one.failure());
-    StartResult two;
-    try {
-      two = prepare(request.twoOwner(), request.twoCopies(), request.twoOperationId());
-    } catch (RuntimeException exception) {
-      cleanup(request.oneOperationId());
-      return MatchStartResult.rejected(request.match().matchId(), Failure.DATABASE_ERROR);
-    }
-    if (!two.accepted()) {
-      cleanup(request.oneOperationId());
-      return MatchStartResult.rejected(request.match().matchId(), two.failure());
-    }
+
+    // This is the sole pure start evaluation. Custody is derived from this exact state and the
+    // state is then persisted, so RANDOM never samples an unreserved copy or a second transcript.
     MatchEngine.MatchTransition started = MatchEngine.start(request.match());
     if (!started.accepted()) {
-      cleanup(request.oneOperationId());
-      cleanup(request.twoOperationId());
       return MatchStartResult.rejected(request.match().matchId(), Failure.INVALID_STATE);
     }
+    ReservationPlan plan = reservationPlan(started.state(), request);
+    if (plan == null) {
+      return MatchStartResult.rejected(request.match().matchId(), Failure.MISMATCHED_OPERATION);
+    }
+
+    StartResult one;
+    try {
+      one = prepareForStart(request.oneOwner(), plan.oneCopies(), request.oneOperationId());
+    } catch (RuntimeException exception) {
+      CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
+      return MatchStartResult.rejected(request.match().matchId(), Failure.DATABASE_ERROR, cleanup);
+    }
+    if (!one.accepted()) {
+      CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
+      return MatchStartResult.rejected(request.match().matchId(), one.failure(), cleanup);
+    }
+
+    StartResult two;
+    try {
+      two = prepareForStart(request.twoOwner(), plan.twoCopies(), request.twoOperationId());
+    } catch (RuntimeException exception) {
+      CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
+      cleanup = cleanup.plus(cleanup(request.twoOperationId(), plan.twoCopies()));
+      return MatchStartResult.rejected(request.match().matchId(), Failure.DATABASE_ERROR, cleanup);
+    }
+    if (!two.accepted()) {
+      CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
+      cleanup = cleanup.plus(cleanup(request.twoOperationId(), plan.twoCopies()));
+      return MatchStartResult.rejected(request.match().matchId(), two.failure(), cleanup);
+    }
+
     if (matches != null) {
       MatchRepository.SaveResult saved;
       try {
         saved = matches.save(0L, started.state());
       } catch (RuntimeException exception) {
-        cleanup(request.oneOperationId());
-        cleanup(request.twoOperationId());
-        return MatchStartResult.rejected(request.match().matchId(), Failure.DATABASE_ERROR);
+        CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
+        cleanup = cleanup.plus(cleanup(request.twoOperationId(), plan.twoCopies()));
+        return MatchStartResult.rejected(request.match().matchId(), Failure.DATABASE_ERROR, cleanup);
       }
       if (!saved.accepted()) {
-        cleanup(request.oneOperationId());
-        cleanup(request.twoOperationId());
+        CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
+        cleanup = cleanup.plus(cleanup(request.twoOperationId(), plan.twoCopies()));
         Failure failure = saved.failure() == MatchRepository.Failure.STALE_REVISION
             ? Failure.STALE_REVISION : Failure.INVALID_STATE;
-        return MatchStartResult.rejected(request.match().matchId(), failure);
+        return MatchStartResult.rejected(request.match().matchId(), failure, cleanup);
       }
     }
     return MatchStartResult.active(request.match().matchId(), started.state());
@@ -113,7 +132,7 @@ public final class MatchApplicationService {
     }
     CustodyResult escrowed = custody.escrow(operationId);
     if (!escrowed.accepted() || escrowed.status() != OperationStatus.ESCROWED) {
-      cleanup(operationId);
+      cleanup(operationId, copies);
       return StartResult.rejected(operationId, owner, copies,
           escrowed.failure() == Failure.NONE ? Failure.INVALID_STATE : escrowed.failure());
     }
@@ -154,10 +173,63 @@ public final class MatchApplicationService {
   }
 
   /** Reconciles an operation journal on startup without touching JDBC from inventory code. */
-  private void cleanup(UUID operationId) {
-    ReturnResult returned = custody.returnCopies(operationId);
-    if (returned.complete() || returned.status() == OperationStatus.PREPARED) {
-      custody.abort(operationId);
+  private StartResult prepareForStart(CopyOwner owner, List<CardCopyId> copies, UUID operationId) {
+    if (copies.isEmpty()) return StartResult.escrowed(operationId, owner, copies);
+    return prepare(owner, copies, operationId);
+  }
+
+  private static ReservationPlan reservationPlan(MatchState state, StartMatchRequest request) {
+    boolean draft = request.match().rules().has(org.aincraft.mobmatrix.domain.Rule.DRAFT);
+    boolean random = request.match().rules().has(org.aincraft.mobmatrix.domain.Rule.RANDOM);
+    List<CardCopyId> oneActive = state.hand(org.aincraft.mobmatrix.domain.PlayerSeat.ONE).stream()
+        .filter(card -> card.copy().owner().isPlayer())
+        .map(card -> card.copyId()).toList();
+    List<CardCopyId> twoActive = state.hand(org.aincraft.mobmatrix.domain.PlayerSeat.TWO).stream()
+        .filter(card -> card.copy().owner().isPlayer())
+        .map(card -> card.copyId()).toList();
+    if (random && oneActive.stream().allMatch(id -> findOwner(state, id).equals(request.oneOwner()))
+        && twoActive.stream().allMatch(id -> findOwner(state, id).equals(request.twoOwner()))) {
+      if (!request.oneCopies().equals(oneActive) || !request.twoCopies().equals(twoActive)) return null;
+      return new ReservationPlan(oneActive, twoActive);
+    }
+    List<CardCopyId> oneOwned = activeOwned(state, request.oneOwner());
+    List<CardCopyId> twoOwned = activeOwned(state, request.twoOwner());
+    if (!draft && (!new HashSet<>(request.oneCopies()).equals(new HashSet<>(oneOwned))
+        || !new HashSet<>(request.twoCopies()).equals(new HashSet<>(twoOwned)))) return null;
+    return new ReservationPlan(oneOwned, twoOwned);
+  }
+
+  private static List<CardCopyId> activeOwned(MatchState state, CopyOwner owner) {
+    List<CardCopyId> result = new ArrayList<>();
+    for (var seat : org.aincraft.mobmatrix.domain.PlayerSeat.values()) {
+      for (var card : state.hand(seat)) {
+        if (card.copy().owner().equals(owner)) result.add(card.copyId());
+      }
+    }
+    return List.copyOf(result);
+  }
+
+  private static CopyOwner findOwner(MatchState state, CardCopyId copyId) {
+    for (var seat : org.aincraft.mobmatrix.domain.PlayerSeat.values()) {
+      for (var card : state.hand(seat)) {
+        if (card.copyId().equals(copyId)) return card.copy().owner();
+      }
+    }
+    return CopyOwner.house();
+  }
+
+  private record ReservationPlan(List<CardCopyId> oneCopies, List<CardCopyId> twoCopies) {}
+
+  private CleanupSummary cleanup(UUID operationId, List<CardCopyId> expected) {
+    if (expected.isEmpty()) return new CleanupSummary(List.of(), List.of());
+    try {
+      ReturnResult returned = custody.returnCopies(operationId);
+      if (returned.complete() || returned.status() == OperationStatus.PREPARED) {
+        custody.abort(operationId);
+      }
+      return new CleanupSummary(returned.recoveryCopyIds(), returned.missingCopyIds());
+    } catch (RuntimeException exception) {
+      return new CleanupSummary(expected, expected);
     }
   }
 
@@ -168,9 +240,9 @@ public final class MatchApplicationService {
     return validateDeck(request.twoCopies(), request.match().twoDeck(), request.twoOwner(),
         request.match().twoInventory(), request.match().rules());
   }
-
-  private static Failure validateDeck(List<CardCopyId> requested, org.aincraft.mobmatrix.domain.Deck deck,
-      CopyOwner owner, List<org.aincraft.mobmatrix.domain.CardCopy> inventory,
+  private static Failure validateDeck(List<CardCopyId> requested,
+      org.aincraft.mobmatrix.domain.Deck deck, CopyOwner owner,
+      List<org.aincraft.mobmatrix.domain.CardCopy> inventory,
       org.aincraft.mobmatrix.domain.MatchRules rules) {
     List<CardCopyId> copies;
     try {
@@ -178,12 +250,12 @@ public final class MatchApplicationService {
     } catch (IllegalArgumentException exception) {
       return Failure.INVALID_COPY_SET;
     }
+    if (rules.has(org.aincraft.mobmatrix.domain.Rule.RANDOM)) return Failure.NONE;
+    if (rules.has(org.aincraft.mobmatrix.domain.Rule.DRAFT)) return Failure.NONE;
     if (deck.copies().size() != 5) return Failure.INVALID_COPY_SET;
     Set<CardCopyId> deckIds = new HashSet<>();
     for (var card : deck.copies()) if (!deckIds.add(card.copyId())) return Failure.INVALID_COPY_SET;
     if (!deckIds.equals(new HashSet<>(copies))) return Failure.MISMATCHED_OPERATION;
-    if (rules.has(org.aincraft.mobmatrix.domain.Rule.RANDOM)
-        || rules.has(org.aincraft.mobmatrix.domain.Rule.DRAFT)) return Failure.NONE;
     Map<CardCopyId, org.aincraft.mobmatrix.domain.CardCopy> inventoryById = new HashMap<>();
     for (var card : inventory) {
       if (inventoryById.put(card.copyId(), card) != null) return Failure.DUPLICATE_COPY;
@@ -258,18 +330,49 @@ public final class MatchApplicationService {
     }
   }
 
+  private record CleanupSummary(List<CardCopyId> pendingRecoveryCopyIds,
+      List<CardCopyId> missingCopyIds) {
+    private CleanupSummary {
+      pendingRecoveryCopyIds = List.copyOf(pendingRecoveryCopyIds);
+      missingCopyIds = List.copyOf(missingCopyIds);
+    }
+
+    private CleanupSummary plus(CleanupSummary other) {
+      List<CardCopyId> pending = new ArrayList<>(pendingRecoveryCopyIds);
+      pending.addAll(other.pendingRecoveryCopyIds);
+      List<CardCopyId> missing = new ArrayList<>(missingCopyIds);
+      missing.addAll(other.missingCopyIds);
+      return new CleanupSummary(pending, missing);
+    }
+  }
+
   public record MatchStartResult(org.aincraft.mobmatrix.domain.MatchId matchId,
-      MatchState state, boolean active, Failure failure) {
+      MatchState state, boolean active, Failure failure, List<CardCopyId> pendingRecoveryCopyIds,
+      List<CardCopyId> missingCopyIds) {
+    public MatchStartResult(org.aincraft.mobmatrix.domain.MatchId matchId, MatchState state,
+        boolean active, Failure failure) {
+      this(matchId, state, active, failure, List.of(), List.of());
+    }
+
     public MatchStartResult {
-      Objects.requireNonNull(matchId); Objects.requireNonNull(failure);
+      Objects.requireNonNull(matchId);
+      Objects.requireNonNull(failure);
+      pendingRecoveryCopyIds = List.copyOf(Objects.requireNonNull(pendingRecoveryCopyIds));
+      missingCopyIds = List.copyOf(Objects.requireNonNull(missingCopyIds));
     }
 
     static MatchStartResult active(org.aincraft.mobmatrix.domain.MatchId id, MatchState state) {
-      return new MatchStartResult(id, state, true, Failure.NONE);
+      return new MatchStartResult(id, state, true, Failure.NONE, List.of(), List.of());
     }
 
     static MatchStartResult rejected(org.aincraft.mobmatrix.domain.MatchId id, Failure failure) {
-      return new MatchStartResult(id, null, false, failure);
+      return rejected(id, failure, new CleanupSummary(List.of(), List.of()));
+    }
+
+    static MatchStartResult rejected(org.aincraft.mobmatrix.domain.MatchId id, Failure failure,
+        CleanupSummary cleanup) {
+      return new MatchStartResult(id, null, false, failure, cleanup.pendingRecoveryCopyIds(),
+          cleanup.missingCopyIds());
     }
 
     public boolean accepted() { return active; }
