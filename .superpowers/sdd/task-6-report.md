@@ -421,7 +421,8 @@ focused suite. No formatter, linter, project-wide build, or project-wide test su
 
 ## Status
 
-Implemented and committed as `ccbd1f3` (`fix: require persisted match state`).
+Implemented and committed as `ccbd1f3` (`fix: require persisted match state`), with cleanup
+hardening in `aba1cae` (`fix: preserve cleanup recovery on abort failure`).
 The production two-argument `MatchApplicationService` constructor now requires a repository, while
 the isolated one-argument constructor uses the explicit `InMemoryMatchRepository` with initial-save,
 snapshot lookup, and optimistic CAS semantics. Accepted starts and accepted commands always persist
