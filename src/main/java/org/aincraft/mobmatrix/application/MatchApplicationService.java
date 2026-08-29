@@ -216,10 +216,13 @@ public final class MatchApplicationService {
     } catch (RuntimeException exception) {
       return false;
     }
-    // A durable adapter exposes its open rows. If rows are available, both operation IDs must
-    // still be present; this rejects a retry with fresh operation UUIDs.
-    if (!open.isEmpty() && (!open.contains(request.oneOperationId())
-        || !open.contains(request.twoOperationId()))) return false;
+    // A durable adapter exposes its open rows. If rows are available, an operation that carries
+    // cards must still be present; empty DRAFT custody plans intentionally have no journal row.
+    if (!open.isEmpty() && (!request.oneCopies().isEmpty()
+        && !open.contains(request.oneOperationId())
+        || !request.twoCopies().isEmpty() && !open.contains(request.twoOperationId()))) {
+      return false;
+    }
     return bindingMatches(request.oneOperationId(), matchId)
         && bindingMatches(request.twoOperationId(), matchId);
   }
@@ -328,19 +331,14 @@ public final class MatchApplicationService {
           : new CleanupSummary(List.of(), List.of());
     }
   }
-
-  private static Failure validateDeckSelections(StartMatchRequest request) {
-    Failure one = validateDeck(request.oneCopies(), request.match().oneDeck(), request.oneOwner(),
-        request.match().oneInventory(), request.match().rules());
-    if (one != Failure.NONE) return one;
-    return validateDeck(request.twoCopies(), request.match().twoDeck(), request.twoOwner(),
-        request.match().twoInventory(), request.match().rules());
-  }
   private static Failure validateDeck(List<CardCopyId> requested,
       org.aincraft.mobmatrix.domain.Deck deck, CopyOwner owner,
       List<org.aincraft.mobmatrix.domain.CardCopy> inventory,
       org.aincraft.mobmatrix.domain.MatchRules rules) {
     if (owner == null || !owner.isPlayer()) return Failure.INVALID_OWNER;
+    if (rules.has(org.aincraft.mobmatrix.domain.Rule.DRAFT)) {
+      return requested == null || requested.isEmpty() ? Failure.NONE : Failure.INVALID_COPY_SET;
+    }
     List<CardCopyId> copies;
     try {
       copies = exactDeck(requested);
@@ -348,7 +346,6 @@ public final class MatchApplicationService {
       return Failure.INVALID_COPY_SET;
     }
     if (rules.has(org.aincraft.mobmatrix.domain.Rule.RANDOM)) return Failure.NONE;
-    if (rules.has(org.aincraft.mobmatrix.domain.Rule.DRAFT)) return Failure.NONE;
     if (deck.copies().size() != 5) return Failure.INVALID_COPY_SET;
     Set<CardCopyId> deckIds = new HashSet<>();
     for (var card : deck.copies()) if (!deckIds.add(card.copyId())) return Failure.INVALID_COPY_SET;

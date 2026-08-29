@@ -161,3 +161,61 @@ Durability corrections:
 - `SWAP_OFFHAND` and existing inventory movement protections remain primary-thread-bound. Paper's no-server `Bukkit.isPrimaryThread()` null failure is treated as unavailable only for test/runtime-less API use.
 
 No formatter, linter, project-wide build, or project-wide test suite was run. SQLite emitted its Java restricted-native-access warning during the focused runs.
+
+## Task 6 final startup/retry corrections
+
+Latest implementation commit: `c2458e1` (`fix: preserve active custody on startup`).
+This report correction supersedes the earlier third-review report sections; the report itself is
+committed separately after this implementation commit.
+
+### Corrective coverage
+
+- Startup loads active match snapshot IDs before custody reconciliation. An open `ESCROWED`
+  operation is preserved when its durable match binding belongs to an active match. Orphaned
+  `PREPARED`, `ESCROWED`, and `RETURN_PENDING` rows are still reconciled, including when there
+  are no active matches. Each recovery exception is converted into a structured
+  `RecoveryResult` failure and the sweep continues; active-state rehydration isolates missing
+  catalogs and unsupported snapshots per match.
+- A persisted active start is compared against the complete freshly evaluated initial state and
+  durable operation bindings. An identical retry returns the loaded state without another
+  `save(0, ...)` and without returning or aborting custody. Different rules, owners, copy sets,
+  match IDs, operation IDs, or non-escrowed custody state are rejected. The comparison survives
+  service reconstruction through `MatchRepository.findState` and custody metadata rather than a
+  process-local start cache.
+- Application `prepare` catches custody removal/journal-transition exceptions and invokes the
+  same durable cleanup path used by start-level failures. This prevents a removed card from being
+  left with only `PREPARED` status.
+- `CardInventoryService` now exposes primary-thread handlers for offhand swaps,
+  automated `InventoryMoveItemEvent` transfers (checking source, destination, and moved stacks),
+  and entity pickup transfers. Existing click, drag, number-key, drop, death, and quit guards
+  remain in place.
+- Player-seat starts reject `CopyOwner.house()` before DRAFT/RANDOM early exits, including plans
+  whose generated house cards produce empty player custody lists. Existing byte-for-byte
+  restoration and duplicate-UUID pending/recovery invariants are unchanged.
+
+### TDD and focused verification
+
+The required focused command was run red after adding the startup-preservation, idempotent retry,
+transition-exception cleanup, and house-owner regression tests:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+The initial red compile failed because the new tests referenced the not-yet-added durable
+`operationMatchId`, `operationStatus`, and `MatchRepository.findState` seams; after correcting the
+test-only import, the focused compile reported those missing production methods. This was the
+expected pre-implementation failure.
+
+The same command passed after implementation:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+The selected Paper codec tests remain assumption-skipped in this environment because Paper's item
+registry requires a running server; the other selected adapter, storage, application, domain, and
+bot tests executed successfully. SQLite emitted only the JVM restricted-native-access warning.
+No formatter, linter, project-wide build, or project-wide test suite was run.
