@@ -4,7 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 
@@ -13,8 +15,32 @@ final class CardCatalogTest {
   void currentSnapshotContainsAllPublicNumbers() {
     CardCatalog catalog = CatalogFixtures.currentSnapshot();
     assertEquals(475, catalog.all().size());
-    assertTrue(catalog.all().stream().anyMatch(card -> card.publicNumber().equals("No. 460")));
-    assertTrue(catalog.all().stream().anyMatch(card -> card.publicNumber().equals("Ex. 15")));
+    Set<String> expected = new HashSet<>();
+    for (int number = 1; number <= 460; number++) {
+      expected.add("No. " + number);
+    }
+    for (int number = 1; number <= 15; number++) {
+      expected.add("Ex. " + number);
+    }
+    Set<String> actual = new HashSet<>();
+    for (CardDefinition card : catalog.all()) {
+      actual.add(card.publicNumber());
+    }
+    assertEquals(expected, actual);
+  }
+ 
+  @Test
+  void rejectsGapsInInternalIdsWithinSuppliedCollection() {
+    CardDefinition first = new CardDefinition(
+        new CardId(1), "No. 1", "First", 1, CardType.NORMAL, 1, 1, 1, 1, 100);
+    CardDefinition third = new CardDefinition(
+        new CardId(3), "No. 3", "Third", 1, CardType.NORMAL, 1, 1, 1, 1, 100);
+
+    IllegalArgumentException exception = assertThrows(
+        IllegalArgumentException.class,
+        () -> new CardCatalog(List.of(first, third), "snapshot"));
+
+    assertTrue(exception.getMessage().contains("missing card id: 2"));
   }
 
   @Test

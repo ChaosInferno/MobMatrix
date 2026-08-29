@@ -86,7 +86,7 @@ function sourceText({ retrievedAt, sha256, patches }) {
     '',
     'Attribution: FFXIV Collect (https://ffxivcollect.com/), XIVAPI (https://v2.xivapi.com/), and Square Enix.',
     'This text-only snapshot is for non-commercial use under the upstream acceptable-use terms.',
-    'FFXIV Collect acceptable use: https://ffxivcollect.com/docs/api',
+    'FFXIV Collect acceptable use: https://ffxivcollect.com/api/docs',
     'XIVAPI acceptable use: https://v2.xivapi.com/docs/welcome/',
     '',
   ].join('\n');

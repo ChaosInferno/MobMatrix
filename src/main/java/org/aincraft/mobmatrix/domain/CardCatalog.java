@@ -34,9 +34,16 @@ public final class CardCatalog {
         throw new IllegalArgumentException("duplicate public number: " + definition.publicNumber());
       }
     }
-    this.byId = Map.copyOf(cards);
     List<CardDefinition> sorted = new ArrayList<>(cards.values());
     sorted.sort(java.util.Comparator.comparingInt(card -> card.id().value()));
+    for (int index = 1; index < sorted.size(); index++) {
+      int previousId = sorted.get(index - 1).id().value();
+      int currentId = sorted.get(index).id().value();
+      if (currentId != previousId + 1) {
+        throw new IllegalArgumentException("missing card id: " + (previousId + 1));
+      }
+    }
+    this.byId = Map.copyOf(cards);
     this.all = Collections.unmodifiableList(sorted);
     this.snapshotId = snapshotId;
   }
