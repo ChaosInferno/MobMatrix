@@ -348,3 +348,72 @@ state and binding values only; custody cleanup remains through the custody port.
 
 - Paper codec tests remain assumption-skipped without a running Paper item registry.
 - SQLite emits Java's restricted-native-access warning under this JVM.
+# Task 6 final atomic/snapshot fixes
+
+## Status
+
+Implemented and committed the atomic initial-match persistence contract and duplicate physical-copy
+UUID rejection during snapshot rehydration.
+
+Implementation commit: `85da59b` (`fix: require atomic match snapshots`).
+
+## TDD and focused verification
+
+Focused adapter/domain/bot command (red, after adding atomic-default, SQLite rollback, and
+duplicate physical UUID snapshot regressions):
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact red result:
+
+```text
+> Task :test FAILED
+
+MatchApplicationServiceTest > defaultInitialSaveRejectsWithoutWritingEitherRow() FAILED
+    org.opentest4j.AssertionFailedError at MatchApplicationServiceTest.java:200
+
+SqliteCustodyTest > snapshotRejectsDuplicateHandAndBoardCopyUuid() FAILED
+    org.opentest4j.AssertionFailedError at SqliteCustodyTest.java:272
+
+75 tests completed, 2 failed, 4 skipped
+FAILURE: Build failed with an exception.
+4 actionable tasks: 3 executed, 1 up-to-date
+```
+
+Focused adapter/domain/bot command (green):
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact green result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 3 executed, 1 up-to-date
+```
+
+The selected Paper codec tests remain assumption-skipped because this environment has no running
+Paper item registry. SQLite emits the JVM restricted-native-access warning; it does not fail the
+focused suite. No formatter, linter, project-wide build, or project-wide test suite was run.
+
+## Corrective coverage
+
+- `MatchRepository.saveInitial` now has a safe default that validates arguments and returns
+  `INVALID_STATE` without invoking either legacy persistence method. Test doubles used by
+  application tests implement the atomic operation explicitly.
+- `SqliteMatchRepository.saveInitial` already performs the revision-0 match insert and durable
+  start-binding insert in one transaction; the new trigger-injected failure regression verifies the
+  match row is rolled back when binding persistence fails.
+- `MatchStateSnapshotCodec.decode` maintains one authoritative `CardCopyId` set while reading both
+  hands and occupied board cells, rejecting a duplicate before creating executable `HandCard` or
+  board state. Draft offering/selection copies remain outside this active set and continue their
+  separate catalog/structure validation.
+
+## Concerns
+
+- Paper codec tests remain assumption-skipped without a running Paper item registry.
+- SQLite emits Java's restricted-native-access warning under this JVM.
