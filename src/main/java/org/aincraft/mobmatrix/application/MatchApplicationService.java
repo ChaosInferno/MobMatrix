@@ -331,8 +331,9 @@ public final class MatchApplicationService {
     } catch (RuntimeException ignored) {
       // A lookup failure must not turn an unaccepted operation into phantom recovery.
     }
+    ReturnResult returned = null;
     try {
-      ReturnResult returned = custody.returnCopies(operationId);
+      returned = custody.returnCopies(operationId);
       if (returned.failure() == Failure.MISMATCHED_OPERATION && returned.expectedCopyIds().isEmpty()) {
         return new CleanupSummary(List.of(), List.of());
       }
@@ -348,6 +349,9 @@ public final class MatchApplicationService {
       }
       return new CleanupSummary(pending, missing);
     } catch (RuntimeException exception) {
+      if (returned != null) {
+        return new CleanupSummary(returned.expectedCopyIds(), returned.missingCopyIds());
+      }
       return known ? new CleanupSummary(expected, expected)
           : new CleanupSummary(List.of(), List.of());
     }
