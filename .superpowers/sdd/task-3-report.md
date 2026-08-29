@@ -55,3 +55,56 @@ BUILD SUCCESSFUL in 1s
 The focused tests cover deterministic start state, immutable row-major board state, hand removal, strict opposing-card capture, friendly-card preservation, occupied/wrong actor/unknown/already-played/stale/duplicate rejections, full-board card-count scoring and draw, masked projections, grace and bank clocks, and deterministic timeout placement.
 
 Concerns: advanced rules remain vocabulary-only as required; no Paper, MapGui, storage, or bot code was added. The focused command was the only validation run; formatters, linters, and project-wide suites were intentionally not run.
+
+## Standard clock review-fix verification
+
+RED command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest
+```
+
+RED result (before adding `CLOCK_EXPIRED` and the review-fix behavior):
+
+```text
+> Task :compileJava UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :classes UP-TO-DATE
+> Task :compileTestJava FAILED
+C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\domain\MatchClockTest.java:63: error: cannot find symbol
+    assertEquals(MatchErrorCode.CLOCK_EXPIRED, expiredPlacement.rejection().code());
+                               ^
+  symbol:   variable CLOCK_EXPIRED
+  location: class MatchErrorCode
+1 error
+
+FAILURE: Build failed with an exception.
+...
+BUILD FAILED in 818ms
+3 actionable tasks: 1 executed, 2 up-to-date
+```
+
+GREEN command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest
+```
+
+GREEN result:
+
+```text
+> Task :compileJava
+> Task :processResources UP-TO-DATE
+> Task :classes
+> Task :compileTestJava
+> Task :processTestResources NO-SOURCE
+> Task :testClasses
+> Task :test
+
+BUILD SUCCESSFUL in 1s
+4 actionable tasks: 3 executed, 1 up-to-date
+```
+
+Review fixes implemented: `PlaceCard` now rejects timestamps at or after the exact turn deadline with `CLOCK_EXPIRED`; due `Timeout` uses the same expiry predicate; both command types reject timestamps before `turnStartedAt()` with `INVALID_COMMAND`; projections hide legal copies and squares at expiry; and finished states expose zero bank, grace, and turn values. Focused tests cover the exact deadline, projection expiry, stale timestamp monotonicity, and post-final-placement clock values.
+
+Concerns: advanced rules remain vocabulary-only as required; no Paper, MapGui, storage, or bot code was added. Only the focused standard/clock command was run for this fix; formatters, linters, and project-wide suites were intentionally not run.
