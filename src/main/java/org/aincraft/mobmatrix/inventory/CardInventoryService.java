@@ -34,6 +34,7 @@ public final class CardInventoryService implements CardCustodyPort {
   private final PlayerLookup players;
   private final org.aincraft.mobmatrix.application.CardCustodyJournal journal;
   private final Map<UUID, PreparedOperation> operations = new HashMap<>();
+  private final Map<UUID, Set<CardCopyId>> malformedOperations = new HashMap<>();
 
   /** Production constructor: the journal must be durable and is hydrated before use. */
   public CardInventoryService(CardItemCodec codec, PlayerLookup players,
@@ -63,9 +64,35 @@ public final class CardInventoryService implements CardCustodyPort {
           operations.put(entry.operationId(), new PreparedOperation(entry.owner(), entry.copyIds(),
               entry.snapshots(), entry.status(), entry.restoredCopyIds(), entry.matchId()));
         }
-      } catch (RuntimeException ignored) {
+      } catch (RuntimeException exception) {
+        if (exception instanceof CardCustodyPort.CustodyIntegrityFailure failure) {
+          // A malformed open row has no trustworthy status. Keep every parsed physical identity
+          // reserved until the journal can prove the operation reached a terminal status.
+          malformedOperations.put(failure.operationId(), Set.copyOf(failure.expectedCopyIds()));
+        }
         // Keep malformed durable rows out of the in-memory cache. Startup recovery will query the
         // journal again and convert the structured integrity failure into a pending result.
+      }
+    }
+  }
+
+  /** Refresh malformed rows, clearing protection only after durable terminal proof. */
+  private void refreshMalformedOperations() {
+    var iterator = malformedOperations.entrySet().iterator();
+    while (iterator.hasNext()) {
+      var malformed = iterator.next();
+      try {
+        var entry = journal.find(malformed.getKey()).orElse(null);
+        if (entry == null) continue;
+        if (entry.status() == OperationStatus.RETURNED || entry.status() == OperationStatus.ABORTED) {
+          iterator.remove();
+        } else {
+          operations.put(entry.operationId(), new PreparedOperation(entry.owner(), entry.copyIds(),
+              entry.snapshots(), entry.status(), entry.restoredCopyIds(), entry.matchId()));
+          iterator.remove();
+        }
+      } catch (RuntimeException ignored) {
+        // Integrity and unknown read failures both retain fail-closed protection.
       }
     }
   }
@@ -346,14 +373,16 @@ public final class CardInventoryService implements CardCustodyPort {
     for (CardCopyId copy : operation.copyIds) if (operation.restored.contains(copy)) result.add(copy);
     return List.copyOf(result);
   }
-
-
   public synchronized boolean isReserved(CardCopyId copyId) {
+    refreshMalformedOperations();
     for (PreparedOperation operation : operations.values()) {
       if (operation.status == OperationStatus.PREPARED || operation.status == OperationStatus.ESCROWED
           || operation.status == OperationStatus.RETURN_PENDING) {
         if (operation.copyIds.contains(copyId)) return true;
       }
+    }
+    for (Set<CardCopyId> copies : malformedOperations.values()) {
+      if (copies.contains(copyId)) return true;
     }
     return false;
   }
@@ -364,11 +393,13 @@ public final class CardInventoryService implements CardCustodyPort {
   }
 
   public synchronized Set<CardCopyId> reservedCopyIds() {
+    refreshMalformedOperations();
     Set<CardCopyId> result = new HashSet<>();
     for (PreparedOperation operation : operations.values()) {
       if (operation.status == OperationStatus.PREPARED || operation.status == OperationStatus.ESCROWED
           || operation.status == OperationStatus.RETURN_PENDING) result.addAll(operation.copyIds);
     }
+    for (Set<CardCopyId> copies : malformedOperations.values()) result.addAll(copies);
     return Set.copyOf(result);
   }
 
@@ -404,13 +435,6 @@ public final class CardInventoryService implements CardCustodyPort {
     return reserved;
   }
 
-  public boolean handlePlayerDeath(org.bukkit.event.entity.PlayerDeathEvent event) {
-    requirePrimaryThread();
-    Objects.requireNonNull(event, "event is required");
-    boolean reserved = event.getDrops().stream().anyMatch(this::isReserved);
-    if (reserved) event.setKeepInventory(true);
-    return reserved;
-  }
 
   /** Quit inventories remain owned by the player; callers must not transfer reserved items. */
   public boolean hasReservedInventory(Inventory inventory) {
@@ -421,14 +445,18 @@ public final class CardInventoryService implements CardCustodyPort {
   public boolean handleNumberKey(org.bukkit.event.inventory.InventoryClickEvent event) {
     return handleInventoryClick(event);
   }
+  public boolean handlePlayerDeath(org.bukkit.event.entity.PlayerDeathEvent event) {
+    requirePrimaryThread();
+    Objects.requireNonNull(event, "event is required");
+    // Death drops are mutable and may omit cards retained by the authoritative player inventory.
+    boolean reserved = event.getDrops().stream().anyMatch(this::isReserved)
+        || hasReservedInventory(event.getEntity().getInventory());
+    if (reserved) event.setKeepInventory(true);
+    return reserved;
+  }
 
   public boolean handleSwap(org.bukkit.event.inventory.InventoryClickEvent event) {
     return handleInventoryClick(event);
-  }
-
-
-  public boolean handleQuit(org.bukkit.event.player.PlayerQuitEvent event) {
-    return hasReservedInventory(event.getPlayer().getInventory());
   }
   /** Cancels offhand swaps that would move a reserved card outside custody. */
   public boolean handlePlayerSwapHandItems(

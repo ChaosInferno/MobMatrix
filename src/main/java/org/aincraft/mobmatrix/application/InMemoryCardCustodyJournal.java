@@ -27,16 +27,21 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
   @Override
   public synchronized void prepare(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
       List<SerializedItemSnapshot> snapshots, String matchId) {
+    List<CardCopyId> copies = List.copyOf(copyIds);
+    List<SerializedItemSnapshot> exactSnapshots = List.copyOf(snapshots);
+    if (!hasExactSnapshots(copies, exactSnapshots)) {
+      throw new IllegalArgumentException("every reserved copy requires an exact item snapshot");
+    }
     MutableEntry existing = entries.get(operationId);
     if (existing != null) {
-      if (!existing.owner.equals(owner) || !existing.copyIds.equals(copyIds)
+      if (!existing.owner.equals(owner) || !existing.copyIds.equals(copies)
           || !java.util.Objects.equals(existing.matchId, matchId)) {
         throw new IllegalStateException("operation does not match existing reservation");
       }
       return;
     }
-    entries.put(operationId, new MutableEntry(operationId, owner, List.copyOf(copyIds),
-        List.copyOf(snapshots), CardCustodyPort.OperationStatus.PREPARED, matchId));
+    entries.put(operationId, new MutableEntry(operationId, owner, copies,
+        exactSnapshots, CardCustodyPort.OperationStatus.PREPARED, matchId));
   }
 
   @Override

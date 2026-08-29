@@ -276,7 +276,13 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         return;
       }
       for (CardCopyId copy : copies) {
-        StoredCardCopy ledger = findCopyInternal(copy);
+        StoredCardCopy ledger;
+        try {
+          ledger = findCopyInternal(copy);
+        } catch (RuntimeException exception) {
+          throw new CustodyIntegrityException(operationId, List.of(copy),
+              "invalid card-copy owner integrity data", exception);
+        }
         if (ledger == null) throw new IllegalStateException("unknown card copy: " + copy);
         if (!ledger.owner().equals(owner)) throw new IllegalStateException("copy owner mismatch");
       }
@@ -417,9 +423,19 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         """)) {
       List<RecoveryRow> result = new ArrayList<>();
       try (var rows = query.executeQuery()) {
-        while (rows.next()) result.add(new RecoveryRow(UUID.fromString(rows.getString(1)),
-            new CardCopyId(UUID.fromString(rows.getString(2))), readOwner(rows.getString(3), rows.getString(4)),
-            new SerializedItemSnapshot(new CardCopyId(UUID.fromString(rows.getString(2))), rows.getBytes(5))));
+        while (rows.next()) {
+          UUID operationId = UUID.fromString(rows.getString(1));
+          CardCopyId copyId = new CardCopyId(UUID.fromString(rows.getString(2)));
+          CopyOwner owner;
+          try {
+            owner = readOwner(rows.getString(3), rows.getString(4));
+          } catch (RuntimeException exception) {
+            throw new CustodyIntegrityException(operationId, List.of(copyId),
+                "invalid recovery owner integrity data", exception);
+          }
+          result.add(new RecoveryRow(operationId, copyId, owner,
+              new SerializedItemSnapshot(copyId, rows.getBytes(5))));
+        }
       }
       return List.copyOf(result);
     } catch (SQLException exception) {
@@ -597,8 +613,14 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   }
 
   private static CopyOwner readOwner(String kind, String id) {
-    if ("HOUSE".equals(kind)) return CopyOwner.house();
-    if ("PLAYER".equals(kind) && id != null) return CopyOwner.player(UUID.fromString(id));
+    if ("HOUSE".equals(kind) && id == null) return CopyOwner.house();
+    if ("PLAYER".equals(kind) && id != null) {
+      try {
+        return CopyOwner.player(UUID.fromString(id));
+      } catch (IllegalArgumentException exception) {
+        throw new IllegalStateException("invalid player owner UUID in database", exception);
+      }
+    }
     throw new IllegalStateException("invalid owner in database");
   }
 

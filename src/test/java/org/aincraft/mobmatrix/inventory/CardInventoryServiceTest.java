@@ -9,6 +9,9 @@ import java.nio.file.Files;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.Optional;
+import org.aincraft.mobmatrix.application.CardCustodyJournal;
+import org.aincraft.mobmatrix.application.CardCustodyPort.OperationStatus;
 import org.aincraft.mobmatrix.application.CardCustodyPort;
 import org.aincraft.mobmatrix.application.SerializedItemSnapshot;
 import org.aincraft.mobmatrix.domain.CardCopyId;
@@ -174,5 +177,62 @@ final class CardInventoryServiceTest {
     assertTrue(CardInventoryService.shouldCancelItemFrameInteraction(true, false, true));
     assertFalse(CardInventoryService.shouldCancelItemFrameInteraction(true, false, false));
     assertFalse(CardInventoryService.shouldCancelItemFrameInteraction(false, true, true));
+  }
+  @Test
+  void malformedOpenCustodyRemainsReservedUntilTerminalProof() {
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    UUID operation = UUID.randomUUID();
+    MalformedJournal journal = new MalformedJournal(operation, copy);
+    CardInventoryService service = new CardInventoryService(
+        new CardItemCodec("test", "0123456789abcdef"), id -> null, journal);
+
+    assertTrue(service.reservedCopyIds().contains(copy));
+    journal.terminal = true;
+    assertFalse(service.reservedCopyIds().contains(copy));
+  }
+
+  private static final class MalformedJournal implements CardCustodyJournal {
+    private final UUID operation;
+    private final CardCopyId copy;
+    private boolean terminal;
+
+    private MalformedJournal(UUID operation, CardCopyId copy) {
+      this.operation = operation;
+      this.copy = copy;
+    }
+
+    @Override
+    public void prepare(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
+        List<SerializedItemSnapshot> snapshots) {}
+
+    @Override
+    public Optional<Entry> find(UUID operationId) {
+      if (terminal) {
+        return Optional.of(new Entry(operation, CopyOwner.player(UUID.randomUUID()), List.of(copy),
+            List.of(new SerializedItemSnapshot(copy, new byte[] {1})), OperationStatus.ABORTED,
+            Set.of(copy)));
+      }
+      throw new SqliteCardRepository.CustodyIntegrityException(operation, List.of(copy),
+          "malformed reservation");
+    }
+
+    @Override
+    public List<Entry> openEntries() {
+      return List.of();
+    }
+
+    @Override
+    public List<UUID> openOperationIds() {
+      return List.of(operation);
+    }
+
+    @Override
+    public void transition(UUID operationId, OperationStatus status) {}
+
+    @Override
+    public void markRestored(UUID operationId, CardCopyId copyId) {}
+
+    @Override
+    public void addRecovery(UUID operationId, CopyOwner owner, SerializedItemSnapshot snapshot) {}
   }
 }

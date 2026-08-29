@@ -228,19 +228,14 @@ final class MatchApplicationServiceTest {
 
 
   @Test
-  void inMemoryReturnedRequiresExactEscrowSnapshotsBeforeIdempotence() {
+  void inMemoryPrepareRejectsIncompleteEscrowSnapshots() {
     InMemoryCardCustodyJournal journal = new InMemoryCardCustodyJournal();
     UUID operation = UUID.randomUUID();
     CopyOwner owner = CopyOwner.player(UUID.randomUUID());
     List<CardCopyId> copies = copies().subList(0, 2);
-    journal.prepare(operation, owner, copies,
-        List.of(new SerializedItemSnapshot(copies.getFirst(), new byte[] {1})));
-    journal.markRestored(operation, copies.get(0));
-    journal.markRestored(operation, copies.get(1));
-    journal.transition(operation, CardCustodyPort.OperationStatus.RETURN_PENDING);
-
-    assertThrows(IllegalStateException.class,
-        () -> journal.transition(operation, CardCustodyPort.OperationStatus.RETURNED));
+    assertThrows(IllegalArgumentException.class,
+        () -> journal.prepare(operation, owner, copies,
+            List.of(new SerializedItemSnapshot(copies.getFirst(), new byte[] {1}))));
   }
 
   @Test
@@ -253,18 +248,14 @@ final class MatchApplicationServiceTest {
   }
 
   @Test
-  void inMemoryAbortRequiresExactEscrowSnapshotsBeforeIdempotence() {
+  void inMemoryAbortPrepareRejectsIncompleteEscrowSnapshots() {
     InMemoryCardCustodyJournal journal = new InMemoryCardCustodyJournal();
     UUID operation = UUID.randomUUID();
     CopyOwner owner = CopyOwner.player(UUID.randomUUID());
     List<CardCopyId> copies = copies().subList(0, 2);
-    journal.prepare(operation, owner, copies,
-        List.of(new SerializedItemSnapshot(copies.getFirst(), new byte[] {1})));
-    journal.markRestored(operation, copies.get(0));
-    journal.markRestored(operation, copies.get(1));
-
-    assertThrows(IllegalStateException.class,
-        () -> journal.transition(operation, CardCustodyPort.OperationStatus.ABORTED));
+    assertThrows(IllegalArgumentException.class,
+        () -> journal.prepare(operation, owner, copies,
+            List.of(new SerializedItemSnapshot(copies.getFirst(), new byte[] {1}))));
   }
 
 

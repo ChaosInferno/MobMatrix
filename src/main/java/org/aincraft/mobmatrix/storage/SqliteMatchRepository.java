@@ -367,11 +367,26 @@ public final class SqliteMatchRepository implements MatchRepository {
       query.setString(1, matchId.value());
       try (var rows = query.executeQuery()) {
         if (!rows.next()) return Optional.empty();
-        return Optional.of(new StartBinding(matchId, rows.getInt(1), rows.getString(2),
-            readOwner(rows.getString(3), rows.getString(4)), readCopies(rows.getString(6)),
-            java.util.UUID.fromString(rows.getString(5)),
-            readOwner(rows.getString(7), rows.getString(8)), readCopies(rows.getString(10)),
-            java.util.UUID.fromString(rows.getString(9))));
+        List<org.aincraft.mobmatrix.domain.CardCopyId> oneCopies = List.of();
+        List<org.aincraft.mobmatrix.domain.CardCopyId> twoCopies = List.of();
+        java.util.UUID oneOperation = null;
+        java.util.UUID twoOperation = null;
+        try {
+          oneCopies = readCopies(rows.getString(6));
+          twoCopies = readCopies(rows.getString(10));
+          oneOperation = java.util.UUID.fromString(rows.getString(5));
+          twoOperation = java.util.UUID.fromString(rows.getString(9));
+          return Optional.of(new StartBinding(matchId, rows.getInt(1), rows.getString(2),
+              readOwner(rows.getString(3), rows.getString(4)), oneCopies, oneOperation,
+              readOwner(rows.getString(7), rows.getString(8)), twoCopies, twoOperation));
+        } catch (RuntimeException exception) {
+          java.util.UUID identity = oneOperation != null ? oneOperation : twoOperation;
+          if (identity == null) throw exception;
+          List<org.aincraft.mobmatrix.domain.CardCopyId> copies =
+              oneOperation != null ? oneCopies : twoCopies;
+          throw new SqliteCardRepository.CustodyIntegrityException(identity, copies,
+              "invalid match start binding owner integrity data", exception);
+        }
       }
     } catch (SQLException exception) {
       throw new IllegalStateException("SQLite start binding load failed", exception);
@@ -427,10 +442,14 @@ public final class SqliteMatchRepository implements MatchRepository {
   }
 
   private static org.aincraft.mobmatrix.domain.CopyOwner readOwner(String kind, String uuid) {
-    return "HOUSE".equals(kind) ? org.aincraft.mobmatrix.domain.CopyOwner.house()
-        : org.aincraft.mobmatrix.domain.CopyOwner.player(java.util.UUID.fromString(uuid));
+    if ("HOUSE".equals(kind) && uuid == null) {
+      return org.aincraft.mobmatrix.domain.CopyOwner.house();
+    }
+    if ("PLAYER".equals(kind) && uuid != null) {
+      return org.aincraft.mobmatrix.domain.CopyOwner.player(java.util.UUID.fromString(uuid));
+    }
+    throw new IllegalStateException("invalid owner in database");
   }
-
 
   private static void writeOwner(java.sql.PreparedStatement statement, int kindIndex,
       int uuidIndex, org.aincraft.mobmatrix.domain.CopyOwner owner) throws SQLException {
