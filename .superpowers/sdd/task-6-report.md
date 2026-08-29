@@ -1024,7 +1024,7 @@ linter, project-wide build, or project-wide test suite was run.
 
 ### Status
 
-Implemented and committed as `540684b` (`fix: harden custody recovery boundaries`).
+Implemented and committed as `540684b` and `4d56d35` (`fix: harden custody recovery boundaries`).
 
 ### Corrective coverage
 
@@ -1091,3 +1091,23 @@ BUILD SUCCESSFUL in 2s
 The focused selection passed; Paper codec tests remain assumption-skipped because this environment
 has no running Paper item registry. SQLite emitted only the JVM restricted-native-access warning.
 No formatter, linter, project-wide build, or project-wide test suite was run.
+
+### Final implementation adjustment
+
+The failure conversion path now always reports nonterminal `RETURN_PENDING` when the adapter
+throws, including when durable status metadata itself is terminal; this prevents an uncertain
+database outcome from being mistaken for completed custody.
+
+Final focused rerun after this adjustment:
+
+```text
+cmd /c gradlew.bat test --rerun-tasks --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 4 executed
+```
