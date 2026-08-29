@@ -722,10 +722,14 @@ public final class MatchApplicationService {
     }
 
     List<MatchState> states = new ArrayList<>();
+    List<MatchFailure> matchFailures = new ArrayList<>();
     for (MatchRepository.MatchSnapshot snapshot : snapshots) {
       try {
         java.util.Optional<MatchState> loaded = matches.rehydrate(snapshot, catalogResolver);
-        if (loaded.isEmpty()) continue;
+        if (loaded.isEmpty()) {
+          matchFailures.add(new MatchFailure(snapshot.matchId(), Failure.INVALID_STATE));
+          continue;
+        }
         MatchState current = loaded.get();
         if (!current.isFinished() && !now.isBefore(current.turnDeadline())) {
           UUID timeoutId = UUID.nameUUIDFromBytes(
@@ -733,30 +737,48 @@ public final class MatchApplicationService {
                   java.nio.charset.StandardCharsets.UTF_8));
           ApplyResult timeout = apply(current, new MatchCommand.Timeout(current.currentSeat(),
               current.revision(), timeoutId, now));
-          if (timeout.accepted()) current = timeout.transition().state();
+          if (!timeout.accepted()) {
+            matchFailures.add(new MatchFailure(snapshot.matchId(), timeout.failure()));
+            continue;
+          }
+          current = timeout.transition().state();
         }
         states.add(current);
-      } catch (RuntimeException ignored) {
-        // Missing catalog snapshots and unsupported state versions are isolated to one match.
+      } catch (RuntimeException exception) {
+        // Missing catalog snapshots and unsupported state versions are isolated to one match, but
+        // must remain visible to the host so it can retain the match-bound custody.
+        matchFailures.add(new MatchFailure(snapshot.matchId(), Failure.DATABASE_ERROR));
       }
     }
     return new StartupRecoveryResult(states, recoveries, custodyEnumerationFailure,
-        matchRepositoryFailure);
+        matchRepositoryFailure, matchFailures);
   }
 
   public StartupRecoveryResult recoverStartup(Function<String, CardCatalog> catalogResolver) {
     return recoverStartup(catalogResolver, Instant.now());
   }
 
+  public record MatchFailure(org.aincraft.mobmatrix.domain.MatchId matchId, Failure failure) {
+    public MatchFailure {
+      Objects.requireNonNull(matchId, "match id is required");
+      Objects.requireNonNull(failure, "failure is required");
+    }
+  }
+
   public record StartupRecoveryResult(List<MatchState> matches, List<RecoveryResult> recoveries,
-      Failure custodyFailure, Failure matchFailure) {
+      Failure custodyFailure, Failure matchFailure, List<MatchFailure> matchFailures) {
     public StartupRecoveryResult(List<MatchState> matches, List<RecoveryResult> recoveries) {
-      this(matches, recoveries, Failure.NONE, Failure.NONE);
+      this(matches, recoveries, Failure.NONE, Failure.NONE, List.of());
     }
 
     public StartupRecoveryResult(List<MatchState> matches, List<RecoveryResult> recoveries,
         Failure custodyFailure) {
-      this(matches, recoveries, custodyFailure, Failure.NONE);
+      this(matches, recoveries, custodyFailure, Failure.NONE, List.of());
+    }
+
+    public StartupRecoveryResult(List<MatchState> matches, List<RecoveryResult> recoveries,
+        Failure custodyFailure, Failure matchFailure) {
+      this(matches, recoveries, custodyFailure, matchFailure, List.of());
     }
 
     public StartupRecoveryResult {
@@ -764,8 +786,10 @@ public final class MatchApplicationService {
       recoveries = List.copyOf(Objects.requireNonNull(recoveries));
       Objects.requireNonNull(custodyFailure);
       Objects.requireNonNull(matchFailure);
+      matchFailures = List.copyOf(Objects.requireNonNull(matchFailures));
     }
   }
+
 
 
   private static List<CardCopyId> exactDeck(List<CardCopyId> copyIds) {

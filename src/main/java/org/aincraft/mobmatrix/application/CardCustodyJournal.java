@@ -65,7 +65,9 @@ public interface CardCustodyJournal {
             throw new IllegalArgumentException("duplicate aborted snapshot copy");
           }
         }
-        if (!restoredCopyIds.containsAll(copyIds) || !snapshotIds.equals(new java.util.HashSet<>(copyIds))) {
+        if (copyIds.size() != snapshotIds.size()
+            || !restoredCopyIds.containsAll(copyIds)
+            || !snapshotIds.equals(new java.util.HashSet<>(copyIds))) {
           throw new IllegalArgumentException("aborted custody has unresolved or missing snapshots");
         }
       }

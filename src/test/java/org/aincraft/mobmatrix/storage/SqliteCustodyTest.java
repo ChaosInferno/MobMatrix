@@ -88,6 +88,62 @@ final class SqliteCustodyTest {
     Files.deleteIfExists(path);
   }
   @Test
+  void everyHydratedReservationRequiresExactEscrowSnapshots() throws Exception {
+    var path = Files.createTempFile("mobmatrix-reservation-snapshot-integrity", ".sqlite");
+    UUID operation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {4, 2});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(operation, owner, List.of(copy), List.of(snapshot));
+      for (OperationStatus status : OperationStatus.values()) {
+        try (var update = database.connection().prepareStatement(
+            "UPDATE reservations SET status = ? WHERE operation_id = ?")) {
+          update.setString(1, status.name());
+          update.setString(2, operation.toString());
+          update.executeUpdate();
+        }
+        try (var delete = database.connection().prepareStatement(
+            "DELETE FROM escrow_items WHERE operation_id = ?")) {
+          delete.setString(1, operation.toString());
+          delete.executeUpdate();
+        }
+        var exception = assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+            () -> repository.findReservation(operation));
+        assertEquals(List.of(copy), exception.expectedCopyIds());
+        assertEquals(operation, exception.operationId());
+        repository.saveSnapshots(operation, List.of(snapshot));
+      }
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void abortedTransitionRequiresExactEscrowSnapshotsBeforeIdempotence() throws Exception {
+    var path = Files.createTempFile("mobmatrix-aborted-snapshot-integrity", ".sqlite");
+    UUID operation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {8, 6});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(operation, owner, List.of(copy), List.of(snapshot));
+      repository.markRestored(operation, copy);
+      try (var delete = database.connection().prepareStatement(
+          "DELETE FROM escrow_items WHERE operation_id = ?")) {
+        delete.setString(1, operation.toString());
+        delete.executeUpdate();
+      }
+      assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+          () -> repository.transition(operation, OperationStatus.ABORTED));
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
   void reservationIdentityBindsOperationToMatchAcrossReopen() throws Exception {
     var path = Files.createTempFile("mobmatrix-match-binding", ".sqlite");
     UUID operation = UUID.randomUUID();

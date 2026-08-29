@@ -66,6 +66,10 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
       throw new IllegalStateException("cannot return custody with unresolved copies");
     }
     if (status == CardCustodyPort.OperationStatus.ABORTED
+        && !hasExactSnapshots(entry.copyIds, entry.snapshots)) {
+      throw new IllegalStateException("cannot abort custody without exact snapshots");
+    }
+    if (status == CardCustodyPort.OperationStatus.ABORTED
         && !entry.restored.containsAll(entry.copyIds)) {
       throw new IllegalStateException("cannot abort custody with unresolved copies");
     }
@@ -107,6 +111,18 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
     if (!entry.owner.equals(owner) || !entry.copyIds.contains(snapshot.copyId())) {
       throw new IllegalStateException("recovery row does not match reservation");
     }
+  }
+
+  private static boolean hasExactSnapshots(List<CardCopyId> copies,
+      List<SerializedItemSnapshot> snapshots) {
+    if (copies.size() != new HashSet<>(copies).size() || snapshots.size() != copies.size()) {
+      return false;
+    }
+    Set<CardCopyId> snapshotIds = new HashSet<>();
+    for (SerializedItemSnapshot snapshot : snapshots) {
+      if (!snapshotIds.add(snapshot.copyId())) return false;
+    }
+    return snapshotIds.equals(new HashSet<>(copies));
   }
 
   private MutableEntry require(UUID operationId) {

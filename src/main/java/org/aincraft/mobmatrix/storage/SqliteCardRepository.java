@@ -304,6 +304,11 @@ public final class SqliteCardRepository implements CardCustodyJournal {
           && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
         throw new IllegalStateException("cannot return custody with unresolved copies");
       }
+      if (target == OperationStatus.ABORTED
+          && !hasExactSnapshots(reservation)) {
+        throw new CustodyIntegrityException(operationId, reservation.copyIds(),
+            "aborted custody is missing exact snapshots");
+      }
       if (reservation.status() == target) return;
       if (target == OperationStatus.RETURNED
           && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
@@ -462,6 +467,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
             while (restoredRows.next()) restored.add(new CardCopyId(UUID.fromString(restoredRows.getString(1))));
           }
         }
+        if (!hasExactSnapshots(copies, snapshots)) {
+          throw new CustodyIntegrityException(operationId, copies,
+              "reservation is missing exact escrow snapshots");
+        }
         if (status == OperationStatus.RETURNED
             && !new HashSet<>(restored).containsAll(copies)) {
           throw new IllegalStateException("cannot hydrate returned custody with unresolved copies");
@@ -469,10 +478,6 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         if (status == OperationStatus.ABORTED
             && !new HashSet<>(restored).containsAll(copies)) {
           throw new IllegalStateException("cannot hydrate aborted custody with unresolved copies");
-        }
-        if (status == OperationStatus.ABORTED
-            && !hasExactSnapshots(copies, snapshots)) {
-          throw new IllegalStateException("cannot hydrate aborted custody without exact snapshots");
         }
         return new Reservation(operationId, owner, copies, snapshots, status, restored, matchId);
       }
@@ -530,13 +535,15 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     }
     return List.copyOf(copies);
   }
-
   private static boolean hasExactSnapshots(Reservation reservation) {
     return hasExactSnapshots(reservation.copyIds(), reservation.snapshots());
   }
 
   private static boolean hasExactSnapshots(List<CardCopyId> copies,
       List<SerializedItemSnapshot> snapshots) {
+    if (copies.size() != new HashSet<>(copies).size() || snapshots.size() != copies.size()) {
+      return false;
+    }
     Set<CardCopyId> snapshotIds = new HashSet<>();
     for (SerializedItemSnapshot snapshot : snapshots) {
       if (!snapshotIds.add(snapshot.copyId())) return false;
@@ -572,6 +579,30 @@ public final class SqliteCardRepository implements CardCustodyJournal {
 
   @FunctionalInterface
   private interface SqlAction { void run() throws Exception; }
+
+  public static final class CustodyIntegrityException extends IllegalStateException {
+    private final UUID operationId;
+    private final List<CardCopyId> expectedCopyIds;
+
+    public CustodyIntegrityException(UUID operationId, List<CardCopyId> expectedCopyIds,
+        String message) {
+      super(message);
+      this.operationId = Objects.requireNonNull(operationId, "operation id is required");
+      this.expectedCopyIds = List.copyOf(Objects.requireNonNull(expectedCopyIds,
+          "expected copy ids are required"));
+    }
+
+    public UUID operationId() {
+      return operationId;
+    }
+
+    public List<CardCopyId> expectedCopyIds() {
+      return expectedCopyIds;
+    }
+    public CardCustodyPort.Failure failure() {
+      return CardCustodyPort.Failure.INVALID_STATE;
+    }
+  }
 
   public record StoredCardCopy(CardCopyId copyId, CardId catalogId, CopyOwner owner) {
     public StoredCardCopy {

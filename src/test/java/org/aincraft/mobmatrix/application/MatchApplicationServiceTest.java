@@ -4,7 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import java.time.Instant;
 import java.nio.file.Files;
 import java.util.ArrayList;
@@ -163,6 +163,82 @@ final class MatchApplicationServiceTest {
 
     assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, result.matchFailure());
     assertTrue(result.recoveries().isEmpty());
+  }
+  @Test
+  void startupReportsEachMatchRehydrationFailureAndPreservesBoundEscrow() {
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    MatchEngine.StartMatch failedStart = match("startup-rehydrate-failed", owner, copies(), owner,
+        copies());
+    MatchEngine.StartMatch healthyStart = match("startup-rehydrate-healthy", owner, copies(), owner,
+        copies());
+    MatchState healthy = MatchEngine.start(healthyStart).state();
+    UUID failedOperation = UUID.randomUUID();
+    RehydrationFailureCustody custody = new RehydrationFailureCustody(failedOperation,
+        failedStart.matchId());
+    MatchRepository repository = new StartupRehydrationRepository(failedStart.matchId(),
+        healthyStart.matchId(), healthy, false);
+
+    MatchApplicationService.StartupRecoveryResult result = new MatchApplicationService(custody,
+        repository).recoverStartup(id -> healthyStart.catalog(),
+            Instant.parse("2026-01-01T00:00:00Z"));
+
+    assertEquals(List.of(healthy), result.matches());
+    assertEquals(List.of(new MatchApplicationService.MatchFailure(failedStart.matchId(),
+        CardCustodyPort.Failure.INVALID_STATE)), result.matchFailures());
+    assertTrue(result.recoveries().isEmpty());
+    assertTrue(custody.recovered.isEmpty());
+  }
+
+  @Test
+  void startupReportsThrownMatchRehydrationFailureWithMatchId() {
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    MatchEngine.StartMatch start = match("startup-rehydrate-throws", owner, copies(), owner,
+        copies());
+    MatchState state = MatchEngine.start(start).state();
+    MatchRepository repository = new StartupRehydrationRepository(start.matchId(), null, state,
+        false, true);
+
+    MatchApplicationService.StartupRecoveryResult result = new MatchApplicationService(
+        new EnumerationFailingCustody(), repository).recoverStartup(id -> start.catalog(),
+            Instant.parse("2026-01-01T00:00:00Z"));
+
+    assertTrue(result.matches().isEmpty());
+    assertEquals(List.of(new MatchApplicationService.MatchFailure(start.matchId(),
+        CardCustodyPort.Failure.DATABASE_ERROR)), result.matchFailures());
+  }
+
+  @Test
+  void startupReportsRejectedTimeoutAndDoesNotExposeUnadvancedState() {
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    MatchEngine.StartMatch start = match("startup-timeout-rejected", owner, copies(), owner,
+        copies());
+    MatchState overdue = MatchEngine.start(start).state();
+    MatchRepository repository = new StartupRehydrationRepository(start.matchId(), null, overdue,
+        true);
+
+    MatchApplicationService.StartupRecoveryResult result = new MatchApplicationService(
+        new EnumerationFailingCustody(), repository).recoverStartup(id -> start.catalog(),
+            Instant.parse("2026-01-01T00:05:00Z"));
+
+    assertTrue(result.matches().isEmpty());
+    assertEquals(List.of(new MatchApplicationService.MatchFailure(start.matchId(),
+        CardCustodyPort.Failure.STALE_REVISION)), result.matchFailures());
+  }
+
+
+  @Test
+  void inMemoryAbortRequiresExactEscrowSnapshotsBeforeIdempotence() {
+    InMemoryCardCustodyJournal journal = new InMemoryCardCustodyJournal();
+    UUID operation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> copies = copies().subList(0, 2);
+    journal.prepare(operation, owner, copies,
+        List.of(new SerializedItemSnapshot(copies.getFirst(), new byte[] {1})));
+    journal.markRestored(operation, copies.get(0));
+    journal.markRestored(operation, copies.get(1));
+
+    assertThrows(IllegalStateException.class,
+        () -> journal.transition(operation, CardCustodyPort.OperationStatus.ABORTED));
   }
 
   @Test
@@ -1460,6 +1536,109 @@ final class MatchApplicationServiceTest {
     @Override
     public List<UUID> openOperationIds() {
       throw new IllegalStateException("custody enumeration unavailable");
+    }
+  }
+  private static final class RehydrationFailureCustody implements CardCustodyPort {
+    private final UUID operation;
+    private final MatchId matchId;
+    private final List<UUID> recovered = new ArrayList<>();
+
+    private RehydrationFailureCustody(UUID operation, MatchId matchId) {
+      this.operation = operation;
+      this.matchId = matchId;
+    }
+
+    @Override
+    public List<UUID> openOperationIds() {
+      return List.of(operation);
+    }
+
+    @Override
+    public java.util.Optional<OperationStatus> operationStatus(UUID operationId) {
+      return java.util.Optional.of(OperationStatus.ESCROWED);
+    }
+
+    @Override
+    public java.util.Optional<MatchId> operationMatchId(UUID operationId) {
+      return java.util.Optional.of(matchId);
+    }
+
+    @Override
+    public RecoveryResult recover(UUID operationId) {
+      recovered.add(operationId);
+      throw new AssertionError("bound escrow must remain protected");
+    }
+
+    @Override
+    public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
+      return PrepareResult.rejected(operationId, owner, copyIds, Failure.INVALID_STATE);
+    }
+
+    @Override
+    public CustodyResult escrow(UUID operationId) {
+      return CustodyResult.rejected(operationId, OperationStatus.PREPARED, Failure.INVALID_STATE);
+    }
+
+    @Override
+    public ReturnResult returnCopies(UUID operationId) {
+      return ReturnResult.pending(operationId, List.of(), List.of(), List.of(), List.of());
+    }
+  }
+
+  private static final class StartupRehydrationRepository implements MatchRepository {
+    private final MatchId first;
+    private final MatchId second;
+    private final MatchState state;
+    private final boolean rejectSave;
+    private final boolean throwRehydrate;
+
+    private StartupRehydrationRepository(MatchId first, MatchId second, MatchState state,
+        boolean rejectSave) {
+      this(first, second, state, rejectSave, false);
+    }
+
+    private StartupRehydrationRepository(MatchId first, MatchId second, MatchState state,
+        boolean rejectSave, boolean throwRehydrate) {
+      this.first = first;
+      this.second = second;
+      this.state = state;
+      this.rejectSave = rejectSave;
+      this.throwRehydrate = throwRehydrate;
+    }
+
+    @Override
+    public SaveResult save(long expectedRevision, MatchState successor) {
+      return rejectSave ? SaveResult.stale(state.revision()) : SaveResult.success(successor.revision());
+    }
+
+    @Override
+    public java.util.Optional<MatchSnapshot> find(MatchId matchId) {
+      return java.util.Optional.empty();
+    }
+
+    @Override
+    public java.util.Optional<MatchState> findState(MatchId matchId, CardCatalog catalog) {
+      return java.util.Optional.of(state);
+    }
+
+    @Override
+    public List<MatchSnapshot> activeMatches() {
+      List<MatchSnapshot> snapshots = new ArrayList<>();
+      snapshots.add(new MatchSnapshot(first, state.revision(), "ACTIVE", new byte[] {1}, "{}"));
+      if (second != null) {
+        snapshots.add(new MatchSnapshot(second, state.revision(), "ACTIVE", new byte[] {2}, "{}"));
+      }
+      return snapshots;
+    }
+
+    @Override
+    public java.util.Optional<MatchState> rehydrate(MatchSnapshot snapshot,
+        java.util.function.Function<String, CardCatalog> resolver) {
+      if (snapshot.matchId().equals(first)) {
+        if (throwRehydrate) throw new IllegalStateException("snapshot unavailable");
+        if (second != null) return java.util.Optional.empty();
+      }
+      return java.util.Optional.of(state);
     }
   }
 }
