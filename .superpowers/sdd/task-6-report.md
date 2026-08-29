@@ -287,7 +287,7 @@ project-wide build, or project-wide test suite was run.
 Implemented SWAP reservation preservation, atomic revision-0 match/start-binding persistence,
 strict durable custody binding checks on retries, and the prior Task 6 custody/recovery behavior.
 
-Implementation commit: `e981092` (`fix: make start custody atomic`).
+Implementation commit: `f11ad04` (`fix: make start custody atomic`).
 
 ## TDD and focused verification
 
