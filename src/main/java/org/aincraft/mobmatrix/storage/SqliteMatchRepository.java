@@ -165,6 +165,85 @@ public final class SqliteMatchRepository implements MatchRepository {
       throw new IllegalStateException("SQLite match delete failed", exception);
     }
   }
+  @Override
+  public Optional<StartBinding> findStartBinding(org.aincraft.mobmatrix.domain.MatchId matchId) {
+    Objects.requireNonNull(matchId, "match id is required");
+    try (var query = connection.prepareStatement("""
+        SELECT binding_version, request_identity, one_owner_kind, one_owner_uuid,
+          one_operation_id, one_copy_ids, two_owner_kind, two_owner_uuid,
+          two_operation_id, two_copy_ids
+        FROM match_start_bindings WHERE match_id = ?
+        """)) {
+      query.setString(1, matchId.value());
+      try (var rows = query.executeQuery()) {
+        if (!rows.next()) return Optional.empty();
+        return Optional.of(new StartBinding(matchId, rows.getInt(1), rows.getString(2),
+            readOwner(rows.getString(3), rows.getString(4)), readCopies(rows.getString(6)),
+            java.util.UUID.fromString(rows.getString(5)),
+            readOwner(rows.getString(7), rows.getString(8)), readCopies(rows.getString(10)),
+            java.util.UUID.fromString(rows.getString(9))));
+      }
+    } catch (SQLException exception) {
+      throw new IllegalStateException("SQLite start binding load failed", exception);
+    }
+  }
+
+  @Override
+  public void saveStartBinding(StartBinding binding) {
+    Objects.requireNonNull(binding, "start binding is required");
+    try (var insert = connection.prepareStatement("""
+        INSERT INTO match_start_bindings(match_id, binding_version, request_identity,
+          one_owner_kind, one_owner_uuid, one_operation_id, one_copy_ids,
+          two_owner_kind, two_owner_uuid, two_operation_id, two_copy_ids)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(match_id) DO UPDATE SET binding_version = excluded.binding_version,
+          request_identity = excluded.request_identity, one_owner_kind = excluded.one_owner_kind,
+          one_owner_uuid = excluded.one_owner_uuid, one_operation_id = excluded.one_operation_id,
+          one_copy_ids = excluded.one_copy_ids, two_owner_kind = excluded.two_owner_kind,
+          two_owner_uuid = excluded.two_owner_uuid, two_operation_id = excluded.two_operation_id,
+          two_copy_ids = excluded.two_copy_ids
+        """)) {
+      insert.setString(1, binding.matchId().value());
+      insert.setInt(2, binding.version());
+      insert.setString(3, binding.requestIdentity());
+      writeOwner(insert, 4, 5, binding.oneOwner());
+      insert.setString(6, binding.oneOperationId().toString());
+      insert.setString(7, writeCopies(binding.oneCopies()));
+      writeOwner(insert, 8, 9, binding.twoOwner());
+      insert.setString(10, binding.twoOperationId().toString());
+      insert.setString(11, writeCopies(binding.twoCopies()));
+      insert.executeUpdate();
+    } catch (SQLException exception) {
+      throw new IllegalStateException("SQLite start binding save failed", exception);
+    }
+  }
+
+  private static String writeCopies(List<org.aincraft.mobmatrix.domain.CardCopyId> copies) {
+    return copies.stream().map(copy -> copy.value().toString()).collect(java.util.stream.Collectors.joining(","));
+  }
+
+  private static List<org.aincraft.mobmatrix.domain.CardCopyId> readCopies(String value) {
+    if (value == null || value.isEmpty()) return List.of();
+    return java.util.Arrays.stream(value.split(",", -1))
+        .map(text -> new org.aincraft.mobmatrix.domain.CardCopyId(java.util.UUID.fromString(text))).toList();
+  }
+
+  private static org.aincraft.mobmatrix.domain.CopyOwner readOwner(String kind, String uuid) {
+    return "HOUSE".equals(kind) ? org.aincraft.mobmatrix.domain.CopyOwner.house()
+        : org.aincraft.mobmatrix.domain.CopyOwner.player(java.util.UUID.fromString(uuid));
+  }
+
+
+  private static void writeOwner(java.sql.PreparedStatement statement, int kindIndex,
+      int uuidIndex, org.aincraft.mobmatrix.domain.CopyOwner owner) throws SQLException {
+    if (owner.isPlayer()) {
+      statement.setString(kindIndex, "PLAYER");
+      statement.setString(uuidIndex, owner.playerId().toString());
+    } else {
+      statement.setString(kindIndex, "HOUSE");
+      statement.setNull(uuidIndex, java.sql.Types.VARCHAR);
+    }
+  }
 
   private long currentRevision(String matchId) throws SQLException {
     try (var query = connection.prepareStatement("SELECT revision FROM matches WHERE match_id = ?")) {

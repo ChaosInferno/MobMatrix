@@ -223,12 +223,86 @@ final class MatchApplicationServiceTest {
         start, oneOwner, oneCopies, oneOperation, twoOwner, twoCopies, twoOperation);
 
     assertTrue(service.start(request).accepted());
-    MatchApplicationService.MatchStartResult retry = service.start(request);
+    MatchApplicationService retryService = new MatchApplicationService(new RecordingCustody(), repository);
+    MatchApplicationService.MatchStartResult retry = retryService.start(request);
 
     assertTrue(retry.accepted());
     assertEquals(1, repository.saves);
     assertEquals(0L, retry.state().revision());
   }
+  @Test
+  void retryWithSwappedOperationIdsRejectsDurableOwnerAndCopyBinding() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = copies();
+    UUID oneOperation = UUID.randomUUID();
+    UUID twoOperation = UUID.randomUUID();
+    MatchEngine.StartMatch start = match("swapped-operations", oneOwner, oneCopies, twoOwner, twoCopies);
+    RecordingCustody custody = new RecordingCustody();
+    MatchApplicationService service = new MatchApplicationService(custody);
+    var request = new MatchApplicationService.StartMatchRequest(start, oneOwner, oneCopies,
+        oneOperation, twoOwner, twoCopies, twoOperation);
+    assertTrue(service.start(request).accepted());
+
+    var swapped = new MatchApplicationService.StartMatchRequest(start, oneOwner, oneCopies,
+        twoOperation, twoOwner, twoCopies, oneOperation);
+    var result = service.start(swapped);
+
+    assertFalse(result.accepted());
+    assertEquals(CardCustodyPort.Failure.MISMATCHED_OPERATION, result.failure());
+  }
+
+  @Test
+  void draftRetryWithDifferentOperationIdsRejectsDurableEmptyCustodyBinding() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = copies();
+    MatchEngine.StartMatch start = new MatchEngine.StartMatch(new MatchId("draft-binding"),
+        new Deck(oneCopies.stream().map(copy -> new CardCopy(copy, new CardId(1), oneOwner)).toList()),
+        new Deck(twoCopies.stream().map(copy -> new CardCopy(copy, new CardId(1), twoOwner)).toList()),
+        new CardCatalog(List.of(new CardDefinition(new CardId(1), "No. 1", "Card 1", 1,
+            CardType.NORMAL, 1, 1, 1, 1, 0)), "draft-binding-catalog"),
+        new MatchRules(org.aincraft.mobmatrix.domain.Rule.DRAFT), 17L,
+        Instant.parse("2026-01-01T00:00:00Z"));
+    RecordingMatchRepository repository = new RecordingMatchRepository();
+    RecordingCustody custody = new RecordingCustody();
+    MatchApplicationService service = new MatchApplicationService(custody, repository);
+    UUID oneOperation = UUID.randomUUID();
+    UUID twoOperation = UUID.randomUUID();
+    var request = new MatchApplicationService.StartMatchRequest(start, oneOwner, List.of(),
+        oneOperation, twoOwner, List.of(), twoOperation);
+    assertTrue(service.start(request).accepted());
+
+    MatchApplicationService retryService = new MatchApplicationService(new RecordingCustody(), repository);
+    var conflicting = new MatchApplicationService.StartMatchRequest(start, oneOwner, List.of(),
+        UUID.randomUUID(), twoOwner, List.of(), UUID.randomUUID());
+    var result = retryService.start(conflicting);
+    assertFalse(result.accepted());
+    assertEquals(CardCustodyPort.Failure.MISMATCHED_OPERATION, result.failure());
+  }
+
+  @Test
+  void overlappingSeatCopiesAreRejectedBeforeReservation() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = new ArrayList<>(copies());
+    twoCopies.set(0, oneCopies.get(0));
+    MatchEngine.StartMatch start = match("overlap", oneOwner, oneCopies, twoOwner, twoCopies);
+    RecordingCustody custody = new RecordingCustody();
+
+    var result = new MatchApplicationService(custody).start(
+        new MatchApplicationService.StartMatchRequest(start, oneOwner, oneCopies,
+            UUID.randomUUID(), twoOwner, twoCopies, UUID.randomUUID()));
+
+    assertFalse(result.accepted());
+    assertEquals(CardCustodyPort.Failure.INVALID_COPY_SET, result.failure());
+    assertTrue(custody.calls.isEmpty());
+    assertFalse(MatchEngine.start(start).accepted());
+  }
+
 
   @Test
   void prepareEscrowTransitionFailureCleansUpDurableOperation() {
@@ -316,6 +390,7 @@ final class MatchApplicationServiceTest {
 
   private static final class RecordingMatchRepository implements MatchRepository {
     private MatchState state;
+    private MatchRepository.StartBinding binding;
     private int saves;
 
     @Override
@@ -326,6 +401,15 @@ final class MatchApplicationServiceTest {
       return SaveResult.success(state.revision());
     }
 
+    @Override
+    public void saveStartBinding(MatchRepository.StartBinding binding) {
+      this.binding = binding;
+    }
+
+    @Override
+    public java.util.Optional<MatchRepository.StartBinding> findStartBinding(MatchId matchId) {
+      return java.util.Optional.ofNullable(binding);
+    }
     @Override
     public java.util.Optional<MatchSnapshot> find(MatchId matchId) {
       return state == null ? java.util.Optional.empty()
@@ -394,7 +478,6 @@ final class MatchApplicationServiceTest {
 
   private static final class ThrowingEscrowCustody implements CardCustodyPort {
     private final List<String> calls = new ArrayList<>();
-    private final UUID operation = UUID.randomUUID();
 
     @Override
     public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
@@ -418,17 +501,21 @@ final class MatchApplicationServiceTest {
     public RecoveryResult recover(UUID operationId) {
       return RecoveryResult.none(operationId);
     }
-
-    @Override
-    public List<UUID> openOperationIds() {
-      return List.of(operation);
-    }
   }
 
   private static final class RecordingCustody implements CardCustodyPort {
     private final boolean rejectPrepare;
     private final Map<UUID, Binding> matchBindings = new java.util.HashMap<>();
     private final Map<UUID, OperationStatus> statuses = new java.util.HashMap<>();
+    @Override
+    public java.util.Optional<CardCustodyPort.OperationBinding> operationBinding(UUID operationId) {
+      Binding binding = matchBindings.get(operationId);
+      if (binding == null) return java.util.Optional.empty();
+      OperationStatus status = statuses.get(operationId);
+      if (status == null) return java.util.Optional.empty();
+      return java.util.Optional.of(new CardCustodyPort.OperationBinding(binding.owner(),
+          binding.copyIds(), status, binding.matchId()));
+    }
     private final List<List<CardCopyId>> preparedCopies = new ArrayList<>();
     private final List<String> calls = new ArrayList<>();
 

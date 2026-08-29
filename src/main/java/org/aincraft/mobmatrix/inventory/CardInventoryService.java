@@ -211,13 +211,26 @@ public final class CardInventoryService implements CardCustodyPort {
     }
     return restore(operationId, operation, player.getInventory());
   }
-  /** Attempts restoration into an explicitly supplied inventory on the primary thread. */
-  public synchronized ReturnResult returnCopies(UUID operationId, Inventory inventory) {
+  /** Test-only restoration seam; production restoration always resolves the owner's inventory. */
+  synchronized ReturnResult returnCopies(UUID operationId, Inventory inventory) {
     requirePrimaryThread();
     PreparedOperation operation = operation(Objects.requireNonNull(operationId));
     if (operation == null) return new ReturnResult(operationId, OperationStatus.ABORTED, List.of(), List.of(),
         List.of(), List.of(), Failure.MISMATCHED_OPERATION);
-    if (operation.status == OperationStatus.RETURNED) return ReturnResult.returned(operationId, operation.copyIds);
+    if (operation.owner.isPlayer()) {
+      Player owner = players.find(operation.owner.playerId());
+      if (owner == null || owner.getInventory() != Objects.requireNonNull(inventory,
+          "inventory is required")) {
+        return new ReturnResult(operationId, operation.status, operation.copyIds, List.of(),
+            operation.copyIds, operation.copyIds, Failure.MISMATCHED_OWNER);
+      }
+    } else {
+      return new ReturnResult(operationId, operation.status, operation.copyIds, List.of(),
+          operation.copyIds, operation.copyIds, Failure.MISMATCHED_OWNER);
+    }
+    if (operation.status == OperationStatus.RETURNED) {
+      return ReturnResult.returned(operationId, operation.copyIds);
+    }
     if (operation.status != OperationStatus.PREPARED && operation.status != OperationStatus.ESCROWED
         && operation.status != OperationStatus.RETURN_PENDING) {
       return new ReturnResult(operationId, operation.status, operation.copyIds, List.of(), operation.copyIds,
@@ -232,9 +245,8 @@ public final class CardInventoryService implements CardCustodyPort {
         }
       }
     }
-    return restore(operationId, operation, Objects.requireNonNull(inventory));
+    return restore(operationId, operation, inventory);
   }
-
   @Override
   public synchronized RecoveryResult recover(UUID operationId) {
     requirePrimaryThread();
@@ -268,18 +280,29 @@ public final class CardInventoryService implements CardCustodyPort {
   @Override
   public synchronized java.util.Optional<org.aincraft.mobmatrix.domain.MatchId> operationMatchId(
       UUID operationId) {
-    PreparedOperation operation = operation(Objects.requireNonNull(operationId));
-    return operation == null || operation.matchId == null
+    var entry = journal.find(Objects.requireNonNull(operationId)).orElse(null);
+    return entry == null || entry.matchId() == null
         ? java.util.Optional.empty()
-        : java.util.Optional.of(new org.aincraft.mobmatrix.domain.MatchId(operation.matchId));
+        : java.util.Optional.of(new org.aincraft.mobmatrix.domain.MatchId(entry.matchId()));
   }
 
   @Override
   public synchronized java.util.Optional<OperationStatus> operationStatus(UUID operationId) {
-    PreparedOperation operation = operation(Objects.requireNonNull(operationId));
-    return operation == null ? java.util.Optional.empty()
-        : java.util.Optional.of(operation.status);
+    var entry = journal.find(Objects.requireNonNull(operationId)).orElse(null);
+    return entry == null ? java.util.Optional.empty()
+        : java.util.Optional.of(entry.status());
   }
+
+  @Override
+  public synchronized java.util.Optional<CardCustodyPort.OperationBinding> operationBinding(
+      UUID operationId) {
+    var entry = journal.find(Objects.requireNonNull(operationId)).orElse(null);
+    if (entry == null) return java.util.Optional.empty();
+    return java.util.Optional.of(new CardCustodyPort.OperationBinding(entry.owner(), entry.copyIds(),
+        entry.status(), entry.matchId() == null ? null
+            : new org.aincraft.mobmatrix.domain.MatchId(entry.matchId())));
+  }
+
 
 
   private PreparedOperation operation(UUID operationId) {

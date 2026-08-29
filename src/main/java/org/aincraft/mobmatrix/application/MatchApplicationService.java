@@ -60,7 +60,10 @@ public final class MatchApplicationService {
             request.match().catalog());
         if (existing.isPresent()) {
           MatchState state = existing.get();
-          if (sameInitialState(state, started.state())
+          Optional<MatchRepository.StartBinding> binding =
+              matches.findStartBinding(request.match().matchId());
+          if (binding.isPresent() && startBindingMatches(binding.get(), request, plan)
+              && sameInitialState(state, started.state())
               && operationBindingsMatch(request, state.matchId())) {
             return MatchStartResult.active(state.matchId(), state);
           }
@@ -109,6 +112,12 @@ public final class MatchApplicationService {
       MatchRepository.SaveResult saved;
       try {
         saved = matches.save(0L, started.state());
+        if (saved.accepted()) {
+          matches.saveStartBinding(new MatchRepository.StartBinding(
+              request.match().matchId(), 1, startIdentity(request), request.oneOwner(),
+              plan.oneCopies(), request.oneOperationId(), request.twoOwner(), plan.twoCopies(),
+              request.twoOperationId()));
+        }
       } catch (RuntimeException exception) {
         CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
         cleanup = cleanup.plus(cleanup(request.twoOperationId(), plan.twoCopies()));
@@ -223,20 +232,39 @@ public final class MatchApplicationService {
         || !request.twoCopies().isEmpty() && !open.contains(request.twoOperationId()))) {
       return false;
     }
-    return bindingMatches(request.oneOperationId(), matchId)
-        && bindingMatches(request.twoOperationId(), matchId);
+    return bindingMatches(request.oneOperationId(), request.oneOwner(), request.oneCopies(), matchId)
+        && bindingMatches(request.twoOperationId(), request.twoOwner(), request.twoCopies(), matchId);
   }
 
-  private boolean bindingMatches(UUID operationId,
+  private boolean bindingMatches(UUID operationId, CopyOwner owner, List<CardCopyId> copies,
       org.aincraft.mobmatrix.domain.MatchId matchId) {
     try {
+      Optional<CardCustodyPort.OperationBinding> binding = custody.operationBinding(operationId);
+      if (binding.isPresent()) {
+        CardCustodyPort.OperationBinding value = binding.get();
+        return value.status() == OperationStatus.ESCROWED
+            && value.owner().equals(owner)
+            && value.copyIds().equals(copies)
+            && Objects.equals(value.matchId(), matchId);
+      }
+
       Optional<OperationStatus> status = custody.operationStatus(operationId);
       if (status.isPresent() && status.get() != OperationStatus.ESCROWED) return false;
-      return custody.operationMatchId(operationId)
-          .map(matchId::equals).orElse(true);
+      return custody.operationMatchId(operationId).map(matchId::equals).orElse(true);
     } catch (RuntimeException exception) {
       return false;
     }
+  }
+  private static boolean startBindingMatches(MatchRepository.StartBinding binding,
+      StartMatchRequest request, ReservationPlan plan) {
+    return binding.version() == 1
+        && binding.requestIdentity().equals(startIdentity(request))
+        && binding.oneOwner().equals(request.oneOwner())
+        && binding.oneCopies().equals(plan.oneCopies())
+        && binding.oneOperationId().equals(request.oneOperationId())
+        && binding.twoOwner().equals(request.twoOwner())
+        && binding.twoCopies().equals(plan.twoCopies())
+        && binding.twoOperationId().equals(request.twoOperationId());
   }
 
   private static boolean sameInitialState(MatchState left, MatchState right) {
@@ -331,12 +359,76 @@ public final class MatchApplicationService {
           : new CleanupSummary(List.of(), List.of());
     }
   }
+
+  private static String startIdentity(StartMatchRequest request) {
+    StringBuilder value = new StringBuilder();
+    append(value, request.match().matchId().value());
+    append(value, request.match().catalog().snapshotId());
+    for (var definition : request.match().catalog().all()) {
+      append(value, definition.id().value());
+      append(value, definition.publicNumber());
+      append(value, definition.name());
+      append(value, definition.stars());
+      append(value, definition.type().name());
+      append(value, definition.top());
+      append(value, definition.right());
+      append(value, definition.bottom());
+      append(value, definition.left());
+      append(value, definition.salePrice());
+    }
+    request.match().rules().rules().stream().map(Enum::name).sorted().forEach(item -> append(value, item));
+    append(value, request.match().seed());
+    append(value, request.match().startTime());
+    append(value, request.oneOwner());
+    append(value, request.twoOwner());
+    append(value, request.oneOperationId());
+    append(value, request.twoOperationId());
+    appendPhysicalCopies(value, request.match().oneDeck().copies());
+    appendPhysicalCopies(value, request.match().twoDeck().copies());
+    appendPhysicalCopies(value, request.match().oneInventory());
+    appendPhysicalCopies(value, request.match().twoInventory());
+    appendIds(value, request.oneCopies());
+    appendIds(value, request.twoCopies());
+    request.match().oneDraftChoices().forEach(item -> append(value, item));
+    request.match().twoDraftChoices().forEach(item -> append(value, item));
+    return value.toString();
+  }
+
+  private static void appendPhysicalCopies(StringBuilder value,
+      List<org.aincraft.mobmatrix.domain.CardCopy> copies) {
+    append(value, copies.size());
+    for (var copy : copies) {
+      append(value, copy.copyId().value());
+      append(value, copy.cardId().value());
+      append(value, copy.owner());
+    }
+  }
+
+  private static void appendIds(StringBuilder value, List<CardCopyId> copies) {
+    append(value, copies.size());
+    copies.forEach(copy -> append(value, copy.value()));
+  }
+
+  private static void append(StringBuilder value, Object item) {
+    String text = String.valueOf(item);
+    value.append(text.length()).append(':').append(text);
+  }
+
   private static Failure validateDeckSelections(StartMatchRequest request) {
+    if (overlaps(request.match())) return Failure.INVALID_COPY_SET;
     Failure one = validateDeck(request.oneCopies(), request.match().oneDeck(), request.oneOwner(),
         request.match().oneInventory(), request.match().rules());
     if (one != Failure.NONE) return one;
     return validateDeck(request.twoCopies(), request.match().twoDeck(), request.twoOwner(),
         request.match().twoInventory(), request.match().rules());
+  }
+
+  private static boolean overlaps(org.aincraft.mobmatrix.domain.MatchEngine.StartMatch match) {
+    Set<CardCopyId> one = new HashSet<>();
+    match.oneDeck().copies().forEach(copy -> one.add(copy.copyId()));
+    match.oneInventory().forEach(copy -> one.add(copy.copyId()));
+    return match.twoDeck().copies().stream().anyMatch(copy -> one.contains(copy.copyId()))
+        || match.twoInventory().stream().anyMatch(copy -> one.contains(copy.copyId()));
   }
   private static Failure validateDeck(List<CardCopyId> requested,
       org.aincraft.mobmatrix.domain.Deck deck, CopyOwner owner,

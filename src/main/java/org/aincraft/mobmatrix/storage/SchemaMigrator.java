@@ -76,7 +76,32 @@ public final class SchemaMigrator {
     if (currentVersion(connection) > CURRENT_VERSION) {
       throw new SQLException("database schema is newer than this plugin");
     }
+    ensureStartBindings(connection);
   }
+  private static void ensureStartBindings(Connection connection) throws SQLException {
+    try (var statement = connection.createStatement()) {
+      statement.execute("""
+          CREATE TABLE IF NOT EXISTS match_start_bindings (
+            match_id TEXT PRIMARY KEY REFERENCES matches(match_id) ON DELETE CASCADE,
+            binding_version INTEGER NOT NULL CHECK (binding_version > 0),
+            request_identity TEXT NOT NULL,
+            one_owner_kind TEXT NOT NULL CHECK (one_owner_kind IN ('PLAYER', 'HOUSE')),
+            one_owner_uuid TEXT,
+            one_operation_id TEXT NOT NULL,
+            one_copy_ids TEXT NOT NULL,
+            two_owner_kind TEXT NOT NULL CHECK (two_owner_kind IN ('PLAYER', 'HOUSE')),
+            two_owner_uuid TEXT,
+            two_operation_id TEXT NOT NULL,
+            two_copy_ids TEXT NOT NULL,
+            CHECK ((one_owner_kind = 'PLAYER' AND one_owner_uuid IS NOT NULL) OR
+                   (one_owner_kind = 'HOUSE' AND one_owner_uuid IS NULL)),
+            CHECK ((two_owner_kind = 'PLAYER' AND two_owner_uuid IS NOT NULL) OR
+                   (two_owner_kind = 'HOUSE' AND two_owner_uuid IS NULL))
+          )
+          """);
+    }
+  }
+
 
   public static int currentVersion(Connection connection) throws SQLException {
     try (var query = connection.createStatement();

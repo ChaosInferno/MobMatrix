@@ -108,6 +108,32 @@ final class SqliteCustodyTest {
     }
     Files.deleteIfExists(path);
   }
+  @Test
+  void startBindingSurvivesRepositoryReconstruction() throws Exception {
+    var path = Files.createTempFile("mobmatrix-start-binding", ".sqlite");
+    MatchId matchId = new MatchId("durable-start-binding");
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = List.of(new CardCopyId(UUID.randomUUID()));
+    List<CardCopyId> twoCopies = List.of(new CardCopyId(UUID.randomUUID()));
+    MatchRepository.StartBinding expected = new MatchRepository.StartBinding(matchId, 1, "identity",
+        oneOwner, oneCopies, UUID.randomUUID(), twoOwner, twoCopies, UUID.randomUUID());
+    try (Database database = new Database(path)) {
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO matches(match_id, revision, status, state_bytes, transcript_json, updated_at) "
+              + "VALUES (?, 0, 'ACTIVE', ?, '{}', CURRENT_TIMESTAMP)")) {
+        insert.setString(1, matchId.value());
+        insert.setBytes(2, new byte[] {1});
+        insert.executeUpdate();
+      }
+      new SqliteMatchRepository(database).saveStartBinding(expected);
+    }
+    try (Database database = new Database(path)) {
+      assertEquals(expected, new SqliteMatchRepository(database).findStartBinding(matchId).orElseThrow());
+    }
+    Files.deleteIfExists(path);
+  }
+
 
   @Test
   void markingRestoredClearsRecoveryInSameTransaction() throws Exception {

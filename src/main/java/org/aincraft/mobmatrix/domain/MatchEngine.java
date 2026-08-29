@@ -99,6 +99,9 @@ public final class MatchEngine {
       MatchErrorCode randomError = validateRandomPools(start.oneInventory(), start.twoInventory(), start.catalog());
       if (randomError != null) return startRejected(randomError, randomError.name());
     }
+    if (overlappingPhysicalCopies(start)) {
+      return startRejected(MatchErrorCode.INVALID_COMMAND, "seat copy UUIDs overlap");
+    }
 
     Map<PlayerSeat, DraftOfferings.SeatOffers> draftOffers = new EnumMap<>(PlayerSeat.class);
     Map<PlayerSeat, DraftOfferings.Selection> draftSelections = new EnumMap<>(PlayerSeat.class);
@@ -170,6 +173,14 @@ public final class MatchEngine {
         start.rules(), start.seed(), start.startTime(), start.oneInventory(), start.twoInventory(),
         oneDraftChoices, twoDraftChoices);
     return start(configured);
+  }
+
+  private static boolean overlappingPhysicalCopies(StartMatch start) {
+    Set<CardCopyId> one = new HashSet<>();
+    start.oneDeck().copies().forEach(copy -> one.add(copy.copyId()));
+    start.oneInventory().forEach(copy -> one.add(copy.copyId()));
+    return start.twoDeck().copies().stream().anyMatch(copy -> one.contains(copy.copyId()))
+        || start.twoInventory().stream().anyMatch(copy -> one.contains(copy.copyId()));
   }
 
   private static MatchErrorCode validateRandomPools(List<CardCopy> oneInventory,

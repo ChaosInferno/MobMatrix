@@ -32,6 +32,21 @@ public interface CardCustodyPort {
     Objects.requireNonNull(operationId, "operation id is required");
     return Optional.empty();
   }
+  /** Durable identity of a prepared operation, including its ordered physical copies. */
+  default Optional<OperationBinding> operationBinding(UUID operationId) {
+    Objects.requireNonNull(operationId, "operation id is required");
+    return Optional.empty();
+  }
+
+  record OperationBinding(CopyOwner owner, List<CardCopyId> copyIds, OperationStatus status,
+      org.aincraft.mobmatrix.domain.MatchId matchId) {
+    public OperationBinding {
+      Objects.requireNonNull(owner, "owner is required");
+      copyIds = List.copyOf(Objects.requireNonNull(copyIds, "copy ids are required"));
+      Objects.requireNonNull(status, "status is required");
+    }
+  }
+
   default PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId,
       org.aincraft.mobmatrix.domain.MatchId matchId) {
     Objects.requireNonNull(matchId, "match id is required");

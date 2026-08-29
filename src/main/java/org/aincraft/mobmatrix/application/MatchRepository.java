@@ -8,6 +8,8 @@ import java.util.function.Function;
 import org.aincraft.mobmatrix.domain.CardCatalog;
 import org.aincraft.mobmatrix.domain.MatchId;
 import org.aincraft.mobmatrix.domain.MatchState;
+import org.aincraft.mobmatrix.domain.CardCopyId;
+import org.aincraft.mobmatrix.domain.CopyOwner;
 /** Persistence boundary for immutable match snapshots with optimistic revisions. */
 public interface MatchRepository {
   SaveResult save(long expectedRevision, MatchState state);
@@ -18,6 +20,31 @@ public interface MatchRepository {
     Objects.requireNonNull(matchId, "match id is required");
     Objects.requireNonNull(catalog, "catalog is required");
     return Optional.empty();
+  }
+  /** Durable identity captured with the initial active snapshot for idempotent start retries. */
+  default Optional<StartBinding> findStartBinding(MatchId matchId) {
+    Objects.requireNonNull(matchId, "match id is required");
+    return Optional.empty();
+  }
+
+  default void saveStartBinding(StartBinding binding) {
+    Objects.requireNonNull(binding, "start binding is required");
+  }
+
+  record StartBinding(MatchId matchId, int version, String requestIdentity, CopyOwner oneOwner,
+      List<CardCopyId> oneCopies, UUID oneOperationId, CopyOwner twoOwner,
+      List<CardCopyId> twoCopies, UUID twoOperationId) {
+    public StartBinding {
+      Objects.requireNonNull(matchId, "match id is required");
+      if (version < 1) throw new IllegalArgumentException("binding version must be positive");
+      if (requestIdentity == null || requestIdentity.isBlank()) {
+        throw new IllegalArgumentException("request identity is required");
+      }
+      Objects.requireNonNull(oneOwner); oneCopies = List.copyOf(Objects.requireNonNull(oneCopies));
+      Objects.requireNonNull(oneOperationId); Objects.requireNonNull(twoOwner);
+      twoCopies = List.copyOf(Objects.requireNonNull(twoCopies));
+      Objects.requireNonNull(twoOperationId);
+    }
   }
 
   default Optional<MatchSnapshot> load(MatchId matchId) {
