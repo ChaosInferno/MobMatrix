@@ -254,6 +254,51 @@ final class AdvancedRulesTest {
     return new CardCatalog(definitions, "uniform");
   }
   @Test
+  void settlementRoutesCapturedCopyToOriginalSeatAndRetainsCaptureEvent() {
+    CardCatalog captureCatalog = lowThenHighCatalog();
+    MatchState state = MatchEngine.start(new MatchEngine.StartMatch(new MatchId("settlement-owner"),
+        deck(1), deck(6), captureCatalog, new RuleSet(), 41L,
+        java.time.Instant.parse("2026-01-01T00:00:00Z"))).state();
+    PlayerSeat first = state.currentSeat();
+
+    MatchEngine.MatchTransition firstPlacement = MatchEngine.apply(state,
+        new MatchCommand.PlaceCard(first, state.hand(first).getFirst().copyId(), Square.WEST,
+            state.revision(), UUID.randomUUID(), state.turnStartedAt().plusSeconds(1)));
+    assertTrue(firstPlacement.accepted());
+    state = firstPlacement.state();
+
+    PlayerSeat second = first.opponent();
+    CardCopy captured = state.hand(second).getFirst().copy();
+    MatchEngine.MatchTransition secondPlacement = MatchEngine.apply(state,
+        new MatchCommand.PlaceCard(second, captured.copyId(), Square.CENTER, state.revision(),
+            UUID.randomUUID(), state.turnStartedAt().plusSeconds(1)));
+    assertTrue(secondPlacement.accepted());
+    state = secondPlacement.state();
+
+    CardCopy attacker = state.hand(first).getFirst().copy();
+    MatchEngine.MatchTransition capture = MatchEngine.apply(state,
+        new MatchCommand.PlaceCard(first, attacker.copyId(), Square.EAST, state.revision(),
+            UUID.randomUUID(), state.turnStartedAt().plusSeconds(1)));
+    assertTrue(capture.accepted());
+    assertEquals(first, capture.state().board().ownerOf(Square.CENTER));
+    assertTrue(capture.events().contains("CARD_CAPTURED"));
+    assertTrue(capture.state().settlementCopies().get(second).stream()
+        .map(CardCopy::copyId).anyMatch(captured.copyId()::equals));
+    assertTrue(capture.state().settlementCopies().get(first).stream()
+        .map(CardCopy::copyId).noneMatch(captured.copyId()::equals));
+  }
+
+  private static CardCatalog lowThenHighCatalog() {
+    List<CardDefinition> definitions = new ArrayList<>();
+    for (int id = 1; id <= 10; id++) {
+      int value = id % 5 == 2 ? 10 : 1;
+      definitions.add(new CardDefinition(new CardId(id), "No. " + id, "Card " + id, 1,
+          CardType.NORMAL, value, value, value, value, 100));
+    }
+    return new CardCatalog(definitions, "capture");
+  }
+
+  @Test
   void reverseAndFallenAceUseOnlyOrdinaryComparisons() {
     CardCatalog catalog = catalog();
     Board board = Board.empty().place(Square.WEST, copy(10), PlayerSeat.TWO);

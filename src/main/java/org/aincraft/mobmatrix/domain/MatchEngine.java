@@ -128,7 +128,11 @@ public final class MatchEngine {
           : MatchErrorCode.INVALID_COMMAND, exception.getMessage());
     }
 
-    Map<CardCopyId, PlayerSeat> swapOwners = new HashMap<>();
+    Map<CardCopyId, PlayerSeat> originalOwners = new HashMap<>();
+    if (activeRules.has(Rule.RANDOM) || !activeRules.has(Rule.DRAFT)) {
+      recordOriginalOwners(originalOwners, oneDeck, PlayerSeat.ONE);
+      recordOriginalOwners(originalOwners, twoDeck, PlayerSeat.TWO);
+    }
     if (activeRules.has(Rule.SWAP)) {
       List<CardCopy> one = new ArrayList<>(oneDeck.copies());
       List<CardCopy> two = new ArrayList<>(twoDeck.copies());
@@ -138,8 +142,6 @@ public final class MatchEngine {
       CardCopy twoCopy = two.get(twoIndex);
       one.set(oneIndex, twoCopy);
       two.set(twoIndex, oneCopy);
-      swapOwners.put(oneCopy.copyId(), PlayerSeat.ONE);
-      swapOwners.put(twoCopy.copyId(), PlayerSeat.TWO);
       oneDeck = new Deck(one);
       twoDeck = new Deck(two);
     }
@@ -157,7 +159,7 @@ public final class MatchEngine {
     Map<PlayerSeat, CardCopyId> chaos = new EnumMap<>(PlayerSeat.class);
     resolveChaos(transcript, activeRules, hands, first, chaos, "chaos");
     return accepted(MatchState.initial(start.matchId(), start.catalog(), activeRules.asMatchRules(), hands,
-        first, start.startTime(), start.seed(), transcript, revealed, swapOwners,
+        first, start.startTime(), start.seed(), transcript, revealed, originalOwners,
         draftOffers, draftSelections, chaos), List.of("MATCH_STARTED"));
   }
 
@@ -216,6 +218,10 @@ public final class MatchEngine {
       selected.add(available.remove(transcript.nextInt(label + "-" + index, available.size())));
     }
     return new Deck(selected);
+  }
+  private static void recordOriginalOwners(Map<CardCopyId, PlayerSeat> owners, Deck deck,
+      PlayerSeat seat) {
+    for (CardCopy copy : deck.copies()) owners.put(copy.copyId(), seat);
   }
  
   private static void recordDraftChoices(RandomTranscript transcript, PlayerSeat seat,
@@ -314,7 +320,7 @@ public final class MatchEngine {
     Board board = resolution.board();
     List<String> events = new ArrayList<>();
     events.add("CARD_PLACED");
-    events.addAll(resolution.events());
+    for (PlacementResolver.Capture ignored : resolution.captures()) events.add("CARD_CAPTURED");
 
     Map<PlayerSeat, List<HandCard>> hands = new EnumMap<>(PlayerSeat.class);
     for (PlayerSeat seat : PlayerSeat.values()) {

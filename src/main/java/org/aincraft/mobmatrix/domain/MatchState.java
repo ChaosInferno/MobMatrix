@@ -32,7 +32,7 @@ public final class MatchState {
   private final Set<UUID> commandIds;
   private final long seed;
   private final Map<PlayerSeat, Set<CardCopyId>> revealedCards;
-  private final Map<CardCopyId, PlayerSeat> temporarySwapOwners;
+  private final Map<CardCopyId, PlayerSeat> originalOwners;
   private final int consecutiveDraws;
   private final RandomTranscript transcript;
   private final Map<PlayerSeat, DraftOfferings.SeatOffers> draftOfferings;
@@ -45,7 +45,7 @@ public final class MatchState {
       MatchResult result, Map<PlayerSeat, Long> bankMillis, Instant turnStartedAt,
       Instant graceDeadline, Instant turnDeadline, Set<UUID> commandIds, long seed,
       RandomTranscript transcript, Map<PlayerSeat, Set<CardCopyId>> revealedCards,
-      Map<CardCopyId, PlayerSeat> temporarySwapOwners, int consecutiveDraws,
+      Map<CardCopyId, PlayerSeat> originalOwners, int consecutiveDraws,
       Map<PlayerSeat, DraftOfferings.SeatOffers> draftOfferings,
       Map<PlayerSeat, DraftOfferings.Selection> draftSelections,
       Map<PlayerSeat, CardCopyId> chaosChoices) {
@@ -80,7 +80,7 @@ public final class MatchState {
       revealedCopy.put(seat, Set.copyOf(Objects.requireNonNull(revealedCards.getOrDefault(seat, Set.of()))));
     }
     this.revealedCards = Map.copyOf(revealedCopy);
-    this.temporarySwapOwners = Map.copyOf(Objects.requireNonNull(temporarySwapOwners));
+    this.originalOwners = Map.copyOf(Objects.requireNonNull(originalOwners));
     if (consecutiveDraws < 0) throw new IllegalArgumentException("draw count must not be negative");
     this.consecutiveDraws = consecutiveDraws;
     this.draftOfferings = Map.copyOf(Objects.requireNonNull(draftOfferings));
@@ -147,7 +147,9 @@ public final class MatchState {
   public Set<CardCopyId> revealedCards(PlayerSeat seat) {
     return revealedCards.get(Objects.requireNonNull(seat));
   }
-  public Map<CardCopyId, PlayerSeat> temporarySwapOwners() { return temporarySwapOwners; }
+  public Map<CardCopyId, PlayerSeat> originalOwners() { return originalOwners; }
+  /** Compatibility view retained for callers that used the pre-settlement name. */
+  public Map<CardCopyId, PlayerSeat> temporarySwapOwners() { return originalOwners; }
   public Map<PlayerSeat, DraftOfferings.SeatOffers> draftOfferings() { return draftOfferings; }
   public DraftOfferings.SeatOffers draftOfferings(PlayerSeat seat) {
     return draftOfferings.get(Objects.requireNonNull(seat));
@@ -167,12 +169,12 @@ public final class MatchState {
     for (PlayerSeat seat : PlayerSeat.values()) {
       for (HandCard card : hand(seat)) {
         if (!houseOwnedCopies.contains(card.copyId())) {
-          result.get(temporarySwapOwners.getOrDefault(card.copyId(), seat)).add(card.copy());
+          result.get(originalOwners.getOrDefault(card.copyId(), seat)).add(card.copy());
         }
       }
     }
     for (Board.Cell cell : board.cells()) if (cell != null && !houseOwnedCopies.contains(cell.copy().copyId())) {
-      result.get(temporarySwapOwners.getOrDefault(cell.copy().copyId(), cell.owner())).add(cell.copy());
+      result.get(originalOwners.getOrDefault(cell.copy().copyId(), cell.owner())).add(cell.copy());
     }
     EnumMap<PlayerSeat, List<CardCopy>> immutable = new EnumMap<>(PlayerSeat.class);
     for (PlayerSeat seat : PlayerSeat.values()) immutable.put(seat, List.copyOf(result.get(seat)));
@@ -238,7 +240,7 @@ public final class MatchState {
   public MatchState withCurrentSeat(PlayerSeat seat) {
     return new MatchState(matchId, catalog, rules, board, hands, seat, revision, result, bankMillis,
         turnStartedAt, graceDeadline, turnDeadline, commandIds, seed, transcript, revealedCards,
-        temporarySwapOwners, consecutiveDraws, draftOfferings, draftSelections, chaosChoices);
+        originalOwners, consecutiveDraws, draftOfferings, draftSelections, chaosChoices);
   }
 
   MatchState next(Board nextBoard, Map<PlayerSeat, List<HandCard>> nextHands, PlayerSeat nextSeat,
@@ -249,7 +251,7 @@ public final class MatchState {
     return new MatchState(matchId, catalog, rules, nextBoard, nextHands, nextSeat, nextRevision,
         nextResult, nextBanks, nextStarted, nextStarted.plusMillis(GRACE_MILLIS),
         nextStarted.plusMillis(GRACE_MILLIS + nextBanks.get(nextSeat)), nextCommands, seed,
-        nextTranscript, nextRevealed, temporarySwapOwners, nextConsecutiveDraws,
+        nextTranscript, nextRevealed, originalOwners, nextConsecutiveDraws,
         draftOfferings, draftSelections, nextChaos);
   }
 
@@ -274,7 +276,7 @@ public final class MatchState {
     return new MatchState(matchId, catalog, rules, Board.empty(), freshHands, firstSeat, revision + 1,
         null, Map.of(PlayerSeat.ONE, INITIAL_BANK_MILLIS, PlayerSeat.TWO, INITIAL_BANK_MILLIS), start,
         start.plusMillis(GRACE_MILLIS), start.plusMillis(GRACE_MILLIS + INITIAL_BANK_MILLIS),
-        nextCommands, seed, nextTranscript, nextRevealed, temporarySwapOwners,
+        nextCommands, seed, nextTranscript, nextRevealed, originalOwners,
         consecutiveDraws + 1, draftOfferings, draftSelections, nextChaos);
   }
 }
