@@ -180,3 +180,64 @@ BUILD SUCCESSFUL in 1s
 
 Implementation commit: `38eebce` (`fix: preserve advanced rule state`)
 Follow-up implementation commit: `d660338` (`fix: reject null draft selections`)
+
+## Remaining review fixes
+
+RED command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest
+```
+
+RED result (before remaining review-fix implementation):
+
+```text
+> Task :compileJava UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :classes UP-TO-DATE
+
+> Task :compileTestJava FAILED
+AdvancedRulesTest.java:131: error: cannot find symbol
+    assertTrue(state.houseOwnedCopies().containsAll(state.hand(PlayerSeat.ONE).stream()
+                    ^
+  symbol:   method houseOwnedCopies()
+  location: variable state of type MatchState
+AdvancedRulesTest.java:134: error: cannot find symbol
+        .noneMatch(copy -> state.houseOwnedCopies().contains(copy.copyId())));
+                                ^
+  symbol:   method houseOwnedCopies()
+  location: variable state of type MatchState
+2 errors
+
+FAILURE: Build failed with an exception.
+```
+
+GREEN command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest
+```
+
+GREEN result:
+
+```text
+> Task :compileJava
+> Task :processResources UP-TO-DATE
+> Task :classes
+> Task :compileTestJava
+> Task :processTestResources NO-SOURCE
+> Task :testClasses
+> Task :test
+
+BUILD SUCCESSFUL in 1s
+4 actionable tasks: 3 executed, 1 up-to-date
+```
+
+Coverage:
+
+- Removed the public Deck-backed `DraftOfferings.Selection` compatibility constructor; selections are now created only through offering membership-validated APIs.
+- RANDOM setup now samples only catalog-known unique physical copies; unknown extras are ignored, while insufficient valid pools and duplicate UUIDs retain structured setup rejections.
+- Draft per-offering choices are recorded with `draft-choice-<SEAT>-<INDEX>` labels and bound 5 decisions. Generated offering copy IDs are exposed as `houseOwnedCopies()` and excluded from player settlement copies.
+- Placement captures and emitted capture events are sorted row-major after BFS source resolution, preserving Combo source attribution and reachability.
+
+Implementation commit: `0bcfa0e` (`fix: harden draft and random setup`)
