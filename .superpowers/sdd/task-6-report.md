@@ -1145,6 +1145,13 @@ Exact red result after the regression tests were added:
 
 ```text
 > Task :test FAILED
+MatchApplicationServiceTest > startupRecoveryFailurePreservesDurableCopyIds() FAILED
+MatchApplicationServiceTest > applyClassifiesCanonicalLoadFailureAsDatabaseError() FAILED
+MatchApplicationServiceTest > rejectedInitialSaveLeavesCustodyWhenDurableWinnerReadIsAmbiguous() FAILED
+RandomTranscriptTest > nonReplayRestoreRequiresConsumedDecisionCursor() FAILED
+CardInventoryServiceTest > preparedAbortMustAttemptRestoreBeforeTerminalAbort() FAILED
+CardItemCodecTest > createRejectsCatalogIdsOutsideAuthoritativeRange() FAILED
+SqliteCustodyTest > startBindingIsIdempotentButRejectsIdentityOverwrite() FAILED
 125 tests completed, 7 failed, 4 skipped
 FAILURE: Build failed with an exception.
 ```
