@@ -616,6 +616,15 @@ final class SqliteCustodyTest {
     assertThrows(IllegalArgumentException.class,
         () -> MatchStateSnapshotCodec.decode(encoded, original.catalog()));
   }
+  @Test
+  void snapshotRejectsOversizedSharedDecodeByteBudget() {
+    MatchState original = snapshotState("oversized-snapshot");
+    byte[] encoded = MatchStateSnapshotCodec.encode(original);
+    byte[] oversized = java.util.Arrays.copyOf(encoded, 16 * 1024 * 1024 + 1);
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(oversized, original.catalog()));
+  }
 
   @Test
   void nonSwapSuddenDeathCapturedCardRehydratesAfterRestart() {

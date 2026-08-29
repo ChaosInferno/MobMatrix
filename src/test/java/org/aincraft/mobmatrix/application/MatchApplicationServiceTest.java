@@ -139,6 +139,46 @@ final class MatchApplicationServiceTest {
     assertTrue(result.matches().isEmpty());
     assertTrue(result.recoveries().isEmpty());
   }
+  @Test
+  void startupReportsActiveMatchRepositoryFailureWithoutReleasingBoundEscrow() {
+    UUID operation = UUID.randomUUID();
+    MatchId matchId = new MatchId("active-match");
+    MatchApplicationService.StartupRecoveryResult result = new MatchApplicationService(
+        new BoundEscrowCustody(operation, matchId), new ActiveMatchesFailingRepository())
+        .recoverStartup(snapshot -> new CardCatalog(List.of(), snapshot),
+            Instant.parse("2026-01-01T00:00:00Z"));
+
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, result.matchFailure());
+    assertTrue(result.recoveries().isEmpty());
+  }
+
+  @Test
+  void settleConvertsThrownCustodyFailureToTypedDatabaseError() {
+    UUID operation = UUID.randomUUID();
+    List<CardCopyId> copies = copies();
+    CardCustodyPort.ReturnResult result = new MatchApplicationService(
+        new ThrowingSettlementCustody(copies)).settle(operation);
+
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, result.failure());
+    assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING, result.status());
+    assertEquals(copies, result.expectedCopyIds());
+    assertEquals(copies, result.missingCopyIds());
+    assertEquals(copies, result.recoveryCopyIds());
+  }
+
+  @Test
+  void recoverConvertsThrownCustodyFailureToTypedDatabaseError() {
+    UUID operation = UUID.randomUUID();
+    List<CardCopyId> copies = copies();
+    CardCustodyPort.RecoveryResult result = new MatchApplicationService(
+        new ThrowingRecoveryCustody(copies)).recover(operation);
+
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, result.failure());
+    assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING, result.status());
+    assertEquals(copies, result.expectedCopyIds());
+    assertEquals(copies, result.pendingCopyIds());
+  }
+
 
 
   @Test
@@ -1173,6 +1213,117 @@ final class MatchApplicationServiceTest {
 
     @Override
     public List<UUID> openOperationIds() {
+      throw new IllegalStateException("database unavailable");
+    }
+  }
+  private static final class BoundEscrowCustody implements CardCustodyPort {
+    private final UUID operation;
+    private final MatchId matchId;
+
+    private BoundEscrowCustody(UUID operation, MatchId matchId) {
+      this.operation = operation;
+      this.matchId = matchId;
+    }
+
+    @Override
+    public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
+      return PrepareResult.rejected(operationId, owner, copyIds, Failure.DATABASE_ERROR);
+    }
+
+    @Override
+    public CustodyResult escrow(UUID operationId) {
+      return CustodyResult.rejected(operationId, OperationStatus.PREPARED, Failure.DATABASE_ERROR);
+    }
+
+    @Override
+    public ReturnResult returnCopies(UUID operationId) {
+      throw new IllegalStateException("must preserve bound escrow");
+    }
+
+    @Override
+    public RecoveryResult recover(UUID operationId) {
+      throw new IllegalStateException("must preserve bound escrow");
+    }
+
+    @Override
+    public List<UUID> openOperationIds() {
+      return List.of(operation);
+    }
+
+    @Override
+    public java.util.Optional<OperationStatus> operationStatus(UUID operationId) {
+      return java.util.Optional.of(OperationStatus.ESCROWED);
+    }
+
+    @Override
+    public java.util.Optional<MatchId> operationMatchId(UUID operationId) {
+      return java.util.Optional.of(matchId);
+    }
+  }
+
+  private static class ThrowingSettlementCustody implements CardCustodyPort {
+    protected final List<CardCopyId> copies;
+
+    private ThrowingSettlementCustody(List<CardCopyId> copies) {
+      this.copies = List.copyOf(copies);
+    }
+
+    @Override
+    public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
+      return PrepareResult.rejected(operationId, owner, copyIds, Failure.DATABASE_ERROR);
+    }
+
+    @Override
+    public CustodyResult escrow(UUID operationId) {
+      return CustodyResult.rejected(operationId, OperationStatus.PREPARED, Failure.DATABASE_ERROR);
+    }
+
+    @Override
+    public ReturnResult returnCopies(UUID operationId) {
+      throw new IllegalStateException("database unavailable");
+    }
+
+    @Override
+    public RecoveryResult recover(UUID operationId) {
+      return RecoveryResult.none(operationId);
+    }
+
+    @Override
+    public java.util.Optional<OperationBinding> operationBinding(UUID operationId) {
+      return java.util.Optional.of(new OperationBinding(CopyOwner.player(UUID.randomUUID()),
+          copies, OperationStatus.ESCROWED, null));
+    }
+  }
+
+  private static final class ThrowingRecoveryCustody extends ThrowingSettlementCustody {
+    private ThrowingRecoveryCustody(List<CardCopyId> copies) {
+      super(copies);
+    }
+
+    @Override
+    public ReturnResult returnCopies(UUID operationId) {
+      return ReturnResult.pending(operationId, copies, List.of(), copies, copies);
+    }
+
+    @Override
+    public RecoveryResult recover(UUID operationId) {
+      throw new IllegalStateException("database unavailable");
+    }
+  }
+
+  private static final class ActiveMatchesFailingRepository implements MatchRepository {
+    @Override
+    public SaveResult save(long expectedRevision, MatchState state) {
+      return SaveResult.stale(state.revision());
+    }
+
+    @Override
+    public java.util.Optional<MatchSnapshot> find(MatchId matchId) {
+      return java.util.Optional.empty();
+    }
+
+    @Override
+    public List<MatchSnapshot> activeMatches() {
       throw new IllegalStateException("database unavailable");
     }
   }

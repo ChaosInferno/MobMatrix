@@ -198,7 +198,11 @@ public final class MatchApplicationService {
   /** Returns exact escrowed cards; custody itself provides durable idempotency. */
   public synchronized ReturnResult settle(UUID operationId) {
     Objects.requireNonNull(operationId, "operation id is required");
-    return custody.returnCopies(operationId);
+    try {
+      return custody.returnCopies(operationId);
+    } catch (RuntimeException exception) {
+      return returnFailure(operationId);
+    }
   }
 
   public synchronized ReturnResult settle(String operationId) {
@@ -609,8 +613,43 @@ public final class MatchApplicationService {
   }
   /** Reconciles one operation journal entry on demand. */
   public synchronized RecoveryResult recover(UUID operationId) {
-    return custody.recover(Objects.requireNonNull(operationId, "operation id is required"));
+    Objects.requireNonNull(operationId, "operation id is required");
+    try {
+      return custody.recover(operationId);
+    } catch (RuntimeException exception) {
+      return recoveryFailure(operationId);
+    }
   }
+  private ReturnResult returnFailure(UUID operationId) {
+    Optional<CardCustodyPort.OperationBinding> binding = safeOperationBinding(operationId);
+    List<CardCopyId> expected = binding.map(CardCustodyPort.OperationBinding::copyIds).orElse(List.of());
+    return new ReturnResult(operationId, pendingStatus(binding), expected, List.of(), expected, expected,
+        Failure.DATABASE_ERROR);
+  }
+
+  private RecoveryResult recoveryFailure(UUID operationId) {
+    Optional<CardCustodyPort.OperationBinding> binding = safeOperationBinding(operationId);
+    List<CardCopyId> expected = binding.map(CardCustodyPort.OperationBinding::copyIds).orElse(List.of());
+    return new RecoveryResult(operationId, pendingStatus(binding), expected, List.of(), expected,
+        Failure.DATABASE_ERROR);
+  }
+
+  private Optional<CardCustodyPort.OperationBinding> safeOperationBinding(UUID operationId) {
+    try {
+      return custody.operationBinding(operationId);
+    } catch (RuntimeException exception) {
+      return Optional.empty();
+    }
+  }
+
+  private static OperationStatus pendingStatus(
+      Optional<CardCustodyPort.OperationBinding> binding) {
+    if (binding.isEmpty()) return OperationStatus.RETURN_PENDING;
+    OperationStatus status = binding.get().status();
+    return status == OperationStatus.RETURNED || status == OperationStatus.ABORTED
+        ? status : OperationStatus.RETURN_PENDING;
+  }
+
 
   /** Reconciles every durable custody row and active match on plugin startup. */
   public synchronized StartupRecoveryResult recoverStartup(
@@ -621,6 +660,7 @@ public final class MatchApplicationService {
     // Read active match IDs before touching custody. An escrow bound to one of these IDs is still
     // in use and must not be returned during a restart.
     List<MatchRepository.MatchSnapshot> snapshots = List.of();
+    Failure matchRepositoryFailure = Failure.NONE;
     boolean activeMatchesLoadFailed = false;
     try {
       snapshots = matches.activeMatches();
@@ -628,6 +668,7 @@ public final class MatchApplicationService {
       // A match repository outage must not prevent independent custody recovery. Keep bound
       // escrow rather than risking release when active IDs cannot be read.
       activeMatchesLoadFailed = true;
+      matchRepositoryFailure = Failure.DATABASE_ERROR;
     }
     Set<org.aincraft.mobmatrix.domain.MatchId> activeMatchIds = new HashSet<>();
     for (MatchRepository.MatchSnapshot snapshot : snapshots) activeMatchIds.add(snapshot.matchId());
@@ -678,7 +719,8 @@ public final class MatchApplicationService {
         // Missing catalog snapshots and unsupported state versions are isolated to one match.
       }
     }
-    return new StartupRecoveryResult(states, recoveries, custodyEnumerationFailure);
+    return new StartupRecoveryResult(states, recoveries, custodyEnumerationFailure,
+        matchRepositoryFailure);
   }
 
   public StartupRecoveryResult recoverStartup(Function<String, CardCatalog> catalogResolver) {
@@ -686,15 +728,21 @@ public final class MatchApplicationService {
   }
 
   public record StartupRecoveryResult(List<MatchState> matches, List<RecoveryResult> recoveries,
-      Failure custodyFailure) {
+      Failure custodyFailure, Failure matchFailure) {
     public StartupRecoveryResult(List<MatchState> matches, List<RecoveryResult> recoveries) {
-      this(matches, recoveries, Failure.NONE);
+      this(matches, recoveries, Failure.NONE, Failure.NONE);
+    }
+
+    public StartupRecoveryResult(List<MatchState> matches, List<RecoveryResult> recoveries,
+        Failure custodyFailure) {
+      this(matches, recoveries, custodyFailure, Failure.NONE);
     }
 
     public StartupRecoveryResult {
       matches = List.copyOf(Objects.requireNonNull(matches));
       recoveries = List.copyOf(Objects.requireNonNull(recoveries));
       Objects.requireNonNull(custodyFailure);
+      Objects.requireNonNull(matchFailure);
     }
   }
 
