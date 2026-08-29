@@ -70,4 +70,13 @@ final class CardItemCodecTest {
     assertEquals(1, first.getAmount());
     assertEquals(1, second.getAmount());
   }
+  @Test
+  void configuredSecretSurvivesCodecReconstruction() {
+    CardCopyId copyId = new CardCopyId(UUID.randomUUID());
+    CardItemCodec first = new CardItemCodec("mobmatrix", "stable-server-secret");
+    ItemStack minted = first.create(definition, copyId, CopyOwner.house());
+    CardItemCodec restarted = new CardItemCodec("mobmatrix", "stable-server-secret");
+    assertTrue(restarted.read(minted).isValid());
+    assertEquals(copyId, restarted.read(minted).data().copyId());
+  }
 }

@@ -3,9 +3,11 @@ package org.aincraft.mobmatrix.application;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.function.Function;
+import org.aincraft.mobmatrix.domain.CardCatalog;
 import org.aincraft.mobmatrix.domain.MatchId;
 import org.aincraft.mobmatrix.domain.MatchState;
-
 /** Persistence boundary for immutable match snapshots with optimistic revisions. */
 public interface MatchRepository {
   SaveResult save(long expectedRevision, MatchState state);
@@ -21,6 +23,17 @@ public interface MatchRepository {
   }
 
   default void delete(MatchId matchId) {}
+  /** Rehydrates a snapshot after resolving its catalog snapshot ID. */
+  default Optional<MatchState> rehydrate(MatchSnapshot snapshot,
+      Function<String, CardCatalog> catalogResolver) {
+    Objects.requireNonNull(snapshot, "snapshot is required");
+    Objects.requireNonNull(catalogResolver, "catalog resolver is required");
+    return Optional.empty();
+  }
+
+  default List<MatchState> activeStates(Function<String, CardCatalog> catalogResolver) {
+    return activeMatches().stream().map(snapshot -> rehydrate(snapshot, catalogResolver)).flatMap(Optional::stream).toList();
+  }
 
   record SaveResult(boolean saved, long revision, Failure failure) {
     public SaveResult {

@@ -94,6 +94,24 @@ public final class MatchState {
     this.houseOwnedCopies = Set.copyOf(houseCopies);
     this.chaosChoices = Map.copyOf(Objects.requireNonNull(chaosChoices));
   }
+  /**
+   * Rehydrates a complete executable state from a durable snapshot. Card definitions must have
+   * been resolved by the caller from the persisted catalog snapshot before invoking this method.
+   */
+  public static MatchState rehydrate(MatchId matchId, CardCatalog catalog, MatchRules rules, Board board,
+      Map<PlayerSeat, List<HandCard>> hands, PlayerSeat currentSeat, long revision,
+      MatchResult result, Map<PlayerSeat, Long> bankMillis, Instant turnStartedAt,
+      Instant graceDeadline, Instant turnDeadline, Set<UUID> commandIds, long seed,
+      RandomTranscript transcript, Map<PlayerSeat, Set<CardCopyId>> revealedCards,
+      Map<CardCopyId, PlayerSeat> originalOwners, int consecutiveDraws,
+      Map<PlayerSeat, DraftOfferings.SeatOffers> draftOfferings,
+      Map<PlayerSeat, DraftOfferings.Selection> draftSelections,
+      Map<PlayerSeat, CardCopyId> chaosChoices) {
+    Objects.requireNonNull(bankMillis, "bank values are required");
+    return new MatchState(matchId, catalog, rules, board, hands, currentSeat, revision, result,
+        bankMillis, turnStartedAt, graceDeadline, turnDeadline, commandIds, seed, transcript,
+        revealedCards, originalOwners, consecutiveDraws, draftOfferings, draftSelections, chaosChoices);
+  }
 
   static MatchState initial(MatchId id, CardCatalog catalog, MatchRules rules,
       Map<PlayerSeat, List<HandCard>> hands, PlayerSeat firstSeat, Instant start, long seed) {
@@ -141,9 +159,9 @@ public final class MatchState {
   public MatchRules rules() { return rules; }
   public RuleSet ruleSet() { return ruleSet; }
   public List<RandomTranscript.Decision> randomDecisions() { return transcript.decisions(); }
-  RandomTranscript transcript() { return transcript.fork(); }
+  public RandomTranscript transcript() { return transcript.fork(); }
   public Board board() { return board; }
-  public int consecutiveDraws() { return consecutiveDraws; }
+  public Map<PlayerSeat, Set<CardCopyId>> revealedCardsMap() { return revealedCards; }
   public Set<CardCopyId> revealedCards(PlayerSeat seat) {
     return revealedCards.get(Objects.requireNonNull(seat));
   }
@@ -161,7 +179,6 @@ public final class MatchState {
   public Set<CardCopyId> houseOwnedCopies() { return houseOwnedCopies; }
   public Map<PlayerSeat, CardCopyId> chaosChoices() { return chaosChoices; }
   public CardCopyId chaosChoice(PlayerSeat seat) { return chaosChoices.get(Objects.requireNonNull(seat)); }
-  Map<PlayerSeat, Set<CardCopyId>> revealedCardsMap() { return revealedCards; }
 
   public Map<PlayerSeat, List<CardCopy>> settlementCopies() {
     EnumMap<PlayerSeat, List<CardCopy>> result = new EnumMap<>(PlayerSeat.class);
@@ -189,6 +206,7 @@ public final class MatchState {
   public long revision() { return revision; }
   public MatchResult result() { return result; }
   public boolean isFinished() { return result != null; }
+  public int consecutiveDraws() { return consecutiveDraws; }
   public Map<PlayerSeat, Long> bankMillis() { return bankMillis; }
 
   public long remainingBankMillis(PlayerSeat seat, Instant now) {
@@ -233,9 +251,9 @@ public final class MatchState {
     return Math.max(0L, Duration.between(start, end).toMillis());
   }
 
-  boolean hasCommand(UUID id) { return commandIds.contains(id); }
-  long seed() { return seed; }
-  Set<UUID> commandIds() { return commandIds; }
+  public boolean hasCommand(UUID id) { return commandIds.contains(id); }
+  public long seed() { return seed; }
+  public Set<UUID> commandIds() { return commandIds; }
 
   public MatchState withCurrentSeat(PlayerSeat seat) {
     return new MatchState(matchId, catalog, rules, board, hands, seat, revision, result, bankMillis,

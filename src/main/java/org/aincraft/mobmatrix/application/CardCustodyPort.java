@@ -15,6 +15,11 @@ public interface CardCustodyPort {
   ReturnResult returnCopies(UUID operationId);
 
   RecoveryResult recover(UUID operationId);
+  /** Open durable operations to reconcile during startup. */
+  default List<UUID> openOperationIds() {
+    return List.of();
+  }
+
 
   default PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, String operationId) {
     return prepare(owner, copyIds, parseOperation(operationId));

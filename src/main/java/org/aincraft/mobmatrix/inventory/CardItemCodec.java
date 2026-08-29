@@ -2,7 +2,6 @@ package org.aincraft.mobmatrix.inventory;
 
 import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
-import java.security.SecureRandom;
 import java.util.HexFormat;
 import java.util.Objects;
 import java.util.UUID;
@@ -43,12 +42,14 @@ public final class CardItemCodec {
         requireSecret(serverSecret).getBytes(StandardCharsets.UTF_8));
   }
 
+  /** Production-safe constructor; secret must be configured and stable across restarts. */
   public CardItemCodec(String namespace) {
-    this(namespace, randomSecret());
+    this(namespace, configuredSecret(namespace));
   }
 
+  /** Production-safe constructor; secret must be configured and stable across restarts. */
   public CardItemCodec(Plugin plugin) {
-    this(plugin, randomSecret());
+    this(plugin, configuredSecret(Objects.requireNonNull(plugin, "plugin is required").getName()));
   }
 
   public CardItemCodec(Plugin plugin, String serverSecret) {
@@ -207,10 +208,12 @@ public final class CardItemCodec {
     return secret;
   }
 
-  private static String randomSecret() {
-    byte[] bytes = new byte[32];
-    new SecureRandom().nextBytes(bytes);
-    return HexFormat.of().formatHex(bytes);
+  private static String configuredSecret(String namespace) {
+    String normalized = requireNamespace(namespace);
+    String property = System.getProperty("mobmatrix." + normalized + ".server-secret");
+    String value = property == null || property.isBlank()
+        ? System.getenv("MOBMATRIX_SERVER_SECRET") : property;
+    return requireSecret(value);
   }
   private static final class InvalidUuidException extends IllegalArgumentException {
     private InvalidUuidException() {

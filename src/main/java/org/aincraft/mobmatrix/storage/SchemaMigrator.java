@@ -2,11 +2,15 @@ package org.aincraft.mobmatrix.storage;
 
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
 
 /** Explicit, repeatable schema migrations for custody and active-match state. */
 public final class SchemaMigrator {
-  public static final int CURRENT_VERSION = 1;
+  public static final int CURRENT_VERSION = 2;
 
   private SchemaMigrator() {}
 
@@ -23,6 +27,24 @@ public final class SchemaMigrator {
         applyV1(connection);
         try (var insert = connection.prepareStatement(
             "INSERT INTO schema_migrations(version, applied_at) VALUES (1, CURRENT_TIMESTAMP)")) {
+          insert.executeUpdate();
+        }
+        connection.commit();
+      } catch (SQLException exception) {
+        try { connection.rollback(); } catch (SQLException ignored) { }
+        throw exception;
+      } finally {
+        connection.setAutoCommit(autoCommit);
+      }
+    }
+    version = currentVersion(connection);
+    if (version < 2) {
+      boolean autoCommit = connection.getAutoCommit();
+      try {
+        connection.setAutoCommit(false);
+        applyV2(connection);
+        try (var insert = connection.prepareStatement(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (2, CURRENT_TIMESTAMP)")) {
           insert.executeUpdate();
         }
         connection.commit();
@@ -126,15 +148,27 @@ public final class SchemaMigrator {
       statement.execute("""
           CREATE TABLE IF NOT EXISTS recovery_rows (
             recovery_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            operation_id TEXT NOT NULL REFERENCES reservations(operation_id),
+            operation_id TEXT NOT NULL,
             copy_uuid TEXT NOT NULL,
             owner_kind TEXT NOT NULL CHECK (owner_kind IN ('PLAYER', 'HOUSE')),
             owner_uuid TEXT,
             item_bytes BLOB NOT NULL,
             status TEXT NOT NULL CHECK (status IN ('PENDING', 'RESTORED')),
             UNIQUE (operation_id, copy_uuid),
+            FOREIGN KEY (operation_id) REFERENCES reservations(operation_id),
+            FOREIGN KEY (operation_id, copy_uuid)
+              REFERENCES reservation_copies(operation_id, copy_uuid),
             CHECK ((owner_kind = 'PLAYER' AND owner_uuid IS NOT NULL) OR
                    (owner_kind = 'HOUSE' AND owner_uuid IS NULL))
+          )
+          """);
+      statement.execute("""
+          CREATE TABLE IF NOT EXISTS reservation_restored (
+            operation_id TEXT NOT NULL,
+            copy_uuid TEXT NOT NULL,
+            PRIMARY KEY (operation_id, copy_uuid),
+            FOREIGN KEY (operation_id, copy_uuid)
+              REFERENCES reservation_copies(operation_id, copy_uuid) ON DELETE CASCADE
           )
           """);
       statement.execute("""
@@ -149,6 +183,70 @@ public final class SchemaMigrator {
           BEGIN
             SELECT RAISE(ABORT, 'copy is already reserved');
           END
+          """);
+      statement.execute("CREATE INDEX IF NOT EXISTS recovery_pending ON recovery_rows(status, owner_uuid)");
+    }
+  }
+  private static void applyV2(Connection connection) throws SQLException {
+    Map<Integer, Set<String>> foreignKeys = new HashMap<>();
+    try (var query = connection.createStatement().executeQuery("PRAGMA foreign_key_list(recovery_rows)")) {
+      while (query.next()) {
+        foreignKeys.computeIfAbsent(query.getInt("id"), ignored -> new HashSet<>())
+            .add(query.getString("from") + "->" + query.getString("to"));
+      }
+    }
+    boolean composite = foreignKeys.values().stream().anyMatch(keys -> keys.contains("operation_id->operation_id")
+        && keys.contains("copy_uuid->copy_uuid"));
+    try (var statement = connection.createStatement()) {
+      if (!composite) {
+        try (var invalid = statement.executeQuery("""
+            SELECT COUNT(*) FROM recovery_rows rr
+            WHERE NOT EXISTS (
+              SELECT 1 FROM reservations r
+              JOIN reservation_copies rc ON rc.operation_id = r.operation_id AND rc.copy_uuid = rr.copy_uuid
+              WHERE r.operation_id = rr.operation_id
+                AND r.owner_kind = rr.owner_kind
+                AND COALESCE(r.owner_uuid, '') = COALESCE(rr.owner_uuid, '')
+            )
+            """)) {
+          if (invalid.next() && invalid.getLong(1) > 0) {
+            throw new SQLException("recovery rows contain arbitrary copy or owner data");
+          }
+        }
+        statement.execute("ALTER TABLE recovery_rows RENAME TO recovery_rows_legacy");
+        statement.execute("DROP INDEX IF EXISTS recovery_pending");
+        statement.execute("""
+            CREATE TABLE recovery_rows (
+              recovery_id INTEGER PRIMARY KEY AUTOINCREMENT,
+              operation_id TEXT NOT NULL,
+              copy_uuid TEXT NOT NULL,
+              owner_kind TEXT NOT NULL CHECK (owner_kind IN ('PLAYER', 'HOUSE')),
+              owner_uuid TEXT,
+              item_bytes BLOB NOT NULL,
+              status TEXT NOT NULL CHECK (status IN ('PENDING', 'RESTORED')),
+              UNIQUE (operation_id, copy_uuid),
+              FOREIGN KEY (operation_id) REFERENCES reservations(operation_id),
+              FOREIGN KEY (operation_id, copy_uuid)
+                REFERENCES reservation_copies(operation_id, copy_uuid),
+              CHECK ((owner_kind = 'PLAYER' AND owner_uuid IS NOT NULL) OR
+                     (owner_kind = 'HOUSE' AND owner_uuid IS NULL))
+            )
+            """);
+        statement.execute("""
+            INSERT INTO recovery_rows(recovery_id, operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status)
+            SELECT recovery_id, operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status
+            FROM recovery_rows_legacy
+            """);
+        statement.execute("DROP TABLE recovery_rows_legacy");
+      }
+      statement.execute("""
+          CREATE TABLE IF NOT EXISTS reservation_restored (
+            operation_id TEXT NOT NULL,
+            copy_uuid TEXT NOT NULL,
+            PRIMARY KEY (operation_id, copy_uuid),
+            FOREIGN KEY (operation_id, copy_uuid)
+              REFERENCES reservation_copies(operation_id, copy_uuid) ON DELETE CASCADE
+          )
           """);
       statement.execute("CREATE INDEX IF NOT EXISTS recovery_pending ON recovery_rows(status, owner_uuid)");
     }

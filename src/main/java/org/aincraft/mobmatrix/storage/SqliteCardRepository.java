@@ -9,6 +9,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import org.aincraft.mobmatrix.application.CardCustodyJournal;
 import org.aincraft.mobmatrix.application.CardCustodyPort;
 import org.aincraft.mobmatrix.application.CardCustodyPort.OperationStatus;
 import org.aincraft.mobmatrix.application.SerializedItemSnapshot;
@@ -17,7 +18,7 @@ import org.aincraft.mobmatrix.domain.CardId;
 import org.aincraft.mobmatrix.domain.CopyOwner;
 
 /** JDBC repository for card ledger, reservations, exact escrow bytes, and recovery rows. */
-public final class SqliteCardRepository {
+public final class SqliteCardRepository implements CardCustodyJournal {
   private final Connection connection;
 
   public SqliteCardRepository(Database database) {
@@ -26,6 +27,23 @@ public final class SqliteCardRepository {
 
   public SqliteCardRepository(Connection connection) {
     this.connection = Objects.requireNonNull(connection, "connection is required");
+  }
+  @Override
+  public Optional<CardCustodyJournal.Entry> find(UUID operationId) {
+    return findReservation(operationId).map(reservation -> new CardCustodyJournal.Entry(
+        reservation.operationId(), reservation.owner(), reservation.copyIds(), reservation.snapshots(),
+        reservation.status(), Set.copyOf(reservation.restoredCopyIds())));
+  }
+
+  @Override
+  public List<CardCustodyJournal.Entry> openEntries() {
+    return findOpenReservations().stream().map(reservation -> new CardCustodyJournal.Entry(
+        reservation.operationId(), reservation.owner(), reservation.copyIds(), reservation.snapshots(),
+        reservation.status(), Set.copyOf(reservation.restoredCopyIds()))).toList();
+  }
+
+  public List<UUID> openOperationIds() {
+    return openEntries().stream().map(CardCustodyJournal.Entry::operationId).toList();
   }
 
   public void saveCopy(StoredCardCopy copy) {
@@ -128,6 +146,7 @@ public final class SqliteCardRepository {
     }
   }
 
+  @Override
   public void prepare(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
       List<SerializedItemSnapshot> snapshots) {
     Objects.requireNonNull(operationId, "operation id is required");
@@ -179,7 +198,7 @@ public final class SqliteCardRepository {
     Objects.requireNonNull(operationId, "operation id is required");
     inTransaction(() -> saveSnapshotsInternal(operationId, List.copyOf(Objects.requireNonNull(snapshots))));
   }
-
+  @Override
   public void transition(UUID operationId, OperationStatus target) {
     Objects.requireNonNull(operationId, "operation id is required");
     Objects.requireNonNull(target, "target status is required");
@@ -220,24 +239,34 @@ public final class SqliteCardRepository {
       throw failure(exception);
     }
   }
-
+  @Override
   public void addRecovery(UUID operationId, CopyOwner owner, SerializedItemSnapshot snapshot) {
     Objects.requireNonNull(operationId, "operation id is required");
     Objects.requireNonNull(owner, "owner is required");
     Objects.requireNonNull(snapshot, "snapshot is required");
-    try (var insert = connection.prepareStatement("""
-        INSERT INTO recovery_rows(operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status)
-        VALUES (?, ?, ?, ?, ?, 'PENDING')
-        ON CONFLICT(operation_id, copy_uuid) DO UPDATE SET item_bytes = excluded.item_bytes, status = 'PENDING'
-        """)) {
-      insert.setString(1, operationId.toString());
-      insert.setString(2, snapshot.copyId().value().toString());
-      writeOwner(insert, 3, 4, owner);
-      insert.setBytes(5, snapshot.bytes());
-      insert.executeUpdate();
-    } catch (SQLException exception) {
-      throw failure(exception);
-    }
+    inTransaction(() -> {
+      Reservation reservation = findReservationInternal(operationId);
+      if (reservation == null || !reservation.owner().equals(owner)
+          || !reservation.copyIds().contains(snapshot.copyId())) {
+        throw new IllegalStateException("recovery row does not match reservation");
+      }
+      SerializedItemSnapshot expected = reservation.snapshots().stream()
+          .filter(value -> value.copyId().equals(snapshot.copyId())).findFirst().orElse(null);
+      if (expected == null || !java.util.Arrays.equals(expected.bytes(), snapshot.bytes())) {
+        throw new IllegalStateException("recovery snapshot does not match escrow snapshot");
+      }
+      try (var insert = connection.prepareStatement("""
+          INSERT INTO recovery_rows(operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status)
+          VALUES (?, ?, ?, ?, ?, 'PENDING')
+          ON CONFLICT(operation_id, copy_uuid) DO UPDATE SET item_bytes = excluded.item_bytes, status = 'PENDING'
+          """)) {
+        insert.setString(1, operationId.toString());
+        insert.setString(2, snapshot.copyId().value().toString());
+        writeOwner(insert, 3, 4, owner);
+        insert.setBytes(5, snapshot.bytes());
+        insert.executeUpdate();
+      }
+    });
   }
 
   public List<RecoveryRow> pendingRecovery() {
@@ -257,7 +286,28 @@ public final class SqliteCardRepository {
     }
   }
 
+  @Override
+  public void markRestored(UUID operationId, CardCopyId copyId) {
+    Objects.requireNonNull(operationId, "operation id is required");
+    Objects.requireNonNull(copyId, "copy id is required");
+    inTransaction(() -> {
+      Reservation reservation = findReservationInternal(operationId);
+      if (reservation == null || !reservation.copyIds().contains(copyId)) {
+        throw new IllegalStateException("copy is not reserved by operation");
+      }
+      try (var insert = connection.prepareStatement(
+          "INSERT INTO reservation_restored(operation_id, copy_uuid) VALUES (?, ?) "
+              + "ON CONFLICT(operation_id, copy_uuid) DO NOTHING")) {
+        insert.setString(1, operationId.toString());
+        insert.setString(2, copyId.value().toString());
+        insert.executeUpdate();
+      }
+    });
+  }
+
+  /** Compatibility alias for callers that track recovery rows separately. */
   public void markRecoveryRestored(UUID operationId, CardCopyId copyId) {
+    markRestored(operationId, copyId);
     try (var update = connection.prepareStatement(
         "UPDATE recovery_rows SET status = 'RESTORED' WHERE operation_id = ? AND copy_uuid = ?")) {
       update.setString(1, Objects.requireNonNull(operationId).toString());
@@ -295,7 +345,15 @@ public final class SqliteCardRepository {
             }
           }
         }
-        return new Reservation(operationId, owner, copies, snapshots, status);
+        List<CardCopyId> restored = new ArrayList<>();
+        try (var restoredQuery = connection.prepareStatement(
+            "SELECT copy_uuid FROM reservation_restored WHERE operation_id = ? ORDER BY rowid")) {
+          restoredQuery.setString(1, operationId.toString());
+          try (var restoredRows = restoredQuery.executeQuery()) {
+            while (restoredRows.next()) restored.add(new CardCopyId(UUID.fromString(restoredRows.getString(1))));
+          }
+        }
+        return new Reservation(operationId, owner, copies, snapshots, status, restored);
       }
     }
   }
@@ -351,7 +409,9 @@ public final class SqliteCardRepository {
   }
 
   private static boolean allowed(OperationStatus from, OperationStatus to) {
-    return to == OperationStatus.ABORTED && (from == OperationStatus.PREPARED || from == OperationStatus.ESCROWED)
+    return to == OperationStatus.ABORTED && (from == OperationStatus.PREPARED
+        || from == OperationStatus.ESCROWED || from == OperationStatus.RETURN_PENDING
+        || from == OperationStatus.RETURNED)
         || from == OperationStatus.PREPARED && to == OperationStatus.ESCROWED
         || from == OperationStatus.ESCROWED && to == OperationStatus.RETURN_PENDING
         || from == OperationStatus.RETURN_PENDING && to == OperationStatus.RETURNED;
@@ -382,12 +442,18 @@ public final class SqliteCardRepository {
       Objects.requireNonNull(copyId); Objects.requireNonNull(catalogId); Objects.requireNonNull(owner);
     }
   }
-
   public record Reservation(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
-      List<SerializedItemSnapshot> snapshots, OperationStatus status) {
+      List<SerializedItemSnapshot> snapshots, OperationStatus status, List<CardCopyId> restoredCopyIds) {
     public Reservation {
       Objects.requireNonNull(operationId); Objects.requireNonNull(owner);
       copyIds = List.copyOf(copyIds); snapshots = List.copyOf(snapshots); Objects.requireNonNull(status);
+      restoredCopyIds = List.copyOf(Objects.requireNonNull(restoredCopyIds));
+      if (!copyIds.containsAll(restoredCopyIds)) throw new IllegalArgumentException("restored copy is not reserved");
+    }
+
+    public Reservation(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
+        List<SerializedItemSnapshot> snapshots, OperationStatus status) {
+      this(operationId, owner, copyIds, snapshots, status, List.of());
     }
 
     public List<CardCopyId> expectedCopyIds() { return copyIds; }

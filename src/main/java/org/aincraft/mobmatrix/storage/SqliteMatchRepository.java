@@ -34,16 +34,17 @@ public final class SqliteMatchRepository implements MatchRepository {
   public SaveResult save(long expectedRevision, MatchState state) {
     Objects.requireNonNull(state, "state is required");
     if (expectedRevision < 0) return new SaveResult(false, -1, Failure.INVALID_STATE);
-    byte[] stateBytes = serialize(state);
+    byte[] stateBytes = MatchStateSnapshotCodec.encode(state);
     String transcript = transcriptJson(state);
     try {
+      boolean autoCommit = connection.getAutoCommit();
       connection.setAutoCommit(false);
       try {
         long current = currentRevision(state.matchId().value());
         if (current < 0) {
-          if (expectedRevision != state.revision()) {
+          if (expectedRevision != 0 || state.revision() != 0) {
             connection.rollback();
-            return SaveResult.stale(-1);
+            return new SaveResult(false, -1, Failure.INVALID_STATE);
           }
           try (var insert = connection.prepareStatement("""
               INSERT INTO matches(match_id, revision, status, state_bytes, transcript_json, updated_at)
@@ -57,7 +58,11 @@ public final class SqliteMatchRepository implements MatchRepository {
             insert.executeUpdate();
           }
           connection.commit();
-          return SaveResult.success(state.revision());
+          return SaveResult.success(0L);
+        }
+        if (state.revision() != expectedRevision + 1) {
+          connection.rollback();
+          return new SaveResult(false, current, Failure.INVALID_STATE);
         }
         if (current != expectedRevision) {
           connection.rollback();
@@ -82,10 +87,14 @@ public final class SqliteMatchRepository implements MatchRepository {
         return SaveResult.success(state.revision());
       } catch (SQLException | RuntimeException exception) {
         try { connection.rollback(); } catch (SQLException ignored) { }
+        if (exception instanceof SQLException sql
+            && sql.getMessage() != null && sql.getMessage().contains("matches.match_id")) {
+          return new SaveResult(false, -1L, Failure.INVALID_STATE);
+        }
         if (exception instanceof RuntimeException runtime) throw runtime;
         throw exception;
       } finally {
-        connection.setAutoCommit(true);
+        connection.setAutoCommit(autoCommit);
       }
     } catch (SQLException exception) {
       throw new IllegalStateException("SQLite match save failed", exception);
@@ -106,6 +115,27 @@ public final class SqliteMatchRepository implements MatchRepository {
     } catch (SQLException exception) {
       throw new IllegalStateException("SQLite match load failed", exception);
     }
+  }
+
+  /** Rehydrates an executable aggregate after resolving the persisted catalog snapshot. */
+  public Optional<MatchState> findState(org.aincraft.mobmatrix.domain.MatchId matchId,
+      org.aincraft.mobmatrix.domain.CardCatalog catalog) {
+    return find(matchId).map(snapshot -> MatchStateSnapshotCodec.decode(snapshot.stateBytes(), catalog));
+  }
+
+  public MatchState rehydrate(MatchSnapshot snapshot,
+      org.aincraft.mobmatrix.domain.CardCatalog catalog) {
+    Objects.requireNonNull(snapshot, "snapshot is required");
+    return MatchStateSnapshotCodec.decode(snapshot.stateBytes(), catalog);
+  }
+  @Override
+  public Optional<MatchState> rehydrate(MatchSnapshot snapshot,
+      java.util.function.Function<String, org.aincraft.mobmatrix.domain.CardCatalog> catalogResolver) {
+    Objects.requireNonNull(snapshot, "snapshot is required");
+    Objects.requireNonNull(catalogResolver, "catalog resolver is required");
+    var catalog = Objects.requireNonNull(catalogResolver.apply(
+        MatchStateSnapshotCodec.catalogSnapshotId(snapshot.stateBytes())), "catalog is required");
+    return Optional.of(rehydrate(snapshot, catalog));
   }
 
   @Override
@@ -143,55 +173,19 @@ public final class SqliteMatchRepository implements MatchRepository {
     }
   }
 
-  private static byte[] serialize(MatchState state) {
-    try {
-      ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-      try (DataOutputStream out = new DataOutputStream(bytes)) {
-        out.writeInt(1);
-        out.writeUTF(state.matchId().value());
-        out.writeLong(state.revision());
-        out.writeUTF(state.currentSeat().name());
-        out.writeUTF(state.catalog().snapshotId());
-        out.writeUTF(state.rules().rules().stream().map(Enum::name).sorted().toList().toString());
-        out.writeLong(state.turnStartedAt().toEpochMilli());
-        out.writeLong(state.graceDeadline().toEpochMilli());
-        out.writeLong(state.turnDeadline().toEpochMilli());
-        for (PlayerSeat seat : PlayerSeat.values()) {
-          out.writeLong(state.remainingBankMillis(seat));
-          out.writeInt(state.hand(seat).size());
-          for (var hand : state.hand(seat)) {
-            out.writeLong(hand.copyId().value().getMostSignificantBits());
-            out.writeLong(hand.copyId().value().getLeastSignificantBits());
-            out.writeInt(hand.cardId().value());
-          }
-        }
-        for (Board.Cell cell : state.board().cells()) {
-          out.writeBoolean(cell != null);
-          if (cell != null) {
-            out.writeLong(cell.copy().copyId().value().getMostSignificantBits());
-            out.writeLong(cell.copy().copyId().value().getLeastSignificantBits());
-            out.writeInt(cell.cardId().value());
-            out.writeUTF(cell.owner().name());
-            for (Side side : Side.values()) out.writeInt(cell.effectiveValues().getOrDefault(side, 0));
-          }
-        }
-      }
-      return bytes.toByteArray();
-    } catch (IOException exception) {
-      throw new IllegalStateException("unable to serialize match", exception);
-    }
-  }
-
   private static String transcriptJson(MatchState state) {
-    StringBuilder json = new StringBuilder("[");
+    var transcript = state.transcript();
+    StringBuilder json = new StringBuilder("{\"seed\":").append(transcript.seed())
+        .append(",\"cursor\":").append(transcript.cursor())
+        .append(",\"replay\":").append(transcript.replayMode()).append(",\"decisions\":[");
     boolean first = true;
-    for (var decision : state.randomDecisions()) {
+    for (var decision : transcript.decisions()) {
       if (!first) json.append(',');
       first = false;
       json.append("{\"decision\":\"").append(escape(decision.decision())).append("\",\"bound\":")
           .append(decision.bound()).append(",\"value\":").append(decision.value()).append('}');
     }
-    return json.append(']').toString();
+    return json.append("]}").toString();
   }
 
   private static String escape(String value) {

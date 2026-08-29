@@ -76,8 +76,14 @@ public final class DraftOfferings {
     public Deck deck() { return deck; }
     public Map<CardCopyId, UUID> provenance() { return provenance; }
     public String policy() { return policy; }
-  }
 
+    /** Domain-safe constructor used by snapshot rehydration after validating catalog identities. */
+    public static Selection restore(PlayerSeat seat, List<Integer> offeringChoices,
+        List<CardCopy> selectedCards, Deck deck, Map<CardCopyId, UUID> provenance) {
+      return new Selection(seat, offeringChoices, selectedCards, deck, provenance);
+    }
+
+  }
   private DraftOfferings() {}
 
   public static SeatOffers generate(PlayerSeat seat, CardCatalog catalog, RandomTranscript transcript) {
