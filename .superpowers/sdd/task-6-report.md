@@ -228,5 +228,10 @@ BUILD SUCCESSFUL in 2s
 ```
 
 Latest implementation guard commit: `1d16dd3` (`fix: preserve active custody on startup`).
-Latest report history commit before this note: `4e4b087`; this note is committed separately.
+
+The retry path now validates the computed reservation plan before checking a persisted match, so a
+different RANDOM copy selection cannot be accepted as an identical retry. This final implementation
+adjustment is `26c5c53` (`fix: preserve active custody on startup`); the preceding movement guard
+adjustment is `1d16dd3` with the same required subject.
+The preceding report commit is `6f8894a`; this update is report-only.
 No formatter, linter, project-wide build, or project-wide test suite was run.
