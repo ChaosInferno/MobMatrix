@@ -613,9 +613,7 @@ public final class CardInventoryService implements CardCustodyPort {
       ItemStack item = inventory.getItem(slot);
       CardItemCodec.ReadResult result = codec.read(item);
       if (!result.isValid()) {
-        if (item != null && item.getType() == org.bukkit.Material.PAPER && codec.hasIdentity(item)) {
-          counterfeit = true;
-        }
+        if (isCounterfeit(result, codec.hasIdentity(item))) counterfeit = true;
         continue;
       }
       if (cards.putIfAbsent(result.data().copyId(), new Located(slot, item, result.data())) != null) {
@@ -623,6 +621,9 @@ public final class CardInventoryService implements CardCustodyPort {
       }
     }
     return new Scan(cards, duplicate, counterfeit);
+  }
+  static boolean isCounterfeit(CardItemCodec.ReadResult result, boolean hasIdentity) {
+    return !Objects.requireNonNull(result, "read result is required").isValid() && hasIdentity;
   }
 
   private static List<CardCopyId> exactCopies(List<CardCopyId> copies) {

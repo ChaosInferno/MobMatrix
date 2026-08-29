@@ -324,6 +324,7 @@ final class MatchApplicationServiceTest {
   void randomStartRejectsWrongOwnerBeforeReservation() {
     CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
     CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner wrongOwner = CopyOwner.player(UUID.randomUUID());
     List<CardDefinition> definitions = new ArrayList<>();
     List<CardCopy> one = new ArrayList<>();
     List<CardCopy> two = new ArrayList<>();
@@ -343,7 +344,7 @@ final class MatchApplicationServiceTest {
     RecordingCustody custody = new RecordingCustody();
 
     MatchApplicationService.MatchStartResult result = new MatchApplicationService(custody).start(
-        new MatchApplicationService.StartMatchRequest(valid, twoOwner, selected,
+        new MatchApplicationService.StartMatchRequest(valid, wrongOwner, selected,
             UUID.randomUUID(), twoOwner,
             MatchEngine.start(valid).state().hand(PlayerSeat.TWO).stream()
                 .map(card -> card.copyId()).toList(), UUID.randomUUID()));
@@ -1392,6 +1393,22 @@ final class MatchApplicationServiceTest {
     public List<MatchSnapshot> activeMatches() {
       throw new IllegalStateException("database unavailable");
     }
+  }
+  @Test
+  void startRejectsSamePlayerInBothSeatsBeforePureStartOrCustody() {
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = copies();
+    RecordingCustody custody = new RecordingCustody();
+
+    MatchApplicationService.MatchStartResult result = new MatchApplicationService(custody).start(
+        new MatchApplicationService.StartMatchRequest(
+            match("same-player-seats", owner, oneCopies, owner, twoCopies),
+            owner, oneCopies, UUID.randomUUID(), owner, twoCopies, UUID.randomUUID()));
+
+    assertFalse(result.accepted());
+    assertEquals(CardCustodyPort.Failure.INVALID_OWNER, result.failure());
+    assertTrue(custody.calls.isEmpty());
   }
 }
 

@@ -118,4 +118,13 @@ final class CardInventoryServiceTest {
     }
     Files.deleteIfExists(path);
   }
+  @Test
+  void identityBearingInvalidItemsAreCounterfeitRegardlessOfMaterial() {
+    assertTrue(CardInventoryService.isCounterfeit(
+        CardItemCodec.ReadResult.invalid(CardItemCodec.InvalidReason.NOT_PAPER), true));
+    assertTrue(CardInventoryService.isCounterfeit(
+        CardItemCodec.ReadResult.invalid(CardItemCodec.InvalidReason.INVALID_SCHEMA), true));
+    assertTrue(!CardInventoryService.isCounterfeit(
+        CardItemCodec.ReadResult.invalid(CardItemCodec.InvalidReason.INVALID_SCHEMA), false));
+  }
 }

@@ -688,6 +688,7 @@ final class SqliteCustodyTest {
     try (Database database = new Database(path)) {
       SqliteMatchRepository repository = new SqliteMatchRepository(database);
       assertTrue(repository.save(0L, original).accepted());
+      MatchRepository.MatchSnapshot snapshot = repository.find(original.matchId()).orElseThrow();
       try (var update = database.connection().prepareStatement(
           "UPDATE matches SET match_id = ? WHERE match_id = ?")) {
         update.setString(1, "row-match-id");
@@ -695,11 +696,14 @@ final class SqliteCustodyTest {
         update.executeUpdate();
       }
       MatchId rowId = new MatchId("row-match-id");
-      MatchRepository.MatchSnapshot snapshot = repository.find(rowId).orElseThrow();
+      assertThrows(IllegalArgumentException.class, () -> repository.find(rowId));
       assertThrows(IllegalArgumentException.class,
           () -> repository.findState(rowId, original.catalog()));
+      MatchRepository.MatchSnapshot tampered = new MatchRepository.MatchSnapshot(rowId,
+          snapshot.revision(), snapshot.status(), snapshot.stateBytes(), snapshot.transcriptJson(),
+          snapshot.stateDigest());
       assertThrows(IllegalArgumentException.class,
-          () -> repository.rehydrate(snapshot, original.catalog()));
+          () -> repository.rehydrate(tampered, original.catalog()));
     }
     Files.deleteIfExists(path);
   }
@@ -710,17 +714,20 @@ final class SqliteCustodyTest {
     try (Database database = new Database(path)) {
       SqliteMatchRepository repository = new SqliteMatchRepository(database);
       assertTrue(repository.save(0L, original).accepted());
+      MatchRepository.MatchSnapshot snapshot = repository.find(original.matchId()).orElseThrow();
       try (var update = database.connection().prepareStatement(
           "UPDATE matches SET revision = ? WHERE match_id = ?")) {
         update.setLong(1, original.revision() + 1);
         update.setString(2, original.matchId().value());
         update.executeUpdate();
       }
-      MatchRepository.MatchSnapshot snapshot = repository.find(original.matchId()).orElseThrow();
       assertThrows(IllegalArgumentException.class,
           () -> repository.findState(original.matchId(), original.catalog()));
+      MatchRepository.MatchSnapshot tampered = new MatchRepository.MatchSnapshot(
+          original.matchId(), original.revision() + 1, snapshot.status(), snapshot.stateBytes(),
+          snapshot.transcriptJson(), snapshot.stateDigest());
       assertThrows(IllegalArgumentException.class,
-          () -> repository.rehydrate(snapshot, original.catalog()));
+          () -> repository.rehydrate(tampered, original.catalog()));
     }
     Files.deleteIfExists(path);
   }
@@ -1275,5 +1282,22 @@ final class SqliteCustodyTest {
           state.originalOwners(), state.consecutiveDraws(), state.draftOfferings(),
           state.draftSelections(), state.chaosChoices());
     }
+  }
+  @Test
+  void findAndActiveMatchesRejectTamperedStatusBeforeExposure() throws Exception {
+    var path = Files.createTempFile("mobmatrix-match-status", ".sqlite");
+    MatchState state = snapshotState("tampered-status");
+    try (Database database = new Database(path)) {
+      SqliteMatchRepository repository = new SqliteMatchRepository(database, MATCH_SECRET);
+      assertTrue(repository.save(0L, state).accepted());
+      try (var update = database.connection().prepareStatement(
+          "UPDATE matches SET status = 'FINISHED' WHERE match_id = ?")) {
+        update.setString(1, state.matchId().value());
+        update.executeUpdate();
+      }
+      assertThrows(IllegalArgumentException.class, () -> repository.find(state.matchId()));
+      assertThrows(IllegalArgumentException.class, repository::activeMatches);
+    }
+    Files.deleteIfExists(path);
   }
 }

@@ -43,11 +43,14 @@ public final class MatchApplicationService {
    */
   public synchronized MatchStartResult start(StartMatchRequest request) {
     Objects.requireNonNull(request, "start request is required");
+    Failure ownerValidation = validateSeatOwners(request);
+    if (ownerValidation != Failure.NONE) {
+      return MatchStartResult.rejected(request.match().matchId(), ownerValidation);
+    }
     Failure validation = validateDeckSelections(request);
     if (validation != Failure.NONE) {
       return MatchStartResult.rejected(request.match().matchId(), validation);
     }
-
     // Evaluate the pure start exactly once. Its selected physical copies and transcript are the
     // durable identity of this match and must be reused on an identical retry.
     MatchEngine.MatchTransition started = MatchEngine.start(request.match());
@@ -528,6 +531,13 @@ public final class MatchApplicationService {
   private static void append(StringBuilder value, Object item) {
     String text = String.valueOf(item);
     value.append(text.length()).append(':').append(text);
+  }
+  private static Failure validateSeatOwners(StartMatchRequest request) {
+    if (request.oneOwner().isPlayer() && request.twoOwner().isPlayer()
+        && request.oneOwner().playerId().equals(request.twoOwner().playerId())) {
+      return Failure.INVALID_OWNER;
+    }
+    return Failure.NONE;
   }
 
   private static Failure validateDeckSelections(StartMatchRequest request) {
