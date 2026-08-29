@@ -106,10 +106,10 @@ final class SqliteCustodyTest {
           List.of(new SerializedItemSnapshot(existingCopy, new byte[] {1})));
       try (var statement = database.connection().createStatement()) {
         statement.execute("ALTER TABLE reservations DROP COLUMN match_id");
-        statement.execute("DELETE FROM schema_migrations WHERE version = 3");
+        statement.execute("DELETE FROM schema_migrations WHERE version >= 3");
       }
       SchemaMigrator.migrate(database.connection());
-      assertEquals(3, SchemaMigrator.currentVersion(database.connection()));
+      assertEquals(SchemaMigrator.CURRENT_VERSION, SchemaMigrator.currentVersion(database.connection()));
       assertNull(repository.findReservation(existingOperation).orElseThrow().matchId());
       repository.prepare(newOperation, owner, List.of(newCopy),
           List.of(new SerializedItemSnapshot(newCopy, new byte[] {2})), "migrated-match");
@@ -117,6 +117,79 @@ final class SqliteCustodyTest {
     }
     Files.deleteIfExists(path);
   }
+
+  @Test
+  void matchSnapshotRejectsMissingAndMismatchedIntegrity() throws Exception {
+    var path = Files.createTempFile("mobmatrix-match-integrity", ".sqlite");
+    MatchState missing = snapshotState("missing-integrity");
+    MatchState mismatched = snapshotState("mismatched-integrity");
+    try (Database database = new Database(path)) {
+      SqliteMatchRepository repository = new SqliteMatchRepository(database);
+      assertTrue(repository.save(0L, missing).accepted());
+      try (var update = database.connection().prepareStatement(
+          "UPDATE matches SET state_digest = NULL WHERE match_id = ?")) {
+        update.setString(1, missing.matchId().value());
+        update.executeUpdate();
+      }
+      assertThrows(IllegalArgumentException.class,
+          () -> repository.findState(missing.matchId(), missing.catalog()));
+      assertThrows(IllegalArgumentException.class,
+          () -> repository.rehydrate(repository.find(missing.matchId()).orElseThrow(),
+              missing.catalog()));
+
+      assertTrue(repository.save(0L, mismatched).accepted());
+      try (var update = database.connection().prepareStatement(
+          "UPDATE matches SET state_bytes = ? WHERE match_id = ?")) {
+        update.setBytes(1, new byte[] {1, 2, 3});
+        update.setString(2, mismatched.matchId().value());
+        update.executeUpdate();
+      }
+      assertThrows(IllegalArgumentException.class,
+          () -> repository.findState(mismatched.matchId(), mismatched.catalog()));
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void custodyJournalsRejectAbortedUntilEveryCopyIsRestored() throws Exception {
+    CardCopyId first = new CardCopyId(UUID.randomUUID());
+    CardCopyId second = new CardCopyId(UUID.randomUUID());
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> copies = List.of(first, second);
+    List<SerializedItemSnapshot> snapshots = List.of(
+        new SerializedItemSnapshot(first, new byte[] {1}),
+        new SerializedItemSnapshot(second, new byte[] {2}));
+
+    var memory = new org.aincraft.mobmatrix.application.InMemoryCardCustodyJournal();
+    UUID memoryOperation = UUID.randomUUID();
+    memory.prepare(memoryOperation, owner, copies, snapshots);
+    assertThrows(IllegalStateException.class,
+        () -> memory.transition(memoryOperation, OperationStatus.ABORTED));
+    memory.markRestored(memoryOperation, first);
+    assertThrows(IllegalStateException.class,
+        () -> memory.transition(memoryOperation, OperationStatus.ABORTED));
+    memory.markRestored(memoryOperation, second);
+    memory.transition(memoryOperation, OperationStatus.ABORTED);
+
+    var path = Files.createTempFile("mobmatrix-aborted-invariant", ".sqlite");
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(first, new CardId(1), owner));
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(second, new CardId(2), owner));
+      UUID operation = UUID.randomUUID();
+      repository.prepare(operation, owner, copies, snapshots);
+      assertThrows(IllegalStateException.class,
+          () -> repository.transition(operation, OperationStatus.ABORTED));
+      repository.markRestored(operation, first);
+      assertThrows(IllegalStateException.class,
+          () -> repository.transition(operation, OperationStatus.ABORTED));
+      repository.markRestored(operation, second);
+      repository.transition(operation, OperationStatus.ABORTED);
+      assertEquals(OperationStatus.ABORTED, repository.findReservation(operation).orElseThrow().status());
+    }
+    Files.deleteIfExists(path);
+  }
+
   @Test
   void startBindingSurvivesRepositoryReconstruction() throws Exception {
     var path = Files.createTempFile("mobmatrix-start-binding", ".sqlite");
@@ -339,6 +412,25 @@ final class SqliteCustodyTest {
         () -> MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(tampered),
             original.catalog()));
   }
+
+  @Test
+  void snapshotRejectsEmptyOwnerInferenceAfterPlacement() {
+    MatchState initial = snapshotState("placed-empty-owners");
+    MatchState placed = MatchEngine.apply(initial, new MatchCommand.PlaceCard(initial.currentSeat(),
+        initial.hand(initial.currentSeat()).getFirst().copyId(), Square.CENTER, initial.revision(),
+        UUID.randomUUID(), Instant.parse("2026-01-01T00:00:01Z"))).state();
+    MatchState tampered = MatchState.rehydrate(placed.matchId(), placed.catalog(), placed.rules(),
+        placed.board(), placed.hands(), placed.currentSeat(), placed.revision(), placed.result(),
+        placed.bankMillis(), placed.turnStartedAt(), placed.graceDeadline(), placed.turnDeadline(),
+        placed.commandIds(), placed.seed(), placed.transcript(), placed.revealedCardsMap(), Map.of(),
+        placed.consecutiveDraws(), placed.draftOfferings(), placed.draftSelections(),
+        placed.chaosChoices());
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(tampered),
+            placed.catalog()));
+  }
+
 
   @Test
   void snapshotRejectsChaosChoiceInNonChaosState() {

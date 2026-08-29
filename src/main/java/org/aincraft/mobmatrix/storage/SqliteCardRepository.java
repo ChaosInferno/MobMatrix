@@ -293,6 +293,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       Reservation reservation = findReservationInternal(operationId);
       if (reservation == null) throw new IllegalStateException("unknown operation: " + operationId);
       if (reservation.status() == target) return;
+      if (target == OperationStatus.ABORTED
+          && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
+        throw new IllegalStateException("cannot abort custody with unresolved copies");
+      }
       if (!allowed(reservation.status(), target)) {
         throw new IllegalStateException("invalid custody transition " + reservation.status() + " -> " + target);
       }

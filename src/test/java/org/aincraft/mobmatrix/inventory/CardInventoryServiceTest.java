@@ -81,6 +81,7 @@ final class CardInventoryServiceTest {
       SqliteCardRepository journal = new SqliteCardRepository(database);
       journal.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
       journal.prepare(operation, owner, List.of(copy), List.of(snapshot));
+      journal.markRestored(operation, copy);
       journal.transition(operation, CardCustodyPort.OperationStatus.ABORTED);
 
       CardInventoryService service = new CardInventoryService(

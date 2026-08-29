@@ -10,7 +10,7 @@ import java.util.Set;
 
 /** Explicit, repeatable schema migrations for custody and active-match state. */
 public final class SchemaMigrator {
-  public static final int CURRENT_VERSION = 3;
+  public static final int CURRENT_VERSION = 4;
 
   private SchemaMigrator() {}
 
@@ -63,6 +63,24 @@ public final class SchemaMigrator {
         applyV3(connection);
         try (var insert = connection.prepareStatement(
             "INSERT INTO schema_migrations(version, applied_at) VALUES (3, CURRENT_TIMESTAMP)")) {
+          insert.executeUpdate();
+        }
+        connection.commit();
+      } catch (SQLException exception) {
+        try { connection.rollback(); } catch (SQLException ignored) { }
+        throw exception;
+      } finally {
+        connection.setAutoCommit(autoCommit);
+      }
+    }
+    version = currentVersion(connection);
+    if (version < 4) {
+      boolean autoCommit = connection.getAutoCommit();
+      try {
+        connection.setAutoCommit(false);
+        applyV4(connection);
+        try (var insert = connection.prepareStatement(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (4, CURRENT_TIMESTAMP)")) {
           insert.executeUpdate();
         }
         connection.commit();
@@ -275,11 +293,11 @@ public final class SchemaMigrator {
                      (owner_kind = 'HOUSE' AND owner_uuid IS NULL))
             )
             """);
-        statement.execute("""
-            INSERT INTO recovery_rows(recovery_id, operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status)
-            SELECT recovery_id, operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status
-            FROM recovery_rows_legacy
-            """);
+      statement.execute("""
+          INSERT INTO recovery_rows(recovery_id, operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status)
+          SELECT recovery_id, operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status
+          FROM recovery_rows_legacy
+          """);
         statement.execute("DROP TABLE recovery_rows_legacy");
       }
       statement.execute("""
@@ -297,6 +315,16 @@ public final class SchemaMigrator {
   private static void applyV3(Connection connection) throws SQLException {
     try (var statement = connection.createStatement()) {
       statement.execute("ALTER TABLE reservations ADD COLUMN match_id TEXT");
+    }
+  }
+  private static void applyV4(Connection connection) throws SQLException {
+    try (var query = connection.createStatement().executeQuery("PRAGMA table_info(matches)")) {
+      while (query.next()) {
+        if ("state_digest".equals(query.getString("name"))) return;
+      }
+    }
+    try (var statement = connection.createStatement()) {
+      statement.execute("ALTER TABLE matches ADD COLUMN state_digest TEXT");
     }
   }
 }

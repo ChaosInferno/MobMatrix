@@ -98,7 +98,12 @@ public interface MatchRepository {
   }
 
   record MatchSnapshot(MatchId matchId, long revision, String status, byte[] stateBytes,
-      String transcriptJson) {
+      String transcriptJson, String stateDigest) {
+    public MatchSnapshot(MatchId matchId, long revision, String status, byte[] stateBytes,
+        String transcriptJson) {
+      this(matchId, revision, status, stateBytes, transcriptJson, null);
+    }
+
     public MatchSnapshot {
       Objects.requireNonNull(matchId); Objects.requireNonNull(status);
       Objects.requireNonNull(stateBytes); stateBytes = stateBytes.clone();

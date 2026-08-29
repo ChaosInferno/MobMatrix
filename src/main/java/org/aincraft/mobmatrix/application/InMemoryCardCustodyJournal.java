@@ -76,12 +76,14 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
       throw new IllegalStateException("invalid custody transition");
     }
     if (status == CardCustodyPort.OperationStatus.ABORTED
-        && entry.status == CardCustodyPort.OperationStatus.RETURNED) {
-      // A failed start may retain a terminal journal row after every copy was returned.
-    } else if (status == CardCustodyPort.OperationStatus.ABORTED
+        && !entry.restored.containsAll(entry.copyIds)) {
+      throw new IllegalStateException("cannot abort custody with unresolved copies");
+    }
+    if (status == CardCustodyPort.OperationStatus.ABORTED
         && entry.status != CardCustodyPort.OperationStatus.PREPARED
         && entry.status != CardCustodyPort.OperationStatus.ESCROWED
-        && entry.status != CardCustodyPort.OperationStatus.RETURN_PENDING) {
+        && entry.status != CardCustodyPort.OperationStatus.RETURN_PENDING
+        && entry.status != CardCustodyPort.OperationStatus.RETURNED) {
       throw new IllegalStateException("invalid custody transition");
     }
     entry.status = status;

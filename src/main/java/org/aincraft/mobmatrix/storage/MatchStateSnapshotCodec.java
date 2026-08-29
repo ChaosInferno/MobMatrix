@@ -244,7 +244,9 @@ public final class MatchStateSnapshotCodec {
         }
       }
       boolean ownershipMetadataRequired = rules.contains(Rule.RANDOM) || rules.contains(Rule.SWAP);
-      boolean inferredOwnership = originalOwners.isEmpty() && !ownershipMetadataRequired;
+      boolean plainInitialBoard = board.cells().stream().allMatch(Objects::isNull);
+      boolean inferredOwnership = originalOwners.isEmpty() && !ownershipMetadataRequired
+          && plainInitialBoard;
       if (inferredOwnership) {
         for (PlayerSeat seat : PlayerSeat.values()) {
           for (HandCard card : hands.get(seat)) {
