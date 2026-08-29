@@ -40,8 +40,17 @@ public record MatchProjection(
     Objects.requireNonNull(viewer, "viewer is required");
     Objects.requireNonNull(now, "time is required");
     boolean canAct = state.currentSeat() == viewer && !state.isFinished() && !state.isTurnExpired(now);
-    List<CardCopyId> legalCopies = canAct
-        ? state.hand(viewer).stream().map(HandCard::copyId).toList() : List.of();
+    List<CardCopyId> legalCopies;
+    if (!canAct) {
+      legalCopies = List.of();
+    } else if (state.ruleSet().has(Rule.ORDER)) {
+      legalCopies = state.hand(viewer).isEmpty() ? List.of() : List.of(state.hand(viewer).getFirst().copyId());
+    } else if (state.ruleSet().has(Rule.CHAOS)) {
+      CardCopyId chaos = state.chaosChoice(viewer);
+      legalCopies = chaos == null ? List.of() : List.of(chaos);
+    } else {
+      legalCopies = state.hand(viewer).stream().map(HandCard::copyId).toList();
+    }
     List<Square> legalSquares = canAct
         ? state.board().emptySquares() : List.of();
     List<HandSlot> opponentSlots = state.hand(viewer.opponent()).stream().map(card -> {

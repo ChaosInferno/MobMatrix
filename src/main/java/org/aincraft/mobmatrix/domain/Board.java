@@ -8,12 +8,27 @@ import java.util.Objects;
 
 /** Immutable nine-cell board and standard adjacency operations. */
 public final class Board {
-  public record Cell(CardCopy copy, CardId cardId, PlayerSeat owner) {
+  public record Cell(CardCopy copy, CardId cardId, PlayerSeat owner, Map<Side, Integer> effectiveValues) {
     public Cell {
       Objects.requireNonNull(copy, "copy is required");
       Objects.requireNonNull(cardId, "card id is required");
       Objects.requireNonNull(owner, "owner is required");
       if (!copy.cardId().equals(cardId)) throw new IllegalArgumentException("card id does not match copy");
+      effectiveValues = Map.copyOf(Objects.requireNonNull(effectiveValues, "effective values are required"));
+      for (Map.Entry<Side, Integer> entry : effectiveValues.entrySet()) {
+        Objects.requireNonNull(entry.getKey(), "effective side is required");
+        if (entry.getValue() == null || entry.getValue() < 1 || entry.getValue() > 10) {
+          throw new IllegalArgumentException("effective value must be between 1 and 10");
+        }
+      }
+    }
+
+    public Cell(CardCopy copy, CardId cardId, PlayerSeat owner) {
+      this(copy, cardId, owner, Map.of());
+    }
+
+    public Integer effectiveValue(Side side) {
+      return effectiveValues.get(Objects.requireNonNull(side, "side is required"));
     }
   }
 
@@ -75,12 +90,16 @@ public final class Board {
   }
 
   public Board place(Square square, CardCopy copy, PlayerSeat owner) {
+    return place(square, copy, owner, Map.of());
+  }
+
+  public Board place(Square square, CardCopy copy, PlayerSeat owner, Map<Side, Integer> effectiveValues) {
     Objects.requireNonNull(square, "square is required");
     Objects.requireNonNull(copy, "copy is required");
     Objects.requireNonNull(owner, "owner is required");
     if (!isEmpty(square)) throw new IllegalArgumentException("square is occupied");
     List<Cell> updated = new ArrayList<>(cells);
-    updated.set(square.index(), new Cell(copy, copy.cardId(), owner));
+    updated.set(square.index(), new Cell(copy, copy.cardId(), owner, effectiveValues));
     return new Board(updated);
   }
 
@@ -88,7 +107,7 @@ public final class Board {
     Cell cell = cellAt(square);
     if (cell == null) throw new IllegalArgumentException("square is empty");
     List<Cell> updated = new ArrayList<>(cells);
-    updated.set(square.index(), new Cell(cell.copy(), cell.cardId(), owner));
+    updated.set(square.index(), new Cell(cell.copy(), cell.cardId(), owner, cell.effectiveValues()));
     return new Board(updated);
   }
 

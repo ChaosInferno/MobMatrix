@@ -44,7 +44,135 @@ final class AdvancedRulesTest {
     assertTrue(offers.offerings().stream().allMatch(offer -> offer.cards().size() == 5));
     assertEquals(5, DraftOfferings.select(offers, List.of(0, 1, 2)).deck().copies().size());
   }
+ 
+  @Test
+  void draftStartUsesOnlyHouseOwnedOfferingCopiesAndExposesSelections() {
+    MatchEngine.StartMatch start = new MatchEngine.StartMatch(new MatchId("draft"), deck(1), deck(6), catalog(),
+        new RuleSet(Rule.DRAFT), 7L, java.time.Instant.parse("2026-01-01T00:00:00Z"),
+        deck(1).copies(), deck(6).copies(), List.of(0, 1, 2), List.of(2, 3, 4));
+    MatchEngine.MatchTransition transition = MatchEngine.start(start);
+    assertTrue(transition.accepted());
+    MatchState state = transition.state();
+    assertEquals(3, state.draftOfferings(PlayerSeat.ONE).offerings().size());
+    assertEquals(5, state.hand(PlayerSeat.ONE).size());
+    assertEquals(5, state.hand(PlayerSeat.TWO).size());
+    assertTrue(state.hand(PlayerSeat.ONE).stream().allMatch(card ->
+        state.draftOfferings(PlayerSeat.ONE).offerings().stream().flatMap(o -> o.cards().stream())
+            .anyMatch(copy -> copy.copyId().equals(card.copyId()))));
+    assertTrue(state.hand(PlayerSeat.ONE).stream().noneMatch(card -> deck(1).copies().contains(card.copy())));
+    assertEquals(List.of(0, 1, 2), state.draftSelection(PlayerSeat.ONE).offeringChoices());
+    assertThrows(IllegalArgumentException.class,
+        () -> DraftOfferings.select(state.draftOfferings(PlayerSeat.ONE), List.of(0, 1)));
+    assertThrows(IllegalArgumentException.class,
+        () -> DraftOfferings.select(state.draftOfferings(PlayerSeat.ONE), List.of(0, 1, 5)));
+  }
 
+  @Test
+  void ascensionStoresPlacementEffectiveValuesForLaterComparisons() {
+    CardCatalog catalog = catalog();
+    CardCopy first = copy(4);
+    CardCopy second = copy(5);
+    Board board = Board.empty().place(Square.WEST, first, PlayerSeat.ONE);
+    PlacementResolver.Resolution placement = PlacementResolver.resolve(board, catalog,
+        new RuleSet(Rule.ASCENSION), second, PlayerSeat.TWO, Square.CENTER);
+    assertEquals(6, placement.effectiveValues().get(Side.LEFT));
+    assertEquals(6, placement.board().cellAt(Square.CENTER).effectiveValue(Side.LEFT));
+    PlacementResolver.Resolution later = PlacementResolver.resolve(placement.board(), catalog,
+        new RuleSet(Rule.ASCENSION), copy(6), PlayerSeat.TWO, Square.EAST);
+    assertEquals(PlayerSeat.TWO, later.board().ownerOf(Square.CENTER));
+  }
+
+  @Test
+  void draftSelectionCannotInjectCardsOutsideOfferings() {
+    DraftOfferings.SeatOffers offers = DraftOfferings.generate(PlayerSeat.ONE, catalog(), new RandomTranscript(9L));
+    CardCopy playerCard = deck(1).copies().getFirst();
+    assertThrows(IllegalArgumentException.class,
+        () -> DraftOfferings.select(offers, List.of(playerCard, offers.offerings().get(1).cards().getFirst(),
+            offers.offerings().get(2).cards().getFirst())));
+  }
+
+  @Test
+  void randomStartRejectsInsufficientAndDuplicatePhysicalPools() {
+    List<CardCopy> shortPool = deck(1).copies().subList(0, 4);
+    MatchEngine.StartMatch shortStart = new MatchEngine.StartMatch(new MatchId("short"), deck(1), deck(6), catalog(),
+        new RuleSet(Rule.RANDOM), 1L, java.time.Instant.parse("2026-01-01T00:00:00Z"),
+        shortPool, deck(6).copies());
+    assertEquals(MatchErrorCode.RANDOM_INSUFFICIENT_POOL, MatchEngine.start(shortStart).rejection().code());
+    List<CardCopy> duplicate = new ArrayList<>(deck(1).copies());
+    duplicate.set(1, duplicate.getFirst());
+    MatchEngine.StartMatch duplicateStart = new MatchEngine.StartMatch(new MatchId("duplicate"), deck(1), deck(6),
+        catalog(), new RuleSet(Rule.RANDOM), 1L, java.time.Instant.parse("2026-01-01T00:00:00Z"),
+        duplicate, deck(6).copies());
+    assertEquals(MatchErrorCode.RANDOM_DUPLICATE_COPY, MatchEngine.start(duplicateStart).rejection().code());
+  }
+
+ 
+  @Test
+  void orderAndChaosProjectionExposeExactlyThePlayableCopy() {
+    MatchState ordered = MatchEngine.start(new MatchEngine.StartMatch(new MatchId("order"), deck(1), deck(6),
+        catalog(), new RuleSet(Rule.ORDER), 19L, java.time.Instant.parse("2026-01-01T00:00:00Z"))).state();
+    MatchProjection orderProjection = MatchProjection.forViewer(ordered, ordered.currentSeat());
+    assertEquals(List.of(ordered.hand(ordered.currentSeat()).getFirst().copyId()), orderProjection.legalCopyIds());
+
+    MatchState chaos = MatchEngine.start(new MatchEngine.StartMatch(new MatchId("chaos-projection"), deck(1),
+        deck(6), catalog(), new RuleSet(Rule.CHAOS), 20L, java.time.Instant.parse("2026-01-01T00:00:00Z"))).state();
+    List<RandomTranscript.Decision> before = chaos.randomDecisions();
+    MatchProjection chaosProjection = MatchProjection.forViewer(chaos, chaos.currentSeat());
+    assertEquals(before, chaos.randomDecisions());
+    assertEquals(List.of(chaos.chaosChoice(chaos.currentSeat())), chaosProjection.legalCopyIds());
+  }
+ 
+  @Test
+  void suddenDeathRestartAdvancesOnceAndRefreshesThreeOpenSelections() {
+    MatchEngine.StartMatch start = new MatchEngine.StartMatch(new MatchId("sudden"), deck(1), deck(6),
+        uniformCatalog(), new RuleSet(Rule.SUDDEN_DEATH, Rule.THREE_OPEN), 23L,
+        java.time.Instant.parse("2026-01-01T00:00:00Z"));
+    MatchState before = MatchEngine.start(start).state();
+    MatchEngine.MatchTransition restart = finishDraw(before);
+    assertTrue(restart.accepted());
+    assertEquals(9, restart.state().revision());
+    assertEquals(1, restart.state().consecutiveDraws());
+    assertTrue(restart.state().board().emptySquares().size() == 9);
+    for (PlayerSeat seat : PlayerSeat.values()) assertEquals(3, restart.state().revealedCards(seat).size());
+    assertEquals(6, restart.state().randomDecisions().stream()
+        .filter(decision -> decision.label().startsWith("sudden-death-three-open-1")).count());
+  }
+
+  @Test
+  void suddenDeathStopsAfterFifthConsecutiveDraw() {
+    MatchEngine.StartMatch start = new MatchEngine.StartMatch(new MatchId("sudden-fifth"), deck(1), deck(6),
+        uniformCatalog(), new RuleSet(Rule.SUDDEN_DEATH), 24L, java.time.Instant.parse("2026-01-01T00:00:00Z"));
+    MatchState state = MatchEngine.start(start).state();
+    for (int draw = 0; draw < 5; draw++) {
+      MatchEngine.MatchTransition transition = finishDraw(state);
+      assertTrue(transition.accepted());
+      state = transition.state();
+    }
+    assertTrue(state.isFinished());
+    assertEquals(MatchResult.Outcome.DRAW, state.result().outcome());
+    assertEquals(5, state.consecutiveDraws());
+  }
+
+  private static MatchEngine.MatchTransition finishDraw(MatchState state) {
+    for (int index = 0; index < 9; index++) {
+      PlayerSeat actor = state.currentSeat();
+      MatchEngine.MatchTransition transition = MatchEngine.apply(state,
+          new MatchCommand.PlaceCard(actor, state.hand(actor).getFirst().copyId(), Square.of(index),
+              state.revision(), UUID.randomUUID(), state.turnStartedAt().plusSeconds(1)));
+      assertTrue(transition.accepted());
+      state = transition.state();
+    }
+    return new MatchEngine.MatchTransition(state, List.of(), null);
+  }
+
+  private static CardCatalog uniformCatalog() {
+    List<CardDefinition> definitions = new ArrayList<>();
+    for (int id = 1; id <= 10; id++) {
+      definitions.add(new CardDefinition(new CardId(id), "No. " + id, "Card " + id, 1,
+          CardType.NORMAL, 5, 5, 5, 5, 100));
+    }
+    return new CardCatalog(definitions, "uniform");
+  }
   @Test
   void reverseAndFallenAceUseOnlyOrdinaryComparisons() {
     CardCatalog catalog = catalog();
