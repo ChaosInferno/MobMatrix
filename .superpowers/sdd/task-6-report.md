@@ -1019,3 +1019,75 @@ BUILD SUCCESSFUL in 653ms
 The four Paper codec tests remain assumption-skipped because this environment has no running
 Paper item registry. SQLite emitted only the JVM restricted-native-access warning. No formatter,
 linter, project-wide build, or project-wide test suite was run.
+
+## Task 6 final custody robustness fixes
+
+### Status
+
+Implemented and committed as `540684b` (`fix: harden custody recovery boundaries`).
+
+### Corrective coverage
+
+- Snapshot decoding now uses one shared `DecodeBudget` across every top-level and nested
+  collection. Per-collection `MAX_COLLECTION_COUNT` remains enforced, while aggregate decoded
+  entries and objects are bounded before collection allocation. Encoded snapshot bytes are also
+  bounded up front; repeated Draft references remain valid because they are checked as references,
+  not inserted into the active-copy uniqueness set.
+- Startup now reports `matchFailure = DATABASE_ERROR` when `activeMatches()` is unavailable.
+  Bound ESCROWED custody remains untouched during that outage, while custody enumeration and
+  independent active-state processing retain their existing fail-safe behavior.
+- Public `settle(UUID)` and `recover(UUID)` convert custody adapter runtime failures to typed
+  `DATABASE_ERROR` results. When durable operation metadata is available, expected and unresolved
+  UUIDs are preserved and nonterminal failures report `RETURN_PENDING`; raw adapter/SQLite
+  exceptions do not cross the application boundary.
+- PREPARED-to-ESCROWED still validates every current serialized item against its exact prepare
+  snapshot before removing any slot; same-UUID metadata drift returns `INVENTORY_CHANGED` without
+  mutation. SQLite row/state match ID and revision checks remain enforced in both findState and
+  rehydrate paths.
+
+### TDD and focused verification
+
+Focused red command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact red result before the production changes:
+
+```text
+> Task :compileTestJava FAILED
+MatchApplicationServiceTest.java:151: error: cannot find symbol
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, result.matchFailure());
+                                                               ^
+  symbol:   method matchFailure()
+  location: variable result of type StartupRecoveryResult
+MatchApplicationServiceTest.java:159: error: cannot find symbol
+    MatchApplicationService.ReturnResult result = new MatchApplicationService(
+                           ^
+  symbol:   class ReturnResult
+MatchApplicationServiceTest.java:173: error: cannot find symbol
+    MatchApplicationService.RecoveryResult result = new MatchApplicationService(
+                           ^
+  symbol:   class RecoveryResult
+3 errors
+FAILURE: Build failed with an exception.
+```
+
+Focused green command (rerun without task cache):
+
+```text
+cmd /c gradlew.bat test --rerun-tasks --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact green result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 4 executed
+```
+
+The focused selection passed; Paper codec tests remain assumption-skipped because this environment
+has no running Paper item registry. SQLite emitted only the JVM restricted-native-access warning.
+No formatter, linter, project-wide build, or project-wide test suite was run.
