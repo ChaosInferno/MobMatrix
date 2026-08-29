@@ -1405,3 +1405,73 @@ Changes remain inside the existing application, inventory, and SQLite storage bo
 counterfeit classifier is package-private and pure so its material-independent behavior is
 focused-tested without requiring a live Paper registry. Existing Paper primary-thread custody
 requirements, exact snapshots, and durable recovery behavior are unchanged.
+
+## Task 6 final CAS/inventory boundary fixes
+
+### Status
+
+Implemented and committed as `2f43011` (`fix: authenticate CAS predecessor`).
+`SqliteMatchRepository.save` now loads the complete predecessor row inside its write
+transaction and authenticates the keyed MAC before revision comparison or update. Successor writes
+also revalidate immutable catalog definitions. `CardItemCodec.hasIdentity` now detects configured
+namespace keys regardless of the stored PDC primitive type. `CardInventoryService.prepare` now
+rejects every list except exactly five unique copy IDs with `INVALID_COPY_SET`; the application
+start path retains its explicit empty Draft-house bypass.
+
+### TDD and focused verification
+
+Focused red command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest
+```
+
+Exact red result:
+
+```text
+> Task :test FAILED
+
+CardInventoryServiceTest > directPrepareRejectsAnythingOtherThanFiveUniqueCopies() FAILED
+    org.opentest4j.AssertionFailedError at CardInventoryServiceTest.java:31
+
+SqliteCustodyTest > successorCasRejectsTamperedAuthenticatedPredecessor() FAILED
+    java.lang.IllegalArgumentException at SqliteCustodyTest.java:255
+
+62 tests completed, 2 failed, 5 skipped
+FAILURE: Build failed with an exception.
+```
+
+Focused green command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 1 executed, 3 up-to-date
+```
+
+The green run selected 64 tests; the five Paper-registry codec tests were assumption-skipped
+because this environment has no running Paper registry, and the remaining focused inventory,
+storage, and application tests passed. SQLite emitted only its JVM restricted-native-access
+warning. No formatter, linter, project-wide build, or project-wide suite was run.
+
+### Corrective coverage
+
+- Authenticated CAS regression tampers the stored predecessor MAC, verifies successor save is
+  rejected as `INVALID_STATE`, and verifies revision and tampered MAC remain unchanged. A separate
+  successor regression rejects altered definitions under an existing immutable catalog snapshot.
+- Identity detection regression stores a configured catalog key using `PersistentDataType.BYTE`;
+  `hasIdentity` recognizes it despite the unexpected primitive type. Ordinary items without any
+  configured namespace key remain unclassified.
+- Direct inventory custody regression rejects four-copy and duplicate-five-copy preparation lists
+  before player lookup or journaling. The application-level `prepareForStart` empty-list branch
+  remains the only Draft-house bypass.
+
+### Implementation commit
+
+`fix: authenticate CAS predecessor`
