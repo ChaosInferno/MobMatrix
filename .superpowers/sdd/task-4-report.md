@@ -74,11 +74,80 @@ RED result (before review-fix implementation):
 
 > Task :compileTestJava FAILED
 C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\domain\AdvancedRulesTest.java:50: error: no suitable constructor found for StartMatch(MatchId,Deck,Deck,CardCatalog,RuleSet,long,Instant,List<CardCopy>,List<CardCopy>,List<Integer>,List<Integer>)
-...
+    MatchEngine.StartMatch start = new MatchEngine.StartMatch(new MatchId("draft"), deck(1), deck(6), catalog(),
+                                   ^
+    constructor StartMatch.StartMatch(MatchId,Deck,Deck,CardCatalog,MatchRules,long,Instant,List<CardCopy>,List<CardCopy>) is not applicable
+      (actual and formal argument lists differ in length)
+    constructor StartMatch.StartMatch(MatchId,Deck,Deck,CardCatalog,MatchRules,long,Instant) is not applicable
+      (actual and formal argument lists differ in length)
+    constructor StartMatch.StartMatch(MatchId,Deck,Deck,CardCatalog,RuleSet,long,Instant) is not applicable
+      (actual and formal argument lists differ in length)
+C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\domain\AdvancedRulesTest.java:56: error: cannot find symbol
+    assertEquals(3, state.draftOfferings(PlayerSeat.ONE).offerings().size());
+                         ^
+  symbol:   method draftOfferings(PlayerSeat)
+  location: variable state of type MatchState
+C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\domain\AdvancedRulesTest.java:60: error: cannot find symbol
+        state.draftOfferings(PlayerSeat.ONE).offerings().stream().flatMap(o -> o.cards().stream())
+             ^
+  symbol:   method draftOfferings(PlayerSeat)
+  location: variable state of type MatchState
+C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\domain\AdvancedRulesTest.java:63: error: cannot find symbol
+    assertEquals(List.of(0, 1, 2), state.draftSelection(PlayerSeat.ONE).offeringChoices());
+                                        ^
+  symbol:   method draftSelection(PlayerSeat)
+  location: variable state of type MatchState
+C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\domain\AdvancedRulesTest.java:65: error: cannot find symbol
+        () -> DraftOfferings.select(state.draftOfferings(PlayerSeat.ONE), List.of(0, 1)));
+                                         ^
+  symbol:   method draftOfferings(PlayerSeat)
+  location: variable state of type MatchState
+C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\domain\AdvancedRulesTest.java:67: error: cannot find symbol
+        () -> DraftOfferings.select(state.draftOfferings(PlayerSeat.ONE), List.of(0, 1, 5)));
+                                         ^
+  symbol:   method draftOfferings(PlayerSeat)
+  location: variable state of type MatchState
+C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\domain\AdvancedRulesTest.java:79: error: cannot find symbol
+    assertEquals(6, placement.board().cellAt(Square.CENTER).effectiveValue(Side.LEFT));
+                                                           ^
+  symbol:   method effectiveValue(Side)
+  location: class Cell
+C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\domain\AdvancedRulesTest.java:90: error: incompatible types: inference variable E has incompatible bounds
+        () -> DraftOfferings.select(offers, List.of(playerCard, offers.offerings().get(1).cards().getFirst(),
+                            ^
+    equality constraints: Integer
+    lower bounds: CardCopy
+  where E is a type-variable:
+    E extends Object declared in method <E>of(E,E,E)
+C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\domain\AdvancedRulesTest.java:98: error: incompatible types: RuleSet cannot be converted to MatchRules
+        new RuleSet(Rule.RANDOM), 1L, java.time.Instant.parse("2026-01-01T00:00:00Z"),
+        ^
+C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\domain\AdvancedRulesTest.java:100: error: cannot find symbol
+    assertEquals(MatchErrorCode.RANDOM_INSUFFICIENT_POOL, MatchEngine.start(shortStart).rejection().code());
+                               ^
+  symbol:   variable RANDOM_INSUFFICIENT_POOL
+  location: class MatchErrorCode
+C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\domain\AdvancedRulesTest.java:104: error: incompatible types: RuleSet cannot be converted to MatchRules
+        catalog(), new RuleSet(Rule.RANDOM), 1L, java.time.Instant.parse("2026-01-01T00:00:00Z"),
+                   ^
+C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\domain\AdvancedRulesTest.java:106: error: cannot find symbol
+    assertEquals(MatchErrorCode.RANDOM_DUPLICATE_COPY, MatchEngine.start(duplicateStart).rejection().code());
+                               ^
+  symbol:   variable RANDOM_DUPLICATE_COPY
+  location: class MatchErrorCode
+C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\domain\RandomTranscriptTest.java:41: error: cannot find symbol
+    CardCopyId playable = before.chaosChoice(actor);
+                                ^
+  symbol:   method chaosChoice(PlayerSeat)
+  location: variable before of type MatchState
+Note: Some input files use unchecked or unsafe operations.
+Note: Recompile with -Xlint:unchecked for details.
 13 errors
+
 
 FAILURE: Build failed with an exception.
 ```
+Follow-up implementation commit: `d660338` (`fix: reject null draft selections`)
 
 GREEN command:
 
