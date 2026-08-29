@@ -70,8 +70,13 @@ public interface CardCustodyPort {
     return recover(parseOperation(operationId));
   }
 
+  /**
+   * Adapters must implement durable abort semantics. The default is explicitly unsupported and
+   * cannot claim that an operation reached ABORTED.
+   */
   default CustodyResult abort(UUID operationId) {
-    return CustodyResult.success(Objects.requireNonNull(operationId), OperationStatus.ABORTED);
+    return CustodyResult.rejected(Objects.requireNonNull(operationId), OperationStatus.ABORTED,
+        Failure.INVALID_STATE);
   }
 
   private static UUID parseOperation(String operationId) {

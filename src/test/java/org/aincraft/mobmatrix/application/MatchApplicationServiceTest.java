@@ -19,10 +19,13 @@ import org.aincraft.mobmatrix.domain.CardId;
 import org.aincraft.mobmatrix.domain.CardType;
 import org.aincraft.mobmatrix.domain.CopyOwner;
 import org.aincraft.mobmatrix.domain.Deck;
+import org.aincraft.mobmatrix.domain.MatchCommand;
 import org.aincraft.mobmatrix.domain.MatchEngine;
 import org.aincraft.mobmatrix.domain.MatchState;
 import org.aincraft.mobmatrix.domain.MatchId;
 import org.aincraft.mobmatrix.domain.MatchRules;
+import org.aincraft.mobmatrix.domain.PlayerSeat;
+import org.aincraft.mobmatrix.domain.Square;
 import org.aincraft.mobmatrix.storage.Database;
 import org.aincraft.mobmatrix.storage.SqliteCardRepository;
 import org.junit.jupiter.api.Test;
@@ -41,8 +44,31 @@ final class MatchApplicationServiceTest {
     assertTrue(started.escrowed());
     service.prepare(owner, copies, operation);
     service.settle(operation);
+
+
     service.settle(operation);
     assertEquals(List.of("prepare", "escrow", "return"), custody.calls);
+  }
+  @Test
+  void oneArgumentServicePersistsApplyAndEnforcesCas() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = copies();
+    MatchEngine.StartMatch start = match("one-arg-persistence", oneOwner, oneCopies,
+        twoOwner, twoCopies);
+    MatchApplicationService service = new MatchApplicationService(new RecordingCustody());
+    assertTrue(service.start(new MatchApplicationService.StartMatchRequest(start, oneOwner, oneCopies,
+        UUID.randomUUID(), twoOwner, twoCopies, UUID.randomUUID())).accepted());
+    MatchState state = MatchEngine.start(start).state();
+    PlayerSeat actor = state.currentSeat();
+    CardCopyId copy = state.hand(actor).getFirst().copyId();
+    MatchCommand.PlaceCard command = new MatchCommand.PlaceCard(actor, copy, Square.CENTER,
+        state.revision(), UUID.randomUUID(), state.turnStartedAt());
+    assertTrue(service.apply(state, command).accepted());
+    MatchApplicationService.ApplyResult stale = service.apply(state, command);
+    assertFalse(stale.accepted());
+    assertEquals(CardCustodyPort.Failure.STALE_REVISION, stale.failure());
   }
 
   @Test
@@ -97,6 +123,39 @@ final class MatchApplicationServiceTest {
         match, oneOwner, selectedOne, UUID.randomUUID(), twoOwner, selectedTwo, UUID.randomUUID()));
     assertTrue(result.accepted());
     assertEquals(List.of(selectedOne, selectedTwo), custody.preparedCopies);
+  }
+
+  @Test
+  void randomStartRejectsWrongOwnerBeforeReservation() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardDefinition> definitions = new ArrayList<>();
+    List<CardCopy> one = new ArrayList<>();
+    List<CardCopy> two = new ArrayList<>();
+    for (int index = 1; index <= 10; index++) {
+      definitions.add(new CardDefinition(new CardId(index), "No. " + index, "Card " + index,
+          1, CardType.NORMAL, 1, 1, 1, 1, 0));
+      one.add(new CardCopy(new CardCopyId(UUID.randomUUID()), new CardId(index), oneOwner));
+      two.add(new CardCopy(new CardCopyId(UUID.randomUUID()), new CardId(index), twoOwner));
+    }
+    MatchEngine.StartMatch valid = new MatchEngine.StartMatch(new MatchId("random-owner"),
+        new Deck(one.subList(0, 5)), new Deck(two.subList(0, 5)),
+        new CardCatalog(definitions, "random-owner-v1"),
+        new MatchRules(org.aincraft.mobmatrix.domain.Rule.RANDOM), 11L,
+        Instant.parse("2026-01-01T00:00:00Z"), one, two);
+    List<CardCopyId> selected = MatchEngine.start(valid).state().hand(PlayerSeat.ONE).stream()
+        .map(card -> card.copyId()).toList();
+    RecordingCustody custody = new RecordingCustody();
+
+    MatchApplicationService.MatchStartResult result = new MatchApplicationService(custody).start(
+        new MatchApplicationService.StartMatchRequest(valid, twoOwner, selected,
+            UUID.randomUUID(), twoOwner,
+            MatchEngine.start(valid).state().hand(PlayerSeat.TWO).stream()
+                .map(card -> card.copyId()).toList(), UUID.randomUUID()));
+
+    assertFalse(result.accepted());
+    assertEquals(CardCustodyPort.Failure.MISMATCHED_OWNER, result.failure());
+    assertTrue(custody.calls.isEmpty());
   }
   @Test
   void reusingOperationForDifferentMatchIsRejectedByDurableMatchBinding() {
@@ -457,6 +516,24 @@ final class MatchApplicationServiceTest {
   }
 
   @Test
+  void cleanupPreservesRecoveryWhenAdapterUsesUnsupportedDefaultAbort() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = copies();
+    DefaultAbortCustody custody = new DefaultAbortCustody();
+    MatchApplicationService.MatchStartResult result = new MatchApplicationService(custody,
+        new FailingInitialRepository()).start(new MatchApplicationService.StartMatchRequest(
+            match("default-abort", oneOwner, oneCopies, twoOwner, twoCopies),
+            oneOwner, oneCopies, UUID.randomUUID(), twoOwner, twoCopies, UUID.randomUUID()));
+
+    assertFalse(result.accepted());
+    assertFalse(custody.returnedOperations.isEmpty());
+    assertTrue(result.pendingRecoveryCopyIds().containsAll(oneCopies));
+    assertTrue(result.pendingRecoveryCopyIds().containsAll(twoCopies));
+  }
+
+  @Test
   void activeRetryRejectsCustodyAdapterWithAbsentDurableMetadata() {
     CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
     CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
@@ -735,6 +812,39 @@ final class MatchApplicationServiceTest {
       return RecoveryResult.none(operationId);
     }
     private record Binding(MatchId matchId, CopyOwner owner, List<CardCopyId> copyIds) {}
+  }
+
+  private static final class DefaultAbortCustody implements CardCustodyPort {
+    private final Map<UUID, List<CardCopyId>> expected = new java.util.HashMap<>();
+    private final List<UUID> returnedOperations = new ArrayList<>();
+
+    @Override
+    public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
+      expected.put(operationId, List.copyOf(copyIds));
+      return PrepareResult.success(operationId, owner, copyIds, List.of());
+    }
+
+    @Override
+    public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId,
+        MatchId matchId) {
+      return prepare(owner, copyIds, operationId);
+    }
+
+    @Override
+    public CustodyResult escrow(UUID operationId) {
+      return CustodyResult.success(operationId, OperationStatus.ESCROWED);
+    }
+
+    @Override
+    public ReturnResult returnCopies(UUID operationId) {
+      returnedOperations.add(operationId);
+      return ReturnResult.returned(operationId, expected.getOrDefault(operationId, List.of()));
+    }
+
+    @Override
+    public RecoveryResult recover(UUID operationId) {
+      return RecoveryResult.none(operationId);
+    }
   }
 }
 

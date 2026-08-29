@@ -98,6 +98,8 @@ public final class MatchEngine {
     if (activeRules.has(Rule.RANDOM)) {
       MatchErrorCode randomError = validateRandomPools(start.oneInventory(), start.twoInventory(), start.catalog());
       if (randomError != null) return startRejected(randomError, randomError.name());
+      MatchErrorCode ownerError = validateRandomOwners(start);
+      if (ownerError != null) return startRejected(ownerError, ownerError.name());
     }
     if (overlappingPhysicalCopies(start)) {
       return startRejected(MatchErrorCode.INVALID_COMMAND, "seat copy UUIDs overlap");
@@ -194,6 +196,23 @@ public final class MatchEngine {
     } catch (DuplicateRandomCopyException duplicate) {
       return MatchErrorCode.RANDOM_DUPLICATE_COPY;
     }
+  }
+
+  private static MatchErrorCode validateRandomOwners(StartMatch start) {
+    MatchErrorCode one = validateRandomSeatOwners(start.oneDeck().copies(), start.oneInventory());
+    if (one != null) return one;
+    return validateRandomSeatOwners(start.twoDeck().copies(), start.twoInventory());
+  }
+
+  private static MatchErrorCode validateRandomSeatOwners(List<CardCopy> deck,
+      List<CardCopy> inventory) {
+    if (deck.isEmpty()) return MatchErrorCode.INVALID_COMMAND;
+    CopyOwner expected = deck.getFirst().owner();
+    if (deck.stream().anyMatch(copy -> !copy.owner().equals(expected))
+        || inventory.stream().anyMatch(copy -> !copy.owner().equals(expected))) {
+      return MatchErrorCode.INVALID_COMMAND;
+    }
+    return null;
   }
 
   private static int countUsableRandomCopies(List<CardCopy> inventory, CardCatalog catalog,
