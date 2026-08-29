@@ -147,7 +147,6 @@ Note: Recompile with -Xlint:unchecked for details.
 
 FAILURE: Build failed with an exception.
 ```
-Follow-up implementation commit: `d660338` (`fix: reject null draft selections`)
 
 GREEN command:
 
@@ -180,3 +179,4 @@ BUILD SUCCESSFUL in 1s
 - Regenerated Three Open selections on every Sudden Death restart, preserved continuation transcript decisions, advanced restart revisions exactly once, and stopped after the fifth consecutive draw.
 
 Implementation commit: `38eebce` (`fix: preserve advanced rule state`)
+Follow-up implementation commit: `d660338` (`fix: reject null draft selections`)
