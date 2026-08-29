@@ -371,6 +371,106 @@ final class SqliteCustodyTest {
     Files.deleteIfExists(path);
   }
   @Test
+  void findStateRejectsAbsentPersistedCatalogDefinitions() throws Exception {
+    var path = Files.createTempFile("mobmatrix-catalog-absent", ".sqlite");
+    MatchState original = snapshotState("catalog-absent");
+    try (Database database = new Database(path)) {
+      SqliteMatchRepository repository = new SqliteMatchRepository(database);
+      assertTrue(repository.save(0L, original).accepted());
+      try (var delete = database.connection().prepareStatement(
+          "DELETE FROM card_definitions WHERE snapshot_id = ?")) {
+        delete.setString(1, original.catalog().snapshotId());
+        delete.executeUpdate();
+      }
+      assertThrows(IllegalArgumentException.class,
+          () -> repository.findState(original.matchId(), original.catalog()));
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void directRevisionZeroSavePersistsCompleteCatalogDefinitions() throws Exception {
+    var path = Files.createTempFile("mobmatrix-catalog-save", ".sqlite");
+    MatchState original = snapshotState("catalog-save");
+    try (Database database = new Database(path)) {
+      SqliteMatchRepository repository = new SqliteMatchRepository(database);
+      assertTrue(repository.save(0L, original).accepted());
+      try (var query = database.connection().prepareStatement(
+          "SELECT COUNT(*) FROM card_definitions WHERE snapshot_id = ?")) {
+        query.setString(1, original.catalog().snapshotId());
+        try (var rows = query.executeQuery()) {
+          assertTrue(rows.next());
+          assertEquals(original.catalog().all().size(), rows.getInt(1));
+        }
+      }
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void catalogSnapshotCannotBeOverwrittenWithAlteredDefinitions() throws Exception {
+    var path = Files.createTempFile("mobmatrix-catalog-overwrite", ".sqlite");
+    MatchState original = snapshotState("catalog-overwrite");
+    SqliteCardRepository.CatalogSnapshot snapshot = new SqliteCardRepository.CatalogSnapshot(
+        original.catalog().snapshotId(), "test", "digest", "{}");
+    try (Database database = new Database(path)) {
+      SqliteCardRepository cards = new SqliteCardRepository(database);
+      cards.saveCatalogSnapshot(snapshot, original.catalog().all());
+      List<CardDefinition> alteredDefinitions = new ArrayList<>(original.catalog().all());
+      CardDefinition first = alteredDefinitions.getFirst();
+      alteredDefinitions.set(0, new CardDefinition(first.id(), first.publicNumber(), "Altered",
+          first.stars(), first.type(), first.top(), first.right(), first.bottom(), first.left(),
+          first.salePrice()));
+      assertThrows(IllegalArgumentException.class,
+          () -> cards.saveCatalogSnapshot(snapshot, alteredDefinitions));
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void nonSwapSuddenDeathCapturedCardRehydratesAfterRestart() {
+    MatchState started = snapshotState("sudden-death-captured");
+    CardCopy captured = started.hand(PlayerSeat.ONE).getFirst().copy();
+    Map<PlayerSeat, List<org.aincraft.mobmatrix.domain.HandCard>> hands = new EnumMap<>(PlayerSeat.class);
+    hands.put(PlayerSeat.ONE, started.hand(PlayerSeat.ONE).subList(1, started.hand(PlayerSeat.ONE).size()));
+    List<org.aincraft.mobmatrix.domain.HandCard> opposing = new ArrayList<>(started.hand(PlayerSeat.TWO));
+    opposing.add(new org.aincraft.mobmatrix.domain.HandCard(captured,
+        started.catalog().require(captured.cardId())));
+    hands.put(PlayerSeat.TWO, opposing);
+    MatchState suddenDeath = MatchState.rehydrate(started.matchId(), started.catalog(),
+        new MatchRules(org.aincraft.mobmatrix.domain.Rule.SUDDEN_DEATH), started.board(), hands,
+        started.currentSeat(), started.revision(), started.result(), started.bankMillis(),
+        started.turnStartedAt(), started.graceDeadline(), started.turnDeadline(),
+        started.commandIds(), started.seed(), started.transcript(), started.revealedCardsMap(),
+        started.originalOwners(), started.consecutiveDraws(), started.draftOfferings(),
+        started.draftSelections(), started.chaosChoices());
+
+    MatchState restored = MatchStateSnapshotCodec.decode(
+        MatchStateSnapshotCodec.encode(suddenDeath), suddenDeath.catalog());
+
+    assertEquals(suddenDeath.hand(PlayerSeat.TWO), restored.hand(PlayerSeat.TWO));
+    assertEquals(PlayerSeat.ONE, restored.originalOwners().get(captured.copyId()));
+  }
+
+  @Test
+  void plainInitialSnapshotWithEmptyOriginalOwnersRehydrates() {
+    MatchState started = snapshotState("plain-empty-owners");
+    MatchState plain = MatchState.rehydrate(started.matchId(), started.catalog(), started.rules(),
+        started.board(), started.hands(), started.currentSeat(), started.revision(), started.result(),
+        started.bankMillis(), started.turnStartedAt(), started.graceDeadline(), started.turnDeadline(),
+        started.commandIds(), started.seed(), started.transcript(), started.revealedCardsMap(),
+        Map.of(), started.consecutiveDraws(), started.draftOfferings(), started.draftSelections(),
+        started.chaosChoices());
+
+    MatchState restored = MatchStateSnapshotCodec.decode(
+        MatchStateSnapshotCodec.encode(plain), plain.catalog());
+
+    assertEquals(plain.hands(), restored.hands());
+    assertEquals(plain.hand(PlayerSeat.ONE).size() + plain.hand(PlayerSeat.TWO).size(),
+        restored.originalOwners().size());
+  }
+
+  @Test
   void snapshotRejectsDuplicateHandAndBoardCopyUuid() {
     MatchState initial = snapshotState("duplicate-snapshot");
     PlayerSeat actor = initial.currentSeat();

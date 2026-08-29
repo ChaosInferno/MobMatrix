@@ -49,6 +49,7 @@ public final class SqliteMatchRepository implements MatchRepository {
             connection.rollback();
             return new SaveResult(false, -1, Failure.INVALID_STATE);
           }
+          persistCatalogSnapshot(connection, state.catalog());
           try (var insert = connection.prepareStatement("""
               INSERT INTO matches(match_id, revision, status, state_bytes, transcript_json, updated_at)
               VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -124,6 +125,7 @@ public final class SqliteMatchRepository implements MatchRepository {
           connection.rollback();
           return SaveResult.stale(current);
         }
+        persistCatalogSnapshot(connection, state.catalog());
         try (var insert = connection.prepareStatement("""
             INSERT INTO matches(match_id, revision, status, state_bytes, transcript_json, updated_at)
             VALUES (?, 0, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -190,7 +192,14 @@ public final class SqliteMatchRepository implements MatchRepository {
     Objects.requireNonNull(catalogResolver, "catalog resolver is required");
     var catalog = Objects.requireNonNull(catalogResolver.apply(
         MatchStateSnapshotCodec.catalogSnapshotId(snapshot.stateBytes())), "catalog is required");
+
     return Optional.of(rehydrate(snapshot, catalog));
+  }
+  private static void persistCatalogSnapshot(Connection connection, CardCatalog catalog)
+      throws SQLException {
+    SqliteCardRepository.persistCatalogSnapshot(connection,
+        new SqliteCardRepository.CatalogSnapshot(catalog.snapshotId(), "match-state",
+            "catalog-" + catalog.snapshotId(), "{}"), catalog.all());
   }
   private void requirePersistedCatalogMatch(String snapshotId, CardCatalog catalog) {
     try {
@@ -202,7 +211,9 @@ public final class SqliteMatchRepository implements MatchRepository {
           persisted = rows.next();
         }
       }
-      if (!persisted) return;
+      if (!persisted) {
+        throw new IllegalArgumentException("persisted catalog snapshot is absent");
+      }
       List<CardDefinition> definitions = new ArrayList<>();
       try (var query = connection.prepareStatement("""
           SELECT catalog_id, public_number, name, stars, type, top_value, right_value,

@@ -14,7 +14,9 @@ import org.aincraft.mobmatrix.application.CardCustodyPort;
 import org.aincraft.mobmatrix.application.CardCustodyPort.OperationStatus;
 import org.aincraft.mobmatrix.application.SerializedItemSnapshot;
 import org.aincraft.mobmatrix.domain.CardCopyId;
+import org.aincraft.mobmatrix.domain.CardDefinition;
 import org.aincraft.mobmatrix.domain.CardId;
+import org.aincraft.mobmatrix.domain.CardType;
 import org.aincraft.mobmatrix.domain.CopyOwner;
 
 /** JDBC repository for card ledger, reservations, exact escrow bytes, and recovery rows. */
@@ -72,50 +74,90 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     });
   }
   public void saveCatalogSnapshot(CatalogSnapshot snapshot,
-      java.util.Collection<org.aincraft.mobmatrix.domain.CardDefinition> definitions) {
+      java.util.Collection<CardDefinition> definitions) {
     Objects.requireNonNull(snapshot, "snapshot is required");
     Objects.requireNonNull(definitions, "definitions are required");
-    inTransaction(() -> {
-      try (var insert = connection.prepareStatement("""
-          INSERT INTO catalog_snapshots(snapshot_id, source, digest, created_at, metadata_json)
-          VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
-          ON CONFLICT(snapshot_id) DO UPDATE SET source = excluded.source, digest = excluded.digest,
-            metadata_json = excluded.metadata_json
-          """)) {
-        insert.setString(1, snapshot.snapshotId());
-        insert.setString(2, snapshot.source());
-        insert.setString(3, snapshot.digest());
-        insert.setString(4, snapshot.metadataJson());
-        insert.executeUpdate();
-      }
-      try (var cardInsert = connection.prepareStatement("""
-          INSERT INTO card_definitions(snapshot_id, catalog_id, public_number, name, stars, type,
-            top_value, right_value, bottom_value, left_value, sale_price)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-          ON CONFLICT(snapshot_id, catalog_id) DO UPDATE SET public_number = excluded.public_number,
-            name = excluded.name, stars = excluded.stars, type = excluded.type,
-            top_value = excluded.top_value, right_value = excluded.right_value,
-            bottom_value = excluded.bottom_value, left_value = excluded.left_value,
-            sale_price = excluded.sale_price
-          """)) {
-        for (var definition : definitions) {
-          cardInsert.setString(1, snapshot.snapshotId());
-          cardInsert.setInt(2, definition.id().value());
-          cardInsert.setString(3, definition.publicNumber());
-          cardInsert.setString(4, definition.name());
-          cardInsert.setInt(5, definition.stars());
-          cardInsert.setString(6, definition.type().name());
-          cardInsert.setInt(7, definition.top());
-          cardInsert.setInt(8, definition.right());
-          cardInsert.setInt(9, definition.bottom());
-          cardInsert.setInt(10, definition.left());
-          cardInsert.setInt(11, definition.salePrice());
-          cardInsert.addBatch();
-        }
-        cardInsert.executeBatch();
-      }
-    });
+    inTransaction(() -> persistCatalogSnapshot(connection, snapshot, definitions));
   }
+
+  /**
+   * Persists a catalog snapshot only when its complete definition set is new or identical.
+   * The caller owns the transaction so match revision-0 state and catalog rows can commit
+   * atomically.
+   */
+  static void persistCatalogSnapshot(Connection connection, CatalogSnapshot snapshot,
+      java.util.Collection<CardDefinition> definitions) throws SQLException {
+    List<CardDefinition> expected = Objects.requireNonNull(definitions, "definitions are required")
+        .stream().sorted(java.util.Comparator.comparingInt(definition -> definition.id().value())).toList();
+    Objects.requireNonNull(snapshot, "snapshot is required");
+    boolean exists;
+    try (var query = connection.prepareStatement(
+        "SELECT 1 FROM catalog_snapshots WHERE snapshot_id = ?")) {
+      query.setString(1, snapshot.snapshotId());
+      try (var rows = query.executeQuery()) {
+        exists = rows.next();
+      }
+    }
+    if (exists) {
+      List<CardDefinition> persisted = readDefinitions(connection, snapshot.snapshotId());
+      if (!persisted.equals(expected)) {
+        throw new IllegalArgumentException("catalog definitions already exist with different values");
+      }
+      return;
+    }
+    try (var insert = connection.prepareStatement("""
+        INSERT INTO catalog_snapshots(snapshot_id, source, digest, created_at, metadata_json)
+        VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
+        """)) {
+      insert.setString(1, snapshot.snapshotId());
+      insert.setString(2, snapshot.source());
+      insert.setString(3, snapshot.digest());
+      insert.setString(4, snapshot.metadataJson());
+      insert.executeUpdate();
+    }
+    try (var cardInsert = connection.prepareStatement("""
+        INSERT INTO card_definitions(snapshot_id, catalog_id, public_number, name, stars, type,
+          top_value, right_value, bottom_value, left_value, sale_price)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """)) {
+      for (CardDefinition definition : expected) {
+        cardInsert.setString(1, snapshot.snapshotId());
+        cardInsert.setInt(2, definition.id().value());
+        cardInsert.setString(3, definition.publicNumber());
+        cardInsert.setString(4, definition.name());
+        cardInsert.setInt(5, definition.stars());
+        cardInsert.setString(6, definition.type().name());
+        cardInsert.setInt(7, definition.top());
+        cardInsert.setInt(8, definition.right());
+        cardInsert.setInt(9, definition.bottom());
+        cardInsert.setInt(10, definition.left());
+        cardInsert.setInt(11, definition.salePrice());
+        cardInsert.addBatch();
+      }
+      cardInsert.executeBatch();
+    }
+  }
+
+  private static List<CardDefinition> readDefinitions(Connection connection, String snapshotId)
+      throws SQLException {
+    List<CardDefinition> definitions = new ArrayList<>();
+    try (var query = connection.prepareStatement("""
+        SELECT catalog_id, public_number, name, stars, type, top_value, right_value,
+          bottom_value, left_value, sale_price
+        FROM card_definitions WHERE snapshot_id = ? ORDER BY catalog_id
+        """)) {
+      query.setString(1, snapshotId);
+      try (var rows = query.executeQuery()) {
+        while (rows.next()) {
+          definitions.add(new CardDefinition(new CardId(rows.getInt(1)), rows.getString(2),
+              rows.getString(3), rows.getInt(4), CardType.valueOf(rows.getString(5)),
+              rows.getInt(6), rows.getInt(7), rows.getInt(8), rows.getInt(9), rows.getInt(10)));
+        }
+      }
+    }
+    return List.copyOf(definitions);
+  }
+
 
   public Optional<CatalogSnapshot> findCatalogSnapshot(String snapshotId) {
     try (var query = connection.prepareStatement(

@@ -229,6 +229,20 @@ public final class MatchStateSnapshotCodec {
           throw new IllegalArgumentException("duplicate original-owner copy UUID");
         }
       }
+      boolean ownershipMetadataRequired = rules.contains(Rule.RANDOM) || rules.contains(Rule.SWAP);
+      boolean inferredOwnership = originalOwners.isEmpty() && !ownershipMetadataRequired;
+      if (inferredOwnership) {
+        for (PlayerSeat seat : PlayerSeat.values()) {
+          for (HandCard card : hands.get(seat)) {
+            if (card.copy().owner().isPlayer()) originalOwners.put(card.copyId(), seat);
+          }
+        }
+        for (Board.Cell cell : board.cells()) {
+          if (cell != null && cell.copy().owner().isPlayer()) {
+            originalOwners.put(cell.copy().copyId(), cell.owner());
+          }
+        }
+      }
       Set<CardCopyId> expectedOriginalOwners = new HashSet<>();
       Map<UUID, PlayerSeat> originalSeatByOwner = new HashMap<>();
       for (var entry : activeCopies.entrySet()) {
@@ -237,23 +251,12 @@ public final class MatchStateSnapshotCodec {
         expectedOriginalOwners.add(copy.copyId());
         PlayerSeat originalSeat = originalOwners.get(copy.copyId());
         PlayerSeat priorSeat = originalSeatByOwner.putIfAbsent(copy.owner().playerId(), originalSeat);
-        if (originalSeat == null || (priorSeat != null && priorSeat != originalSeat)) {
+        if (originalSeat == null || (!inferredOwnership && priorSeat != null && priorSeat != originalSeat)) {
           throw new IllegalArgumentException("original-owner seat mismatch");
         }
       }
       if (!originalOwners.keySet().equals(expectedOriginalOwners)) {
         throw new IllegalArgumentException("original-owner metadata does not cover active copies");
-      }
-      if (originalSeatByOwner.size() > 0) {
-        for (PlayerSeat seat : PlayerSeat.values()) {
-          for (HandCard card : hands.get(seat)) {
-            if (card.copy().owner().isPlayer()
-                && !rules.contains(Rule.SWAP)
-                && originalOwners.get(card.copyId()) != seat) {
-              throw new IllegalArgumentException("original-owner seat mismatch");
-            }
-          }
-        }
       }
       int consecutiveDraws = in.readInt();
       Map<PlayerSeat, DraftOfferings.SeatOffers> offerings = new EnumMap<>(PlayerSeat.class);
