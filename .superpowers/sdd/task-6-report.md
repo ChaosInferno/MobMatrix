@@ -2,9 +2,9 @@
 
 ## Status
 
-Implemented and committed durable match-bound custody operation identity, duplicate-safe restoration gating, PREPARED recovery cleanup, exact snapshot custody, movement guards, strict CAS, and prior Task 6 recovery requirements.
+Implemented and committed durable match-bound custody operation identity, duplicate-safe restoration gating, PREPARED recovery cleanup, exact snapshot custody, movement guards, strict CAS, upgrade migration coverage, and prior Task 6 recovery requirements.
 
-Implementation commits: `83cdb3b` (`fix: bind custody operations to matches`), plus prior Task 6 commits `a504b4c`, `6d1af52`, and `b307ad7`.
+Implementation commits: `83cdb3b` (`fix: bind custody operations to matches`) and `31b099a` (`fix: exercise durable duplicate recovery`), plus prior Task 6 commits `a504b4c`, `6d1af52`, and `b307ad7`.
 
 ## TDD and focused verification
 
@@ -110,33 +110,33 @@ Corrections cover byte-for-byte same-UUID restoration and replacement, one-trans
 The final focused run still skipped the four Paper-registry codec tests because no running Paper registry is available; they are not executed proof. No formatter, linter, project-wide build, or project-wide suite was run.
 ## Task 6 third-review corrections
 
-Implementation commit: `83cdb3b` (`fix: bind custody operations to matches`)
+Implementation commits: `83cdb3b` (`fix: bind custody operations to matches`) and `31b099a` (`fix: exercise durable duplicate recovery`)
 
-The regression-focused red command was run after adding match-bound retry, terminal-operation retry, first-seat rejection cleanup, PREPARED recovery, duplicate-restoration gating, and SQLite match-binding tests:
+The regression-focused red command was run after adding match-bound retry, terminal-operation retry, first-seat rejection cleanup, PREPARED recovery, duplicate-restoration recovery, and V2-to-V3 migration tests:
 
 ```text
 cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
 ```
 
-Exact red result for the new duplicate-restoration regression:
+Exact red result for the duplicate-restoration regression before the focused restore seam was implemented:
 
 ```text
 > Task :compileTestJava FAILED
-CardInventoryServiceTest.java:11: error: cannot find symbol
-  symbol:   method restorationMustRemainPending(boolean,boolean)
-3 errors
+CardInventoryServiceTest.java:36: error: cannot find symbol
+  symbol:   method restoreAmbiguous(UUID,CopyOwner,List<CardCopyId>,List<SerializedItemSnapshot>,Set<Object>,SqliteCardRepository)
+1 error
 FAILURE: Build failed with an exception.
 ```
 
-Exact green result for that focused regression command:
+Exact green result for the strengthened regression command:
 
 ```text
 > Task :test
-BUILD SUCCESSFUL in 1s
-4 actionable tasks: 2 executed, 2 up-to-date
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 3 executed, 1 up-to-date
 ```
 
-The required focused adapter/domain/bot command was rerun without the extra CardInventoryServiceTest selector:
+The required focused adapter/domain/bot command was rerun after the strengthened tests:
 
 ```text
 cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
@@ -150,7 +150,7 @@ BUILD SUCCESSFUL in 1s
 4 actionable tasks: 1 executed, 3 up-to-date
 ```
 
-The extra regression command selected 60 tests: 56 passed and 4 Paper-registry codec tests were assumption-skipped. The required command selected 59 tests: 55 passed and the same 4 codec tests were assumption-skipped. Current source counts are 6 storage tests, 7 application tests, and 1 CardInventoryService test. The CardInventoryService regression exercises the production duplicate/counterfeit ambiguity gate without constructing Paper items; the four codec tests remain skipped because this environment has no running Paper registry.
+The extra regression command selected 61 tests: 57 passed and 4 Paper-registry codec tests were assumption-skipped. The required command selected 60 tests: 56 passed and the same 4 codec tests were assumption-skipped. Current source counts are 7 storage tests, 7 application tests, and 1 CardInventoryService test. The duplicate regression now drives the durable recovery seam and verifies `RETURN_PENDING`, no restored UUIDs, and byte-for-byte recovery snapshots. The PREPARED regression uses the SQLite journal and verifies an exact pending recovery row. The V2-to-V3 migration regression removes the V3 column/marker from a live fixture, reruns migration, preserves old rows, and accepts a new match-bound row. No formatter, linter, project-wide build, or project-wide test suite was run.
 
 Durability corrections:
 
