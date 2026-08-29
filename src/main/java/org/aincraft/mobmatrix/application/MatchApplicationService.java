@@ -331,6 +331,13 @@ public final class MatchApplicationService {
           : new CleanupSummary(List.of(), List.of());
     }
   }
+  private static Failure validateDeckSelections(StartMatchRequest request) {
+    Failure one = validateDeck(request.oneCopies(), request.match().oneDeck(), request.oneOwner(),
+        request.match().oneInventory(), request.match().rules());
+    if (one != Failure.NONE) return one;
+    return validateDeck(request.twoCopies(), request.match().twoDeck(), request.twoOwner(),
+        request.match().twoInventory(), request.match().rules());
+  }
   private static Failure validateDeck(List<CardCopyId> requested,
       org.aincraft.mobmatrix.domain.Deck deck, CopyOwner owner,
       List<org.aincraft.mobmatrix.domain.CardCopy> inventory,
