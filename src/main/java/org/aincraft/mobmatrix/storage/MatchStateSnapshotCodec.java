@@ -306,6 +306,11 @@ public final class MatchStateSnapshotCodec {
           throw new IllegalArgumentException("duplicate draft offering seat");
         }
       }
+      for (CardCopy copy : activeCopies.values()) {
+        if (copy.owner().isHouse() && !offeringCopies.containsKey(copy.copyId())) {
+          throw new IllegalArgumentException("active house copy is outside draft offerings");
+        }
+      }
       Map<PlayerSeat, DraftOfferings.Selection> selections = new EnumMap<>(PlayerSeat.class);
       int selectionCount = readCount(in, "draft selections");
       for (int i = 0; i < selectionCount; i++) {
@@ -363,10 +368,19 @@ public final class MatchStateSnapshotCodec {
       if (!chaosRule && !chaos.isEmpty()) {
         throw new IllegalArgumentException("non-chaos snapshot contains chaos choices");
       }
-      for (var entry : chaos.entrySet()) {
-        if (hands.get(entry.getKey()).stream()
-            .noneMatch(card -> card.copyId().equals(entry.getValue()))) {
-          throw new IllegalArgumentException("chaos choice is not in that seat's hand");
+      if (chaosRule) {
+        if (hands.get(currentSeat).isEmpty()) {
+          if (!chaos.isEmpty()) {
+            throw new IllegalArgumentException("empty current hand cannot have chaos choice");
+          }
+        } else if (chaos.size() != 1 || !chaos.containsKey(currentSeat)) {
+          throw new IllegalArgumentException("chaos choice must belong to current seat");
+        }
+        for (var entry : chaos.entrySet()) {
+          if (hands.get(entry.getKey()).stream()
+              .noneMatch(card -> card.copyId().equals(entry.getValue()))) {
+            throw new IllegalArgumentException("chaos choice is not in that seat's hand");
+          }
         }
       }
       MatchState state = MatchState.rehydrate(matchId, catalog, new MatchRules(rules), board, hands,

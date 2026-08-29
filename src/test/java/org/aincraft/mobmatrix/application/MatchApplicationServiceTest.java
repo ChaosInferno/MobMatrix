@@ -92,6 +92,81 @@ final class MatchApplicationServiceTest {
     assertEquals(canonical, repository.state);
     assertEquals(0, repository.saves);
   }
+  @Test
+  void applyPreservesDatabaseAndInvalidStateSaveFailures() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    MatchState canonical = MatchEngine.start(
+        match("apply-save-failure", oneOwner, copies(), twoOwner, copies())).state();
+    MatchCommand.PlaceCard command = new MatchCommand.PlaceCard(canonical.currentSeat(),
+        canonical.hand(canonical.currentSeat()).getFirst().copyId(), Square.CENTER,
+        canonical.revision(), UUID.randomUUID(), canonical.turnStartedAt());
+
+    for (MatchRepository.Failure failure : List.of(MatchRepository.Failure.DATABASE_ERROR,
+        MatchRepository.Failure.INVALID_STATE)) {
+      MatchApplicationService.ApplyResult result = new MatchApplicationService(
+          new RecordingCustody(), new SaveFailureMatchRepository(canonical, failure)).apply(
+              canonical, command);
+      assertEquals(failure == MatchRepository.Failure.DATABASE_ERROR
+          ? CardCustodyPort.Failure.DATABASE_ERROR : CardCustodyPort.Failure.INVALID_STATE,
+          result.failure());
+    }
+  }
+
+  @Test
+  void rejectedInitialSaveKeepsConcurrentMatchingWinnerCustody() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = copies();
+    UUID oneOperation = UUID.randomUUID();
+    UUID twoOperation = UUID.randomUUID();
+    MatchEngine.StartMatch start = match("initial-race", oneOwner, oneCopies, twoOwner, twoCopies);
+    RaceInitialRepository repository = new RaceInitialRepository();
+    RecordingCustody custody = new RecordingCustody();
+    MatchApplicationService.MatchStartResult result = new MatchApplicationService(custody,
+        repository).start(new MatchApplicationService.StartMatchRequest(start, oneOwner, oneCopies,
+            oneOperation, twoOwner, twoCopies, twoOperation));
+
+    assertTrue(result.accepted());
+    assertEquals(repository.winner, result.state());
+    assertFalse(custody.calls.contains("return"));
+  }
+
+  @Test
+  void thrownInitialSaveKeepsConcurrentMatchingWinnerCustody() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = copies();
+    MatchEngine.StartMatch start = match("initial-throw-race", oneOwner, oneCopies, twoOwner,
+        twoCopies);
+    RecordingCustody custody = new RecordingCustody();
+    MatchApplicationService.MatchStartResult result = new MatchApplicationService(custody,
+        new RaceInitialRepository(true)).start(new MatchApplicationService.StartMatchRequest(start,
+            oneOwner, oneCopies, UUID.randomUUID(), twoOwner, twoCopies, UUID.randomUUID()));
+
+    assertTrue(result.accepted());
+    assertFalse(custody.calls.contains("return"));
+  }
+
+  @Test
+  void rejectedInitialSaveLeavesCustodyWhenDurableWinnerReadIsAmbiguous() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = copies();
+    MatchEngine.StartMatch start = match("initial-ambiguous", oneOwner, oneCopies, twoOwner,
+        twoCopies);
+    RecordingCustody custody = new RecordingCustody();
+    MatchApplicationService.MatchStartResult result = new MatchApplicationService(custody,
+        new AmbiguousInitialRepository()).start(new MatchApplicationService.StartMatchRequest(start,
+            oneOwner, oneCopies, UUID.randomUUID(), twoOwner, twoCopies, UUID.randomUUID()));
+
+    assertFalse(result.accepted());
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, result.failure());
+    assertFalse(custody.calls.contains("return"));
+  }
 
 
   @Test
@@ -894,6 +969,96 @@ final class MatchApplicationServiceTest {
     @Override
     public RecoveryResult recover(UUID operationId) {
       return RecoveryResult.none(operationId);
+    }
+  }
+  private static final class SaveFailureMatchRepository implements MatchRepository {
+    private final MatchState state;
+    private final MatchRepository.Failure failure;
+
+    private SaveFailureMatchRepository(MatchState state, MatchRepository.Failure failure) {
+      this.state = state;
+      this.failure = failure;
+    }
+
+    @Override
+    public SaveResult save(long expectedRevision, MatchState successor) {
+      return new SaveResult(false, state.revision(), failure);
+    }
+
+    @Override
+    public java.util.Optional<MatchSnapshot> find(MatchId matchId) {
+      return java.util.Optional.empty();
+    }
+
+    @Override
+    public java.util.Optional<MatchState> findState(MatchId matchId, CardCatalog catalog) {
+      return java.util.Optional.of(state);
+    }
+  }
+
+  private static final class RaceInitialRepository implements MatchRepository {
+    private MatchState winner;
+    private MatchRepository.StartBinding binding;
+    private final boolean throwAfterSave;
+
+    private RaceInitialRepository() {
+      this(false);
+    }
+
+    private RaceInitialRepository(boolean throwAfterSave) {
+      this.throwAfterSave = throwAfterSave;
+    }
+
+    @Override
+    public SaveResult save(long expectedRevision, MatchState state) {
+      return SaveResult.stale(state.revision());
+    }
+
+    @Override
+    public SaveResult saveInitial(MatchState state, MatchRepository.StartBinding binding) {
+      this.winner = state;
+      this.binding = binding;
+      if (throwAfterSave) throw new IllegalStateException("commit result unavailable");
+      return SaveResult.stale(0L);
+    }
+
+    @Override
+    public java.util.Optional<MatchSnapshot> find(MatchId matchId) {
+      return winner == null ? java.util.Optional.empty()
+          : java.util.Optional.of(new MatchSnapshot(matchId, winner.revision(), "ACTIVE",
+              new byte[] {1}, "{}"));
+    }
+
+    @Override
+    public java.util.Optional<MatchState> findState(MatchId matchId, CardCatalog catalog) {
+      return java.util.Optional.ofNullable(winner);
+    }
+
+    @Override
+    public java.util.Optional<MatchRepository.StartBinding> findStartBinding(MatchId matchId) {
+      return java.util.Optional.ofNullable(binding);
+    }
+  }
+
+  private static final class AmbiguousInitialRepository implements MatchRepository {
+    @Override
+    public SaveResult save(long expectedRevision, MatchState state) {
+      return SaveResult.stale(state.revision());
+    }
+
+    @Override
+    public SaveResult saveInitial(MatchState state, MatchRepository.StartBinding binding) {
+      return new SaveResult(false, -1L, MatchRepository.Failure.DATABASE_ERROR);
+    }
+
+    @Override
+    public java.util.Optional<MatchSnapshot> find(MatchId matchId) {
+      throw new IllegalStateException("database unavailable");
+    }
+
+    @Override
+    public java.util.Optional<MatchState> findState(MatchId matchId, CardCatalog catalog) {
+      throw new IllegalStateException("database unavailable");
     }
   }
 }

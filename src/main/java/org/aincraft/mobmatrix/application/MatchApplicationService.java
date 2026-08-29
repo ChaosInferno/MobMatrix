@@ -123,18 +123,10 @@ public final class MatchApplicationService {
           plan.oneCopies(), request.oneOperationId(), request.twoOwner(), plan.twoCopies(),
           request.twoOperationId()));
     } catch (RuntimeException exception) {
-      CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
-      cleanup = cleanup.plus(cleanup(request.twoOperationId(), plan.twoCopies()));
-      return MatchStartResult.rejected(request.match().matchId(), Failure.DATABASE_ERROR, cleanup);
+      return initialSaveFailure(request, started.state(), plan, Failure.DATABASE_ERROR);
     }
     if (!saved.accepted()) {
-      CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
-      cleanup = cleanup.plus(cleanup(request.twoOperationId(), plan.twoCopies()));
-      Failure failure = saved.failure() == MatchRepository.Failure.STALE_REVISION
-          ? Failure.STALE_REVISION
-          : saved.failure() == MatchRepository.Failure.DATABASE_ERROR
-              ? Failure.DATABASE_ERROR : Failure.INVALID_STATE;
-      return MatchStartResult.rejected(request.match().matchId(), failure, cleanup);
+      return initialSaveFailure(request, started.state(), plan, mapSaveFailure(saved.failure()));
     }
     return MatchStartResult.active(request.match().matchId(), started.state());
   }
@@ -228,11 +220,97 @@ public final class MatchApplicationService {
       return ApplyResult.rejected(transition);
     }
     MatchRepository.SaveResult saved = matches.save(canonical.revision(), transition.state());
-    if (!saved.accepted()) return ApplyResult.stale(transition, saved.revision());
+    if (!saved.accepted()) {
+      Failure failure = switch (saved.failure()) {
+        case STALE_REVISION -> Failure.STALE_REVISION;
+        case DATABASE_ERROR -> Failure.DATABASE_ERROR;
+        case INVALID_STATE, NONE -> Failure.INVALID_STATE;
+      };
+      return new ApplyResult(transition, failure, saved.revision());
+    }
     return ApplyResult.accepted(transition);
   }
 
 
+
+  private MatchStartResult initialSaveFailure(StartMatchRequest request, MatchState startedState,
+      ReservationPlan plan, Failure failure) {
+    InitialSaveResolution resolution = recheckInitialSave(request, startedState, plan);
+    if (resolution.state() != null) {
+      return MatchStartResult.active(request.match().matchId(), resolution.state());
+    }
+    if (resolution.ambiguous()) {
+      return MatchStartResult.rejected(request.match().matchId(), Failure.DATABASE_ERROR);
+    }
+    CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
+    cleanup = cleanup.plus(cleanup(request.twoOperationId(), plan.twoCopies()));
+    return MatchStartResult.rejected(request.match().matchId(), failure, cleanup);
+  }
+
+  private InitialSaveResolution recheckInitialSave(StartMatchRequest request,
+      MatchState startedState, ReservationPlan plan) {
+    try {
+      Optional<MatchState> existing = matches.findState(request.match().matchId(),
+          request.match().catalog());
+      if (existing.isPresent()) {
+        MatchState state = existing.get();
+        Optional<MatchRepository.StartBinding> binding =
+            matches.findStartBinding(request.match().matchId());
+        if (binding.isPresent() && startBindingMatches(binding.get(), request, plan)
+            && sameInitialState(state, startedState)
+            && operationBindingsMatchStrict(request, plan, state.matchId())) {
+          return InitialSaveResolution.found(state);
+        }
+        return InitialSaveResolution.notFound();
+      }
+      return matches.find(request.match().matchId()).isPresent()
+          ? InitialSaveResolution.unknown()
+          : InitialSaveResolution.notFound();
+    } catch (RuntimeException exception) {
+      return InitialSaveResolution.unknown();
+    }
+  }
+
+  private boolean operationBindingsMatchStrict(StartMatchRequest request, ReservationPlan plan,
+      org.aincraft.mobmatrix.domain.MatchId matchId) {
+    return bindingMatchesStrict(request.oneOperationId(), request.oneOwner(), plan.oneCopies(), matchId)
+        && bindingMatchesStrict(request.twoOperationId(), request.twoOwner(), plan.twoCopies(), matchId);
+  }
+
+  private boolean bindingMatchesStrict(UUID operationId, CopyOwner owner,
+      List<CardCopyId> copies, org.aincraft.mobmatrix.domain.MatchId matchId) {
+    if (copies.isEmpty()) return true;
+    Optional<CardCustodyPort.OperationBinding> binding =
+        custody.operationBinding(operationId);
+    if (binding.isEmpty()) return false;
+    CardCustodyPort.OperationBinding value = binding.get();
+    return value.status() == OperationStatus.ESCROWED
+        && value.owner().equals(owner)
+        && value.copyIds().equals(copies)
+        && Objects.equals(value.matchId(), matchId);
+  }
+
+  private static Failure mapSaveFailure(MatchRepository.Failure failure) {
+    return switch (failure) {
+      case STALE_REVISION -> Failure.STALE_REVISION;
+      case DATABASE_ERROR -> Failure.DATABASE_ERROR;
+      case INVALID_STATE, NONE -> Failure.INVALID_STATE;
+    };
+  }
+
+  private record InitialSaveResolution(MatchState state, boolean ambiguous) {
+    private static InitialSaveResolution found(MatchState state) {
+      return new InitialSaveResolution(state, false);
+    }
+
+    private static InitialSaveResolution notFound() {
+      return new InitialSaveResolution(null, false);
+    }
+
+    private static InitialSaveResolution unknown() {
+      return new InitialSaveResolution(null, true);
+    }
+  }
 
   private boolean operationBindingsMatch(StartMatchRequest request,
       org.aincraft.mobmatrix.domain.MatchId matchId) {

@@ -349,6 +349,113 @@ final class SqliteCustodyTest {
         () -> MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(tampered),
             original.catalog()));
   }
+  @Test
+  void snapshotRejectsNonDraftHouseOwnedActiveCopy() {
+    MatchState original = snapshotState("active-house-copy");
+    PlayerSeat seat = PlayerSeat.ONE;
+    List<org.aincraft.mobmatrix.domain.HandCard> oneHand =
+        new ArrayList<>(original.hand(seat));
+    org.aincraft.mobmatrix.domain.HandCard card = oneHand.getFirst();
+    CardCopy houseCopy = new CardCopy(card.copyId(), card.cardId(), CopyOwner.house());
+    oneHand.set(0, new org.aincraft.mobmatrix.domain.HandCard(houseCopy,
+        original.catalog().require(card.cardId())));
+    Map<PlayerSeat, List<org.aincraft.mobmatrix.domain.HandCard>> hands = new EnumMap<>(
+        PlayerSeat.class);
+    hands.put(PlayerSeat.ONE, oneHand);
+    hands.put(PlayerSeat.TWO, original.hand(PlayerSeat.TWO));
+    Map<CardCopyId, PlayerSeat> owners = new HashMap<>(original.originalOwners());
+    owners.remove(card.copyId());
+    MatchState tampered = MatchState.rehydrate(original.matchId(), original.catalog(), original.rules(),
+        original.board(), hands, original.currentSeat(), original.revision(), original.result(),
+        original.bankMillis(), original.turnStartedAt(), original.graceDeadline(),
+        original.turnDeadline(), original.commandIds(), original.seed(), original.transcript(),
+        original.revealedCardsMap(), owners, original.consecutiveDraws(), original.draftOfferings(),
+        original.draftSelections(), original.chaosChoices());
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(tampered),
+            original.catalog()));
+  }
+
+  @Test
+  void snapshotRejectsChaosChoiceForOpponentSeat() {
+    MatchState original = chaosSnapshotState("chaos-opponent-choice");
+    PlayerSeat opponent = original.currentSeat() == PlayerSeat.ONE ? PlayerSeat.TWO : PlayerSeat.ONE;
+    Map<PlayerSeat, CardCopyId> choices = Map.of(opponent,
+        original.hand(opponent).getFirst().copyId());
+    MatchState tampered = MatchState.rehydrate(original.matchId(), original.catalog(), original.rules(),
+        original.board(), original.hands(), original.currentSeat(), original.revision(),
+        original.result(), original.bankMillis(), original.turnStartedAt(),
+        original.graceDeadline(), original.turnDeadline(), original.commandIds(), original.seed(),
+        original.transcript(), original.revealedCardsMap(), original.originalOwners(),
+        original.consecutiveDraws(), original.draftOfferings(), original.draftSelections(), choices);
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(tampered),
+            original.catalog()));
+  }
+
+  @Test
+  void snapshotRejectsChaosChoiceMissingForNonemptyCurrentHand() {
+    MatchState original = chaosSnapshotState("chaos-missing-choice");
+    MatchState tampered = MatchState.rehydrate(original.matchId(), original.catalog(), original.rules(),
+        original.board(), original.hands(), original.currentSeat(), original.revision(),
+        original.result(), original.bankMillis(), original.turnStartedAt(),
+        original.graceDeadline(), original.turnDeadline(), original.commandIds(), original.seed(),
+        original.transcript(), original.revealedCardsMap(), original.originalOwners(),
+        original.consecutiveDraws(), original.draftOfferings(), original.draftSelections(), Map.of());
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(tampered),
+            original.catalog()));
+  }
+
+  @Test
+  void emptyCurrentChaosHandMayHaveNoChoice() {
+    MatchState original = chaosSnapshotState("chaos-empty-current-hand");
+    Map<PlayerSeat, List<org.aincraft.mobmatrix.domain.HandCard>> hands = new EnumMap<>(
+        PlayerSeat.class);
+    hands.put(original.currentSeat(), List.of());
+    PlayerSeat opponent = original.currentSeat() == PlayerSeat.ONE ? PlayerSeat.TWO : PlayerSeat.ONE;
+    hands.put(opponent, original.hand(opponent));
+    Map<CardCopyId, PlayerSeat> owners = new HashMap<>(original.originalOwners());
+    for (var card : original.hand(original.currentSeat())) owners.remove(card.copyId());
+    MatchState valid = MatchState.rehydrate(original.matchId(), original.catalog(), original.rules(),
+        original.board(), hands, original.currentSeat(), original.revision(), original.result(),
+        original.bankMillis(), original.turnStartedAt(), original.graceDeadline(),
+        original.turnDeadline(), original.commandIds(), original.seed(), original.transcript(),
+        original.revealedCardsMap(), owners, original.consecutiveDraws(), original.draftOfferings(),
+        original.draftSelections(), Map.of());
+
+    MatchState decoded = MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(valid),
+        original.catalog());
+    assertEquals(valid.matchId(), decoded.matchId());
+    assertEquals(valid.hands(), decoded.hands());
+    assertEquals(valid.originalOwners(), decoded.originalOwners());
+  }
+
+  @Test
+  void findStateAndRehydrateRejectSnapshotRowIdentityMismatch() throws Exception {
+    var path = Files.createTempFile("mobmatrix-row-identity", ".sqlite");
+    MatchState original = snapshotState("embedded-match-id");
+    try (Database database = new Database(path)) {
+      SqliteMatchRepository repository = new SqliteMatchRepository(database);
+      assertTrue(repository.save(0L, original).accepted());
+      try (var update = database.connection().prepareStatement(
+          "UPDATE matches SET match_id = ? WHERE match_id = ?")) {
+        update.setString(1, "row-match-id");
+        update.setString(2, original.matchId().value());
+        update.executeUpdate();
+      }
+      MatchId rowId = new MatchId("row-match-id");
+      MatchRepository.MatchSnapshot snapshot = repository.find(rowId).orElseThrow();
+      assertThrows(IllegalArgumentException.class,
+          () -> repository.findState(rowId, original.catalog()));
+      assertThrows(IllegalArgumentException.class,
+          () -> repository.rehydrate(snapshot, original.catalog()));
+    }
+    Files.deleteIfExists(path);
+  }
 
   @Test
   void findStateRejectsSameIdAlteredPersistedCatalogDefinition() throws Exception {

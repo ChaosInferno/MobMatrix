@@ -174,16 +174,27 @@ public final class SqliteMatchRepository implements MatchRepository {
     Objects.requireNonNull(matchId, "match id is required");
     Objects.requireNonNull(catalog, "catalog is required");
     return find(matchId).map(snapshot -> {
+      if (!snapshot.matchId().equals(matchId)) {
+        throw new IllegalArgumentException("snapshot row match ID does not match request");
+      }
       requirePersistedCatalogMatch(MatchStateSnapshotCodec.catalogSnapshotId(snapshot.stateBytes()), catalog);
-      return MatchStateSnapshotCodec.decode(snapshot.stateBytes(), catalog);
+      MatchState state = MatchStateSnapshotCodec.decode(snapshot.stateBytes(), catalog);
+      if (!state.matchId().equals(matchId)) {
+        throw new IllegalArgumentException("snapshot state match ID does not match row");
+      }
+      return state;
     });
   }
-
   public MatchState rehydrate(MatchSnapshot snapshot, CardCatalog catalog) {
     Objects.requireNonNull(snapshot, "snapshot is required");
     Objects.requireNonNull(catalog, "catalog is required");
-    requirePersistedCatalogMatch(MatchStateSnapshotCodec.catalogSnapshotId(snapshot.stateBytes()), catalog);
-    return MatchStateSnapshotCodec.decode(snapshot.stateBytes(), catalog);
+    String snapshotCatalogId = MatchStateSnapshotCodec.catalogSnapshotId(snapshot.stateBytes());
+    requirePersistedCatalogMatch(snapshotCatalogId, catalog);
+    MatchState state = MatchStateSnapshotCodec.decode(snapshot.stateBytes(), catalog);
+    if (!state.matchId().equals(snapshot.matchId())) {
+      throw new IllegalArgumentException("snapshot state match ID does not match row");
+    }
+    return state;
   }
   @Override
   public Optional<MatchState> rehydrate(MatchSnapshot snapshot,
