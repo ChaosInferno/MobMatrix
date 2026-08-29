@@ -50,6 +50,10 @@ public final class MatchApplicationService {
     if (!started.accepted()) {
       return MatchStartResult.rejected(request.match().matchId(), Failure.INVALID_STATE);
     }
+    ReservationPlan plan = reservationPlan(started.state(), request);
+    if (plan == null) {
+      return MatchStartResult.rejected(request.match().matchId(), Failure.MISMATCHED_OPERATION);
+    }
     if (matches != null) {
       try {
         java.util.Optional<MatchState> existing = matches.findState(request.match().matchId(),
@@ -69,10 +73,6 @@ public final class MatchApplicationService {
       } catch (RuntimeException exception) {
         return MatchStartResult.rejected(request.match().matchId(), Failure.DATABASE_ERROR);
       }
-    }
-    ReservationPlan plan = reservationPlan(started.state(), request);
-    if (plan == null) {
-      return MatchStartResult.rejected(request.match().matchId(), Failure.MISMATCHED_OPERATION);
     }
 
     StartResult one;
