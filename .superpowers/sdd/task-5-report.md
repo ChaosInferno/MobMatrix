@@ -26,16 +26,21 @@ Observed output before implementation:
 > Task :classes UP-TO-DATE
 
 > Task :compileTestJava FAILED
-...HeuristicBotTest.java:36: error: cannot find symbol
-  private final BotMovePolicy bot = new HeuristicBot();
-                ^
-  symbol:   class BotMovePolicy
-...HeuristicBotTest.java:36: error: cannot find symbol
-  private final BotMovePolicy bot = new HeuristicBot();
-                                        ^
-  symbol:   class HeuristicBot
-... (the remaining references also failed because both production types were absent)
-14 errors
+`C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\bot\HeuristicBotTest.java:36: error: cannot find symbol`
+`  private final BotMovePolicy bot = new HeuristicBot();`
+`                ^`
+`  symbol:   class BotMovePolicy`
+`  location: class HeuristicBotTest`
+`C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\bot\HeuristicBotTest.java:36: error: cannot find symbol`
+`  private final BotMovePolicy bot = new HeuristicBot();`
+`                                        ^`
+`  symbol:   class HeuristicBot`
+`  location: class HeuristicBotTest`
+`C:\Users\blaze\IdeaProjects\Aincraft-MobMatrix\src\test\java\org\aincraft\mobmatrix\bot\HeuristicBotTest.java:42: error: cannot find symbol`
+`  BotMovePolicy.Decision decision = bot.choose(state, seat, new RandomTranscript(17L), START.plusSeconds(1));`
+`  symbol:   class BotMovePolicy`
+`... (the same missing-type error was emitted for the remaining 12 references at lines 43, 55, 59, 80, 94, 95, 111, 112, 134, and 136)`
+`14 errors`
 
 FAILURE: Build failed with an exception.
 
