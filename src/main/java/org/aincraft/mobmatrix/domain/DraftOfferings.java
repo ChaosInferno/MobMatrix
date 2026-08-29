@@ -116,7 +116,9 @@ public final class DraftOfferings {
     List<CardCopy> selected = new ArrayList<>();
     Map<CardCopyId, UUID> provenance = new HashMap<>();
     for (int i = 0; i < offers.offerings().size(); i++) {
-      int choice = choices.get(i);
+      Integer selectedChoice = choices.get(i);
+      if (selectedChoice == null) throw new IllegalArgumentException("offering selection is required");
+      int choice = selectedChoice;
       Offering offering = offers.offerings().get(i);
       if (choice < 0 || choice >= offering.cards().size()) {
         throw new IllegalArgumentException("offering selection must be between 0 and 4");
