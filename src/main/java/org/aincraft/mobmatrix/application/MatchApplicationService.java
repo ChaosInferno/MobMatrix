@@ -257,9 +257,10 @@ public final class MatchApplicationService {
         Optional<MatchRepository.StartBinding> binding =
             matches.findStartBinding(request.match().matchId());
         if (binding.isPresent() && startBindingMatches(binding.get(), request, plan)
-            && sameInitialState(state, startedState)
-            && operationBindingsMatchStrict(request, plan, state.matchId())) {
-          return InitialSaveResolution.found(state);
+            && sameInitialState(state, startedState)) {
+          return operationBindingsMatchStrict(request, plan, state.matchId())
+              ? InitialSaveResolution.found(state)
+              : InitialSaveResolution.unknown();
         }
         return InitialSaveResolution.notFound();
       }
