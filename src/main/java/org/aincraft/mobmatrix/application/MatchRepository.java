@@ -13,6 +13,12 @@ public interface MatchRepository {
   SaveResult save(long expectedRevision, MatchState state);
 
   Optional<MatchSnapshot> find(MatchId matchId);
+  /** Loads the executable state needed to compare an idempotent start request. */
+  default Optional<MatchState> findState(MatchId matchId, CardCatalog catalog) {
+    Objects.requireNonNull(matchId, "match id is required");
+    Objects.requireNonNull(catalog, "catalog is required");
+    return Optional.empty();
+  }
 
   default Optional<MatchSnapshot> load(MatchId matchId) {
     return find(matchId);

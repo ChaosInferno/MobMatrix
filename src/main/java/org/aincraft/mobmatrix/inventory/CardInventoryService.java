@@ -265,6 +265,22 @@ public final class CardInventoryService implements CardCustodyPort {
     return journal.openEntries().stream().map(
         org.aincraft.mobmatrix.application.CardCustodyJournal.Entry::operationId).toList();
   }
+  @Override
+  public synchronized java.util.Optional<org.aincraft.mobmatrix.domain.MatchId> operationMatchId(
+      UUID operationId) {
+    PreparedOperation operation = operation(Objects.requireNonNull(operationId));
+    return operation == null || operation.matchId == null
+        ? java.util.Optional.empty()
+        : java.util.Optional.of(new org.aincraft.mobmatrix.domain.MatchId(operation.matchId));
+  }
+
+  @Override
+  public synchronized java.util.Optional<OperationStatus> operationStatus(UUID operationId) {
+    PreparedOperation operation = operation(Objects.requireNonNull(operationId));
+    return operation == null ? java.util.Optional.empty()
+        : java.util.Optional.of(operation.status);
+  }
+
 
   private PreparedOperation operation(UUID operationId) {
     PreparedOperation existing = operations.get(operationId);
@@ -366,12 +382,49 @@ public final class CardInventoryService implements CardCustodyPort {
   public boolean handleQuit(org.bukkit.event.player.PlayerQuitEvent event) {
     return hasReservedInventory(event.getPlayer().getInventory());
   }
+  /** Cancels offhand swaps that would move a reserved card outside custody. */
+  public boolean handlePlayerSwapHandItems(
+      org.bukkit.event.player.PlayerSwapHandItemsEvent event) {
+    requirePrimaryThread();
+    Objects.requireNonNull(event, "event is required");
+    boolean reserved = isReserved(event.getMainHandItem()) || isReserved(event.getOffHandItem());
+    if (reserved) event.setCancelled(true);
+    return reserved;
+  }
+
+  /** Cancels automated hopper-style moves touching any reserved stack in either inventory. */
+  public boolean handleInventoryMoveItem(org.bukkit.event.inventory.InventoryMoveItemEvent event) {
+    requirePrimaryThread();
+    Objects.requireNonNull(event, "event is required");
+    boolean reserved = isReserved(event.getItem())
+        || containsReserved(event.getSource()) || containsReserved(event.getDestination());
+    if (reserved) event.setCancelled(true);
+    return reserved;
+  }
+
+  /** Cancels entity pickup transfers of reserved physical cards. */
+  public boolean handleEntityPickupItem(org.bukkit.event.entity.EntityPickupItemEvent event) {
+    requirePrimaryThread();
+    Objects.requireNonNull(event, "event is required");
+    boolean reserved = isReserved(event.getItem().getItemStack());
+    if (reserved) event.setCancelled(true);
+    return reserved;
+  }
+
+  private boolean containsReserved(Inventory inventory) {
+    Objects.requireNonNull(inventory, "inventory is required");
+    for (ItemStack item : inventory.getContents()) {
+      if (isReserved(item)) return true;
+    }
+    return false;
+  }
 
 
   static ReturnResult restoreAmbiguous(UUID operationId, CopyOwner owner,
       List<CardCopyId> copyIds, List<SerializedItemSnapshot> snapshots,
       Set<CardCopyId> restoredCopyIds,
       org.aincraft.mobmatrix.application.CardCustodyJournal journal) {
+
     Objects.requireNonNull(operationId, "operation id is required");
     Objects.requireNonNull(owner, "owner is required");
     Objects.requireNonNull(copyIds, "copy ids are required");

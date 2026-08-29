@@ -2,6 +2,7 @@ package org.aincraft.mobmatrix.application;
 
 import java.util.List;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.UUID;
 import org.aincraft.mobmatrix.domain.CardCopyId;
 import org.aincraft.mobmatrix.domain.CopyOwner;
@@ -18,6 +19,18 @@ public interface CardCustodyPort {
   /** Open durable operations to reconcile during startup. */
   default List<UUID> openOperationIds() {
     return List.of();
+  }
+
+  /** Durable match binding for an open operation, when supported by the adapter. */
+  default Optional<org.aincraft.mobmatrix.domain.MatchId> operationMatchId(UUID operationId) {
+    Objects.requireNonNull(operationId, "operation id is required");
+    return Optional.empty();
+  }
+
+  /** Durable status for an open operation, when supported by the adapter. */
+  default Optional<OperationStatus> operationStatus(UUID operationId) {
+    Objects.requireNonNull(operationId, "operation id is required");
+    return Optional.empty();
   }
   default PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId,
       org.aincraft.mobmatrix.domain.MatchId matchId) {
@@ -173,5 +186,9 @@ public interface CardCustodyPort {
 
     public boolean complete() { return pendingCopyIds.isEmpty() && failure == Failure.NONE; }
     public List<CardCopyId> recovery() { return pendingCopyIds; }
+
+    public static RecoveryResult failed(UUID operationId, OperationStatus status, Failure failure) {
+      return new RecoveryResult(operationId, status, List.of(), List.of(), List.of(), failure);
+    }
   }
 }

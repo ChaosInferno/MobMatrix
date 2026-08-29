@@ -20,6 +20,7 @@ import org.aincraft.mobmatrix.domain.CardType;
 import org.aincraft.mobmatrix.domain.CopyOwner;
 import org.aincraft.mobmatrix.domain.Deck;
 import org.aincraft.mobmatrix.domain.MatchEngine;
+import org.aincraft.mobmatrix.domain.MatchState;
 import org.aincraft.mobmatrix.domain.MatchId;
 import org.aincraft.mobmatrix.domain.MatchRules;
 import org.aincraft.mobmatrix.storage.Database;
@@ -163,6 +164,106 @@ final class MatchApplicationServiceTest {
     assertTrue(result.pendingRecoveryCopyIds().isEmpty());
     assertTrue(result.missingCopyIds().isEmpty());
   }
+  @Test
+  void startupPreservesActiveEscrowAndContinuesAfterOneRecoveryFailure() {
+    UUID activeOperation = UUID.randomUUID();
+    UUID orphanOperation = UUID.randomUUID();
+    UUID failingOperation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = copies();
+    MatchEngine.StartMatch start = match("startup-active", owner, oneCopies, owner, twoCopies);
+    MatchState active = MatchEngine.start(start).state();
+    StartupCustody custody = new StartupCustody(activeOperation, start.matchId(), orphanOperation,
+        failingOperation);
+    MatchRepository repository = new MatchRepository() {
+      @Override
+      public java.util.Optional<MatchSnapshot> find(MatchId matchId) {
+        return java.util.Optional.empty();
+      }
+      public SaveResult save(long expectedRevision, MatchState state) {
+        return SaveResult.success(state.revision());
+      }
+
+      @Override
+      public List<MatchSnapshot> activeMatches() {
+        return List.of(new MatchSnapshot(start.matchId(), active.revision(), "ACTIVE",
+            new byte[] {1}, "{}"));
+      }
+
+      @Override
+      public java.util.Optional<MatchState> rehydrate(MatchSnapshot snapshot,
+          java.util.function.Function<String, CardCatalog> resolver) {
+        return java.util.Optional.of(active);
+      }
+    };
+
+    MatchApplicationService.StartupRecoveryResult result =
+        new MatchApplicationService(custody, repository).recoverStartup(id -> start.catalog(),
+            Instant.parse("2026-01-01T00:00:00Z"));
+
+    assertEquals(List.of(orphanOperation, failingOperation), custody.recovered);
+    assertEquals(2, result.recoveries().size());
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR,
+        result.recoveries().get(1).failure());
+  }
+
+  @Test
+  void identicalStartRetryReturnsDurableActiveStateWithoutSavingAgain() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = copies();
+    UUID oneOperation = UUID.randomUUID();
+    UUID twoOperation = UUID.randomUUID();
+    MatchEngine.StartMatch start = match("retry-active", oneOwner, oneCopies, twoOwner, twoCopies);
+    RecordingMatchRepository repository = new RecordingMatchRepository();
+    MatchApplicationService service = new MatchApplicationService(new RecordingCustody(), repository);
+    MatchApplicationService.StartMatchRequest request = new MatchApplicationService.StartMatchRequest(
+        start, oneOwner, oneCopies, oneOperation, twoOwner, twoCopies, twoOperation);
+
+    assertTrue(service.start(request).accepted());
+    MatchApplicationService.MatchStartResult retry = service.start(request);
+
+    assertTrue(retry.accepted());
+    assertEquals(1, repository.saves);
+    assertEquals(0L, retry.state().revision());
+  }
+
+  @Test
+  void prepareEscrowTransitionFailureCleansUpDurableOperation() {
+    ThrowingEscrowCustody custody = new ThrowingEscrowCustody();
+    MatchApplicationService service = new MatchApplicationService(custody);
+    UUID operation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+
+    MatchApplicationService.StartResult result = service.prepare(owner, copies(), operation);
+
+    assertFalse(result.accepted());
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, result.failure());
+    assertEquals(List.of("prepare", "escrow", "return"), custody.calls);
+  }
+
+  @Test
+  void draftStartRejectsHouseOwnerEvenWhenCustodySelectionIsEmpty() {
+    CopyOwner house = CopyOwner.house();
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = copies();
+    MatchEngine.StartMatch start = new MatchEngine.StartMatch(new MatchId("house-owner-draft"),
+        new Deck(oneCopies.stream().map(copy -> new CardCopy(copy, new CardId(1), house)).toList()),
+        new Deck(twoCopies.stream().map(copy -> new CardCopy(copy, new CardId(1), house)).toList()),
+        new CardCatalog(List.of(new CardDefinition(new CardId(1), "No. 1", "Card 1", 1,
+            CardType.NORMAL, 1, 1, 1, 1, 0)), "house-owner-draft-catalog"),
+        new MatchRules(org.aincraft.mobmatrix.domain.Rule.DRAFT), 5L,
+        Instant.parse("2026-01-01T00:00:00Z"));
+
+    MatchApplicationService.MatchStartResult result = new MatchApplicationService(
+        new RecordingCustody()).start(new MatchApplicationService.StartMatchRequest(start, house,
+            List.of(), UUID.randomUUID(), house, List.of(), UUID.randomUUID()));
+
+    assertFalse(result.accepted());
+    assertEquals(CardCustodyPort.Failure.INVALID_OWNER, result.failure());
+  }
 
   @Test
   void preparedOperationRecoveryQueuesExactCopiesInsteadOfRetryingEscrow() throws Exception {
@@ -211,6 +312,117 @@ final class MatchApplicationServiceTest {
     return new MatchEngine.StartMatch(new MatchId(id), new Deck(one), new Deck(two),
         new CardCatalog(definitions, id + "-catalog"), new MatchRules(), 5L,
         Instant.parse("2026-01-01T00:00:00Z"));
+  }
+
+  private static final class RecordingMatchRepository implements MatchRepository {
+    private MatchState state;
+    private int saves;
+
+    @Override
+    public SaveResult save(long expectedRevision, MatchState state) {
+      saves++;
+      if (this.state != null) return SaveResult.stale(this.state.revision());
+      this.state = state;
+      return SaveResult.success(state.revision());
+    }
+
+    @Override
+    public java.util.Optional<MatchSnapshot> find(MatchId matchId) {
+      return state == null ? java.util.Optional.empty()
+          : java.util.Optional.of(new MatchSnapshot(matchId, state.revision(), "ACTIVE",
+              new byte[] {1}, "{}"));
+    }
+
+    @Override
+    public java.util.Optional<MatchState> findState(MatchId matchId, CardCatalog catalog) {
+      return java.util.Optional.ofNullable(state);
+    }
+  }
+
+  private static final class StartupCustody implements CardCustodyPort {
+    private final UUID active;
+    private final MatchId matchId;
+    private final UUID orphan;
+    private final UUID failing;
+    private final List<UUID> recovered = new ArrayList<>();
+
+    private StartupCustody(UUID active, MatchId matchId, UUID orphan, UUID failing) {
+      this.active = active;
+      this.matchId = matchId;
+      this.orphan = orphan;
+      this.failing = failing;
+    }
+
+    @Override
+    public List<UUID> openOperationIds() {
+      return List.of(active, orphan, failing);
+    }
+
+    @Override
+    public java.util.Optional<MatchId> operationMatchId(UUID operationId) {
+      return operationId.equals(active) ? java.util.Optional.of(matchId)
+          : java.util.Optional.empty();
+    }
+
+    @Override
+    public java.util.Optional<OperationStatus> operationStatus(UUID operationId) {
+      return java.util.Optional.of(OperationStatus.ESCROWED);
+    }
+
+    @Override
+    public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
+      return PrepareResult.rejected(operationId, owner, copyIds, Failure.INVALID_STATE);
+    }
+
+    @Override
+    public CustodyResult escrow(UUID operationId) {
+      return CustodyResult.rejected(operationId, OperationStatus.PREPARED, Failure.INVALID_STATE);
+    }
+
+    @Override
+    public ReturnResult returnCopies(UUID operationId) {
+      return ReturnResult.pending(operationId, List.of(), List.of(), List.of(), List.of());
+    }
+
+    @Override
+    public RecoveryResult recover(UUID operationId) {
+      recovered.add(operationId);
+      if (operationId.equals(failing)) throw new IllegalStateException("recovery failed");
+      return RecoveryResult.complete(operationId, List.of());
+    }
+  }
+
+  private static final class ThrowingEscrowCustody implements CardCustodyPort {
+    private final List<String> calls = new ArrayList<>();
+    private final UUID operation = UUID.randomUUID();
+
+    @Override
+    public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
+      calls.add("prepare");
+      return PrepareResult.success(operationId, owner, copyIds, List.of());
+    }
+
+    @Override
+    public CustodyResult escrow(UUID operationId) {
+      calls.add("escrow");
+      throw new IllegalStateException("journal transition failed");
+    }
+
+    @Override
+    public ReturnResult returnCopies(UUID operationId) {
+      calls.add("return");
+      return ReturnResult.pending(operationId, List.of(), List.of(), List.of(), List.of());
+    }
+
+    @Override
+    public RecoveryResult recover(UUID operationId) {
+      return RecoveryResult.none(operationId);
+    }
+
+    @Override
+    public List<UUID> openOperationIds() {
+      return List.of(operation);
+    }
   }
 
   private static final class RecordingCustody implements CardCustodyPort {

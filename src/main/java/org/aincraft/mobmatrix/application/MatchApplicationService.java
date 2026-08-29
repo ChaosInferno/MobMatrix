@@ -7,6 +7,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
@@ -27,7 +28,6 @@ import org.aincraft.mobmatrix.domain.MatchState;
 public final class MatchApplicationService {
   private final CardCustodyPort custody;
   private final MatchRepository matches;
-  private final Map<UUID, ReturnResult> settlements = new HashMap<>();
 
   public MatchApplicationService(CardCustodyPort custody) {
     this(custody, null);
@@ -44,11 +44,31 @@ public final class MatchApplicationService {
       return MatchStartResult.rejected(request.match().matchId(), validation);
     }
 
-    // This is the sole pure start evaluation. Custody is derived from this exact state and the
-    // state is then persisted, so RANDOM never samples an unreserved copy or a second transcript.
+    // Evaluate the pure start exactly once. Its selected physical copies and transcript are the
+    // durable identity of this match and must be reused on an identical retry.
     MatchEngine.MatchTransition started = MatchEngine.start(request.match());
     if (!started.accepted()) {
       return MatchStartResult.rejected(request.match().matchId(), Failure.INVALID_STATE);
+    }
+    if (matches != null) {
+      try {
+        java.util.Optional<MatchState> existing = matches.findState(request.match().matchId(),
+            request.match().catalog());
+        if (existing.isPresent()) {
+          MatchState state = existing.get();
+          if (sameInitialState(state, started.state())
+              && operationBindingsMatch(request, state.matchId())) {
+            return MatchStartResult.active(state.matchId(), state);
+          }
+          return MatchStartResult.rejected(request.match().matchId(), Failure.MISMATCHED_OPERATION);
+        }
+        if (matches.find(request.match().matchId()).isPresent()) {
+          // A repository that cannot rehydrate an existing row cannot safely prove retry identity.
+          return MatchStartResult.rejected(request.match().matchId(), Failure.MISMATCHED_OPERATION);
+        }
+      } catch (RuntimeException exception) {
+        return MatchStartResult.rejected(request.match().matchId(), Failure.DATABASE_ERROR);
+      }
     }
     ReservationPlan plan = reservationPlan(started.state(), request);
     if (plan == null) {
@@ -129,13 +149,25 @@ public final class MatchApplicationService {
       return StartResult.rejected(operationId, owner == null ? CopyOwner.house() : owner, copies,
           Failure.INVALID_OWNER);
     }
-    PrepareResult prepared = matchId == null
-        ? custody.prepare(owner, copies, operationId)
-        : custody.prepare(owner, copies, operationId, matchId);
+    PrepareResult prepared;
+    try {
+      prepared = matchId == null
+          ? custody.prepare(owner, copies, operationId)
+          : custody.prepare(owner, copies, operationId, matchId);
+    } catch (RuntimeException exception) {
+      cleanup(operationId, copies);
+      return StartResult.rejected(operationId, owner, copies, Failure.DATABASE_ERROR);
+    }
     if (!prepared.accepted()) {
       return StartResult.rejected(operationId, owner, copies, prepared.failure());
     }
-    CustodyResult escrowed = custody.escrow(operationId);
+    CustodyResult escrowed;
+    try {
+      escrowed = custody.escrow(operationId);
+    } catch (RuntimeException exception) {
+      cleanup(operationId, copies);
+      return StartResult.rejected(operationId, owner, copies, Failure.DATABASE_ERROR);
+    }
     if (!escrowed.accepted() || escrowed.status() != OperationStatus.ESCROWED) {
       cleanup(operationId, copies);
       return StartResult.rejected(operationId, owner, copies,
@@ -143,26 +175,25 @@ public final class MatchApplicationService {
     }
     return StartResult.escrowed(operationId, owner, copies);
   }
-
-  public synchronized StartResult prepare(CopyOwner owner, List<CardCopyId> copyIds, String operationId) {
-    return prepare(owner, copyIds, UUID.fromString(Objects.requireNonNull(operationId)));
+  private StartResult prepareForStart(CopyOwner owner, List<CardCopyId> copies, UUID operationId,
+      org.aincraft.mobmatrix.domain.MatchId matchId) {
+    if (owner == null || !owner.isPlayer()) {
+      return StartResult.rejected(operationId, owner == null ? CopyOwner.house() : owner,
+          copies, Failure.INVALID_OWNER);
+    }
+    if (copies.isEmpty()) return StartResult.escrowed(operationId, owner, copies);
+    return prepare(owner, copies, operationId, matchId);
   }
-
-  /** Returns exact escrowed cards; repeated settlement does not return twice. */
+  /** Returns exact escrowed cards; custody itself provides durable idempotency. */
   public synchronized ReturnResult settle(UUID operationId) {
     Objects.requireNonNull(operationId, "operation id is required");
-    ReturnResult previous = settlements.get(operationId);
-    if (previous != null && previous.status() == OperationStatus.RETURNED) return previous;
-    ReturnResult result = custody.returnCopies(operationId);
-    settlements.put(operationId, result);
-    return result;
+    return custody.returnCopies(operationId);
   }
 
   public synchronized ReturnResult settle(String operationId) {
     return settle(UUID.fromString(Objects.requireNonNull(operationId)));
   }
-
-  /** Applies a pure domain command, persisting the accepted successor before callers render/notify. */
+  /** Applies a pure domain command, persisting the accepted successor before rendering. */
   public synchronized ApplyResult apply(MatchState state, MatchCommand command) {
     Objects.requireNonNull(state, "state is required");
     Objects.requireNonNull(command, "command is required");
@@ -175,10 +206,62 @@ public final class MatchApplicationService {
     return ApplyResult.accepted(transition);
   }
 
-  private StartResult prepareForStart(CopyOwner owner, List<CardCopyId> copies, UUID operationId,
+
+
+  private boolean operationBindingsMatch(StartMatchRequest request,
       org.aincraft.mobmatrix.domain.MatchId matchId) {
-    if (copies.isEmpty()) return StartResult.escrowed(operationId, owner, copies);
-    return prepare(owner, copies, operationId, matchId);
+    List<UUID> open;
+    try {
+      open = custody.openOperationIds();
+    } catch (RuntimeException exception) {
+      return false;
+    }
+    // A durable adapter exposes its open rows. If rows are available, both operation IDs must
+    // still be present; this rejects a retry with fresh operation UUIDs.
+    if (!open.isEmpty() && (!open.contains(request.oneOperationId())
+        || !open.contains(request.twoOperationId()))) return false;
+    return bindingMatches(request.oneOperationId(), matchId)
+        && bindingMatches(request.twoOperationId(), matchId);
+  }
+
+  private boolean bindingMatches(UUID operationId,
+      org.aincraft.mobmatrix.domain.MatchId matchId) {
+    try {
+      Optional<OperationStatus> status = custody.operationStatus(operationId);
+      if (status.isPresent() && status.get() != OperationStatus.ESCROWED) return false;
+      return custody.operationMatchId(operationId)
+          .map(matchId::equals).orElse(true);
+    } catch (RuntimeException exception) {
+      return false;
+    }
+  }
+
+  private static boolean sameInitialState(MatchState left, MatchState right) {
+    return left.matchId().equals(right.matchId())
+        && left.catalog().snapshotId().equals(right.catalog().snapshotId())
+        && left.catalog().all().equals(right.catalog().all())
+        && left.rules().equals(right.rules())
+        && left.seed() == right.seed()
+        && left.revision() == right.revision()
+        && left.currentSeat() == right.currentSeat()
+        && left.result() == null && right.result() == null
+        && left.board().cells().equals(right.board().cells())
+        && left.hands().equals(right.hands())
+        && left.bankMillis().equals(right.bankMillis())
+        && left.turnStartedAt().equals(right.turnStartedAt())
+        && left.graceDeadline().equals(right.graceDeadline())
+        && left.turnDeadline().equals(right.turnDeadline())
+        && left.commandIds().equals(right.commandIds())
+        && left.revealedCardsMap().equals(right.revealedCardsMap())
+        && left.originalOwners().equals(right.originalOwners())
+        && left.consecutiveDraws() == right.consecutiveDraws()
+        && left.draftOfferings().equals(right.draftOfferings())
+        && left.draftSelections().equals(right.draftSelections())
+        && left.chaosChoices().equals(right.chaosChoices())
+        && left.transcript().seed() == right.transcript().seed()
+        && left.transcript().cursor() == right.transcript().cursor()
+        && left.transcript().replayMode() == right.transcript().replayMode()
+        && left.transcript().decisions().equals(right.transcript().decisions());
   }
 
   private static ReservationPlan reservationPlan(MatchState state, StartMatchRequest request) {
@@ -257,6 +340,7 @@ public final class MatchApplicationService {
       org.aincraft.mobmatrix.domain.Deck deck, CopyOwner owner,
       List<org.aincraft.mobmatrix.domain.CardCopy> inventory,
       org.aincraft.mobmatrix.domain.MatchRules rules) {
+    if (owner == null || !owner.isPlayer()) return Failure.INVALID_OWNER;
     List<CardCopyId> copies;
     try {
       copies = exactDeck(requested);
@@ -291,12 +375,48 @@ public final class MatchApplicationService {
       Function<String, CardCatalog> catalogResolver, Instant now) {
     Objects.requireNonNull(catalogResolver, "catalog resolver is required");
     Objects.requireNonNull(now, "time is required");
-    List<RecoveryResult> recoveries = new ArrayList<>();
-    for (UUID operationId : custody.openOperationIds()) recoveries.add(custody.recover(operationId));
-    List<MatchState> states = new ArrayList<>();
+
+    // Read active match IDs before touching custody. An escrow bound to one of these IDs is still
+    // in use and must not be returned during a restart.
+    List<MatchRepository.MatchSnapshot> snapshots = List.of();
+    boolean activeMatchesLoadFailed = false;
     if (matches != null) {
-      for (MatchState loaded : matches.activeStates(catalogResolver)) {
-        MatchState current = loaded;
+      try {
+        snapshots = matches.activeMatches();
+      } catch (RuntimeException ignored) {
+        // A match repository outage must not prevent independent custody recovery. Keep bound
+        // escrow rather than risking release when active IDs cannot be read.
+        activeMatchesLoadFailed = true;
+      }
+    }
+    Set<org.aincraft.mobmatrix.domain.MatchId> activeMatchIds = new HashSet<>();
+    for (MatchRepository.MatchSnapshot snapshot : snapshots) {
+      activeMatchIds.add(snapshot.matchId());
+    }
+
+    List<RecoveryResult> recoveries = new ArrayList<>();
+    for (UUID operationId : custody.openOperationIds()) {
+      try {
+        Optional<OperationStatus> status = custody.operationStatus(operationId);
+        Optional<org.aincraft.mobmatrix.domain.MatchId> binding =
+            custody.operationMatchId(operationId);
+        boolean activeEscrow = status.filter(value -> value == OperationStatus.ESCROWED)
+            .isPresent() && (binding.map(activeMatchIds::contains).orElse(false)
+                || (activeMatchesLoadFailed && binding.isPresent()));
+        if (activeEscrow) continue;
+        recoveries.add(custody.recover(operationId));
+      } catch (RuntimeException exception) {
+        recoveries.add(RecoveryResult.failed(operationId, OperationStatus.RETURN_PENDING,
+            Failure.DATABASE_ERROR));
+      }
+    }
+
+    List<MatchState> states = new ArrayList<>();
+    for (MatchRepository.MatchSnapshot snapshot : snapshots) {
+      try {
+        java.util.Optional<MatchState> loaded = matches.rehydrate(snapshot, catalogResolver);
+        if (loaded.isEmpty()) continue;
+        MatchState current = loaded.get();
         if (!current.isFinished() && !now.isBefore(current.turnDeadline())) {
           UUID timeoutId = UUID.nameUUIDFromBytes(
               (current.matchId().value() + ":timeout:" + current.revision()).getBytes(
@@ -306,6 +426,8 @@ public final class MatchApplicationService {
           if (timeout.accepted()) current = timeout.transition().state();
         }
         states.add(current);
+      } catch (RuntimeException ignored) {
+        // Missing catalog snapshots and unsupported state versions are isolated to one match.
       }
     }
     return new StartupRecoveryResult(states, recoveries);

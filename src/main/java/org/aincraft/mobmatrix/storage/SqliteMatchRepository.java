@@ -117,7 +117,8 @@ public final class SqliteMatchRepository implements MatchRepository {
     }
   }
 
-  /** Rehydrates an executable aggregate after resolving the persisted catalog snapshot. */
+  /** Rehydrates the persisted state with the caller's catalog snapshot for start comparison. */
+  @Override
   public Optional<MatchState> findState(org.aincraft.mobmatrix.domain.MatchId matchId,
       org.aincraft.mobmatrix.domain.CardCatalog catalog) {
     return find(matchId).map(snapshot -> MatchStateSnapshotCodec.decode(snapshot.stateBytes(), catalog));
