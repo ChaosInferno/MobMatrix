@@ -499,3 +499,30 @@ The in-memory repository contains immutable domain states only; durable producti
 the explicit repository constructor. No Bukkit/Paper objects cross application or storage. Paper
 codec tests remain assumption-skipped without a running Paper registry, and SQLite emits the JVM
 restricted-native-access warning.
+# Final focused verification rerun
+
+The exact focused adapter/domain/bot command was rerun against the committed implementation
+(`ccbd1f3` persistence/owner changes and `aba1cae` abort-cleanup hardening; report baseline
+`3aa88a0`):
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact output:
+
+```text
+> Task :compileJava UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :classes UP-TO-DATE
+> Task :compileTestJava UP-TO-DATE
+> Task :processTestResources NO-SOURCE
+> Task :testClasses UP-TO-DATE
+> Task :test UP-TO-DATE
+
+BUILD SUCCESSFUL in 586ms
+4 actionable tasks: 4 up-to-date
+Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.7.1/userguide/configuration_cache_enabling.html
+```
+
+No formatter, linter, project-wide build, or project-wide test suite was run.
