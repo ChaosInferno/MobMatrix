@@ -308,3 +308,72 @@ Implementation:
 - RANDOM setup now validates both inventories against one shared physical-copy UUID set before sampling. Unknown catalog IDs remain excluded from usable samples; duplicate UUIDs return `RANDOM_DUPLICATE_COPY`, and no fallback deck is created.
 
 Implementation commit: `c1472e9` (`fix: reject cross-seat random duplicates`)
+
+## Final settlement ownership and event compatibility fix
+
+RED command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest
+```
+
+RED result:
+
+```text
+> Task :compileJava UP-TO-DATE
+> Task :classes UP-TO-DATE
+> Task :compileTestJava
+> Task :processTestResources NO-SOURCE
+> Task :testClasses
+
+> Task :test FAILED
+
+AdvancedRulesTest > settlementRoutesCapturedCopyToOriginalSeatAndRetainsCaptureEvent() FAILED
+    org.opentest4j.AssertionFailedError at AdvancedRulesTest.java:284
+
+34 tests completed, 1 failed
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':test'.
+> There were failing tests. See the report at: file:///C:/Users/blaze/IdeaProjects/Aincraft-MobMatrix/build/reports/tests/test/index.html
+
+* Try:
+> Run with --scan to get a Build Scan for full insights.
+
+BUILD FAILED in 1s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+GREEN command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest
+```
+
+GREEN result:
+
+```text
+> Task :compileJava
+> Task :processResources UP-TO-DATE
+> Task :classes
+> Task :compileTestJava
+> Task :processTestResources NO-SOURCE
+> Task :testClasses
+> Task :test
+
+BUILD SUCCESSFUL in 1s
+4 actionable tasks: 3 executed, 1 up-to-date
+Consider enabling configuration cache to speed up your build: https://docs.gradle.org/9.7.1/userguide/configuration_cache_enabling.html
+```
+
+Fix summary:
+
+- `MatchState` now stores an immutable original-owner map for every player-owned copy entering a standard or RANDOM match, carrying it through normal successors and Sudden Death restarts. Settlement routes both hand and board copies through original ownership rather than mutable board control ownership.
+- SWAP exchanges preserve the same original-owner map; generated DRAFT copies remain house-owned and excluded from player settlement.
+- Match transitions restore the compatible `CARD_CAPTURED` event once per deterministic row-major capture while `PlacementResolver` retains structured capture source and direction data.
+
+Implementation commit: `5ea1511` (`fix: preserve original card owners`)
+
+Concerns: No formatter, linter, or project-wide suite was run per task instructions. Focused tests only.
