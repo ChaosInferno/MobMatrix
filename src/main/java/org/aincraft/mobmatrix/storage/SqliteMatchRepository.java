@@ -63,8 +63,8 @@ public final class SqliteMatchRepository implements MatchRepository {
       boolean autoCommit = connection.getAutoCommit();
       connection.setAutoCommit(false);
       try {
-        long current = currentRevision(state.matchId().value());
-        if (current < 0) {
+        Optional<MatchSnapshot> predecessor = loadSnapshot(connection, state.matchId().value());
+        if (predecessor.isEmpty()) {
           if (expectedRevision != 0 || state.revision() != 0) {
             connection.rollback();
             return new SaveResult(false, -1, Failure.INVALID_STATE);
@@ -85,14 +85,22 @@ public final class SqliteMatchRepository implements MatchRepository {
           connection.commit();
           return SaveResult.success(0L);
         }
+        MatchSnapshot current = predecessor.orElseThrow();
+        try {
+          verifyIntegrity(current);
+        } catch (IllegalArgumentException integrityFailure) {
+          connection.rollback();
+          return new SaveResult(false, current.revision(), Failure.INVALID_STATE);
+        }
         if (state.revision() != expectedRevision + 1) {
           connection.rollback();
-          return new SaveResult(false, current, Failure.INVALID_STATE);
+          return new SaveResult(false, current.revision(), Failure.INVALID_STATE);
         }
-        if (current != expectedRevision) {
+        if (current.revision() != expectedRevision) {
           connection.rollback();
-          return SaveResult.stale(current);
+          return SaveResult.stale(current.revision());
         }
+        persistCatalogSnapshot(connection, state.catalog());
         try (var update = connection.prepareStatement("""
             UPDATE matches SET revision = ?, status = ?, state_bytes = ?, state_digest = ?,
               transcript_json = ?, updated_at = CURRENT_TIMESTAMP WHERE match_id = ? AND revision = ?
@@ -106,7 +114,7 @@ public final class SqliteMatchRepository implements MatchRepository {
           update.setLong(7, expectedRevision);
           if (update.executeUpdate() != 1) {
             connection.rollback();
-            return SaveResult.stale(current);
+            return SaveResult.stale(current.revision());
           }
         }
         connection.commit();
@@ -143,10 +151,10 @@ public final class SqliteMatchRepository implements MatchRepository {
       boolean autoCommit = connection.getAutoCommit();
       connection.setAutoCommit(false);
       try {
-        long current = currentRevision(state.matchId().value());
-        if (current >= 0) {
+        Optional<MatchSnapshot> current = loadSnapshot(connection, state.matchId().value());
+        if (current.isPresent()) {
           connection.rollback();
-          return SaveResult.stale(current);
+          return SaveResult.stale(current.get().revision());
         }
         persistCatalogSnapshot(connection, state.catalog());
         try (var insert = connection.prepareStatement("""
@@ -497,13 +505,22 @@ public final class SqliteMatchRepository implements MatchRepository {
     return requireSecret(value);
   }
 
-  private long currentRevision(String matchId) throws SQLException {
-    try (var query = connection.prepareStatement("SELECT revision FROM matches WHERE match_id = ?")) {
+  private Optional<MatchSnapshot> loadSnapshot(Connection connection, String matchId)
+      throws SQLException {
+    try (var query = connection.prepareStatement("""
+        SELECT match_id, revision, status, state_bytes, transcript_json, state_digest
+        FROM matches WHERE match_id = ?
+        """)) {
+      query.setString(1, matchId);
       try (var rows = query.executeQuery()) {
-        return rows.next() ? rows.getLong(1) : -1L;
+        if (!rows.next()) return Optional.empty();
+        return Optional.of(new MatchSnapshot(
+            new org.aincraft.mobmatrix.domain.MatchId(rows.getString(1)), rows.getLong(2),
+            rows.getString(3), rows.getBytes(4), rows.getString(5), rows.getString(6)));
       }
     }
   }
+
 
   private static String transcriptJson(MatchState state) {
     var transcript = state.transcript();

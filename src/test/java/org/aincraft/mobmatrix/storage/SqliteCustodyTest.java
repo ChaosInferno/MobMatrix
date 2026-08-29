@@ -232,6 +232,79 @@ final class SqliteCustodyTest {
     }
     Files.deleteIfExists(path);
   }
+  @Test
+  void successorCasRejectsTamperedAuthenticatedPredecessor() throws Exception {
+    var path = Files.createTempFile("mobmatrix-predecessor-cas", ".sqlite");
+    MatchState original = snapshotState("predecessor-cas");
+    MatchEngine.MatchTransition transition = MatchEngine.apply(original, new MatchCommand.PlaceCard(
+        original.currentSeat(), original.hand(original.currentSeat()).getFirst().copyId(),
+        Square.CENTER, original.revision(), UUID.randomUUID(),
+        Instant.parse("2026-01-01T00:00:01Z")));
+    assertTrue(transition.accepted());
+    MatchState successor = transition.state();
+    assertEquals(1L, successor.revision());
+    try (Database database = new Database(path)) {
+      SqliteMatchRepository repository = new SqliteMatchRepository(database, MATCH_SECRET);
+      assertTrue(repository.save(0L, original).accepted());
+      try (var update = database.connection().prepareStatement(
+          "UPDATE matches SET state_digest = NULL WHERE match_id = ?")) {
+        update.setString(1, original.matchId().value());
+        update.executeUpdate();
+      }
+      MatchRepository.SaveResult result = repository.save(0L, successor);
+      assertFalse(result.accepted());
+      assertEquals(MatchRepository.Failure.INVALID_STATE, result.failure());
+      try (var query = database.connection().prepareStatement(
+          "SELECT revision, state_digest FROM matches WHERE match_id = ?")) {
+        query.setString(1, original.matchId().value());
+        try (var rows = query.executeQuery()) {
+          assertTrue(rows.next());
+          assertEquals(original.revision(), rows.getLong(1));
+          assertNull(rows.getString(2));
+        }
+      }
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void successorSaveRejectsAlteredImmutableCatalogDefinitions() throws Exception {
+    var path = Files.createTempFile("mobmatrix-successor-catalog", ".sqlite");
+    MatchState original = snapshotState("successor-catalog");
+    MatchEngine.MatchTransition transition = MatchEngine.apply(original, new MatchCommand.PlaceCard(
+        original.currentSeat(), original.hand(original.currentSeat()).getFirst().copyId(),
+        Square.CENTER, original.revision(), UUID.randomUUID(),
+        Instant.parse("2026-01-01T00:00:01Z")));
+    assertTrue(transition.accepted());
+    MatchState successor = transition.state();
+    List<CardDefinition> alteredDefinitions = new ArrayList<>(successor.catalog().all());
+    CardDefinition first = alteredDefinitions.getFirst();
+    alteredDefinitions.set(0, new CardDefinition(first.id(), first.publicNumber(), "Altered",
+        first.stars(), first.type(), first.top(), first.right(), first.bottom(), first.left(),
+        first.salePrice()));
+    CardCatalog alteredCatalog = new CardCatalog(alteredDefinitions, successor.catalog().snapshotId());
+    MatchState altered = MatchState.rehydrate(successor.matchId(), alteredCatalog, successor.rules(),
+        successor.board(), successor.hands(), successor.currentSeat(), successor.revision(),
+        successor.result(), successor.bankMillis(), successor.turnStartedAt(), successor.graceDeadline(),
+        successor.turnDeadline(), successor.commandIds(), successor.seed(), successor.transcript(),
+        successor.revealedCardsMap(), successor.originalOwners(), successor.consecutiveDraws(),
+        successor.draftOfferings(), successor.draftSelections(), successor.chaosChoices());
+    try (Database database = new Database(path)) {
+      SqliteMatchRepository repository = new SqliteMatchRepository(database, MATCH_SECRET);
+      assertTrue(repository.save(0L, original).accepted());
+      assertThrows(IllegalArgumentException.class, () -> repository.save(0L, altered));
+      try (var query = database.connection().prepareStatement(
+          "SELECT revision FROM matches WHERE match_id = ?")) {
+        query.setString(1, original.matchId().value());
+        try (var rows = query.executeQuery()) {
+          assertTrue(rows.next());
+          assertEquals(original.revision(), rows.getLong(1));
+        }
+      }
+    }
+    Files.deleteIfExists(path);
+  }
+
 
   @Test
   void matchRepositoryRejectsUnavailableOrShortSecret() throws Exception {

@@ -64,6 +64,18 @@ final class CardItemCodecTest {
     ItemStack other = new ItemStack(Material.STONE);
     assertEquals(CardItemCodec.InvalidReason.NOT_PAPER, codec.read(other).reason());
   }
+  @Test
+  void hasIdentityDetectsConfiguredKeysStoredWithUnexpectedPrimitiveType() {
+    org.junit.jupiter.api.Assumptions.assumeTrue(paperAvailable(),
+        "Paper API item registry requires a running Paper server");
+    ItemStack item = new ItemStack(Material.PAPER);
+    var meta = item.getItemMeta();
+    meta.getPersistentDataContainer().set(codec.catalogIdKey(),
+        org.bukkit.persistence.PersistentDataType.BYTE, (byte) 1);
+    item.setItemMeta(meta);
+    assertTrue(codec.hasIdentity(item));
+  }
+
 
   @Test
   void differentCopyIdsProduceNonStackableDistinctItems() {

@@ -628,7 +628,7 @@ public final class CardInventoryService implements CardCustodyPort {
 
   private static List<CardCopyId> exactCopies(List<CardCopyId> copies) {
     Objects.requireNonNull(copies, "copy ids are required");
-    if (copies.isEmpty()) throw new IllegalArgumentException("at least one copy is required");
+    if (copies.size() != 5) throw new IllegalArgumentException("exactly five copies are required");
     Set<CardCopyId> unique = new HashSet<>();
     for (CardCopyId copy : copies) {
       if (copy == null || !unique.add(copy)) throw new IllegalArgumentException("duplicate copy id");

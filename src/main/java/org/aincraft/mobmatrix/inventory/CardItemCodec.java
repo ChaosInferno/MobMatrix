@@ -169,12 +169,13 @@ public final class CardItemCodec {
   public boolean hasIdentity(ItemStack item) {
     if (item == null || item.getItemMeta() == null) return false;
     PersistentDataContainer pdc = item.getItemMeta().getPersistentDataContainer();
-    return pdc.has(schemaKey, PersistentDataType.INTEGER)
-        || pdc.has(catalogIdKey, PersistentDataType.INTEGER)
-        || pdc.has(copyIdKey, PersistentDataType.STRING)
-        || pdc.has(integrityKey, PersistentDataType.STRING)
-        || pdc.has(ownerKindKey, PersistentDataType.STRING)
-        || pdc.has(ownerIdKey, PersistentDataType.STRING);
+    var keys = pdc.getKeys();
+    return keys.contains(schemaKey)
+        || keys.contains(catalogIdKey)
+        || keys.contains(copyIdKey)
+        || keys.contains(integrityKey)
+        || keys.contains(ownerKindKey)
+        || keys.contains(ownerIdKey);
   }
 
   private String marker(int schema, int catalogId, String copyUuid, String ownerKind, String ownerUuid) {

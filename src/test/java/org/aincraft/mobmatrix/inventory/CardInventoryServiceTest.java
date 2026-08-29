@@ -19,6 +19,27 @@ import org.junit.jupiter.api.Test;
 
 final class CardInventoryServiceTest {
   @Test
+  void directPrepareRejectsAnythingOtherThanFiveUniqueCopies() {
+    CardInventoryService service = new CardInventoryService(
+        new CardItemCodec("test", "0123456789abcdef"), id -> null);
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    UUID operation = UUID.randomUUID();
+    List<CardCopyId> fourCopies = List.of(
+        new CardCopyId(UUID.randomUUID()), new CardCopyId(UUID.randomUUID()),
+        new CardCopyId(UUID.randomUUID()), new CardCopyId(UUID.randomUUID()));
+    CardCustodyPort.PrepareResult tooFew = service.prepare(owner, fourCopies, operation);
+    assertEquals(CardCustodyPort.Failure.INVALID_COPY_SET, tooFew.failure());
+
+    CardCopyId duplicate = new CardCopyId(UUID.randomUUID());
+    List<CardCopyId> duplicateCopies = List.of(duplicate, duplicate,
+        new CardCopyId(UUID.randomUUID()), new CardCopyId(UUID.randomUUID()),
+        new CardCopyId(UUID.randomUUID()));
+    CardCustodyPort.PrepareResult duplicateResult = service.prepare(owner, duplicateCopies,
+        UUID.randomUUID());
+    assertEquals(CardCustodyPort.Failure.INVALID_COPY_SET, duplicateResult.failure());
+  }
+
+  @Test
   void duplicateUuidRestoreStaysPendingAndQueuesExactRecoverySnapshots() throws Exception {
     var path = Files.createTempFile("mobmatrix-duplicate-restore", ".sqlite");
     UUID operation = UUID.randomUUID();
