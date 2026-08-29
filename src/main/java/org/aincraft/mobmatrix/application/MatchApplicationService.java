@@ -27,7 +27,6 @@ import org.aincraft.mobmatrix.domain.MatchState;
 public final class MatchApplicationService {
   private final CardCustodyPort custody;
   private final MatchRepository matches;
-  private final Map<UUID, StartResult> starts = new HashMap<>();
   private final Map<UUID, ReturnResult> settlements = new HashMap<>();
 
   public MatchApplicationService(CardCustodyPort custody) {
@@ -58,19 +57,22 @@ public final class MatchApplicationService {
 
     StartResult one;
     try {
-      one = prepareForStart(request.oneOwner(), plan.oneCopies(), request.oneOperationId());
+      one = prepareForStart(request.oneOwner(), plan.oneCopies(), request.oneOperationId(),
+          request.match().matchId());
     } catch (RuntimeException exception) {
       CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
       return MatchStartResult.rejected(request.match().matchId(), Failure.DATABASE_ERROR, cleanup);
     }
     if (!one.accepted()) {
-      CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
-      return MatchStartResult.rejected(request.match().matchId(), one.failure(), cleanup);
+      // A rejection means no durable operation was accepted. Do not manufacture pending
+      // recovery for copies that never entered custody.
+      return MatchStartResult.rejected(request.match().matchId(), one.failure());
     }
 
     StartResult two;
     try {
-      two = prepareForStart(request.twoOwner(), plan.twoCopies(), request.twoOperationId());
+      two = prepareForStart(request.twoOwner(), plan.twoCopies(), request.twoOperationId(),
+          request.match().matchId());
     } catch (RuntimeException exception) {
       CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
       cleanup = cleanup.plus(cleanup(request.twoOperationId(), plan.twoCopies()));
@@ -78,7 +80,8 @@ public final class MatchApplicationService {
     }
     if (!two.accepted()) {
       CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
-      cleanup = cleanup.plus(cleanup(request.twoOperationId(), plan.twoCopies()));
+      // Only the accepted first operation is eligible for cleanup. A rejected second prepare
+      // likewise did not create custody and must not yield phantom recovery rows.
       return MatchStartResult.rejected(request.match().matchId(), two.failure(), cleanup);
     }
 
@@ -109,24 +112,26 @@ public final class MatchApplicationService {
 
   /** Prepare and escrow exactly five selected physical cards before exposing a match. */
   public synchronized StartResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
+    return prepare(owner, copyIds, operationId, null);
+  }
+
+  private StartResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId,
+      org.aincraft.mobmatrix.domain.MatchId matchId) {
     Objects.requireNonNull(operationId, "operation id is required");
-    StartResult previous = starts.get(operationId);
-    if (previous != null) {
-      if (!previous.owner().equals(owner) || !previous.copyIds().equals(copyIds)) {
-        return StartResult.rejected(operationId, owner, copyIds, Failure.MISMATCHED_OPERATION);
-      }
-      return previous;
-    }
     List<CardCopyId> copies;
     try {
       copies = exactDeck(copyIds);
     } catch (IllegalArgumentException exception) {
-      return StartResult.rejected(operationId, owner, copyIds == null ? List.of() : copyIds, Failure.INVALID_COPY_SET);
+      return StartResult.rejected(operationId, owner == null ? CopyOwner.house() : owner,
+          copyIds == null ? List.of() : copyIds, Failure.INVALID_COPY_SET);
     }
     if (owner == null || !owner.isPlayer()) {
-      return StartResult.rejected(operationId, owner == null ? CopyOwner.house() : owner, copies, Failure.INVALID_OWNER);
+      return StartResult.rejected(operationId, owner == null ? CopyOwner.house() : owner, copies,
+          Failure.INVALID_OWNER);
     }
-    PrepareResult prepared = custody.prepare(owner, copies, operationId);
+    PrepareResult prepared = matchId == null
+        ? custody.prepare(owner, copies, operationId)
+        : custody.prepare(owner, copies, operationId, matchId);
     if (!prepared.accepted()) {
       return StartResult.rejected(operationId, owner, copies, prepared.failure());
     }
@@ -136,9 +141,7 @@ public final class MatchApplicationService {
       return StartResult.rejected(operationId, owner, copies,
           escrowed.failure() == Failure.NONE ? Failure.INVALID_STATE : escrowed.failure());
     }
-    StartResult result = StartResult.escrowed(operationId, owner, copies);
-    starts.put(operationId, result);
-    return result;
+    return StartResult.escrowed(operationId, owner, copies);
   }
 
   public synchronized StartResult prepare(CopyOwner owner, List<CardCopyId> copyIds, String operationId) {
@@ -172,10 +175,10 @@ public final class MatchApplicationService {
     return ApplyResult.accepted(transition);
   }
 
-  /** Reconciles an operation journal on startup without touching JDBC from inventory code. */
-  private StartResult prepareForStart(CopyOwner owner, List<CardCopyId> copies, UUID operationId) {
+  private StartResult prepareForStart(CopyOwner owner, List<CardCopyId> copies, UUID operationId,
+      org.aincraft.mobmatrix.domain.MatchId matchId) {
     if (copies.isEmpty()) return StartResult.escrowed(operationId, owner, copies);
-    return prepare(owner, copies, operationId);
+    return prepare(owner, copies, operationId, matchId);
   }
 
   private static ReservationPlan reservationPlan(MatchState state, StartMatchRequest request) {
@@ -222,14 +225,24 @@ public final class MatchApplicationService {
 
   private CleanupSummary cleanup(UUID operationId, List<CardCopyId> expected) {
     if (expected.isEmpty()) return new CleanupSummary(List.of(), List.of());
+    boolean known = false;
+    try {
+      known = custody.openOperationIds().contains(operationId);
+    } catch (RuntimeException ignored) {
+      // A lookup failure must not turn an unaccepted operation into phantom recovery.
+    }
     try {
       ReturnResult returned = custody.returnCopies(operationId);
+      if (returned.failure() == Failure.MISMATCHED_OPERATION && returned.expectedCopyIds().isEmpty()) {
+        return new CleanupSummary(List.of(), List.of());
+      }
       if (returned.complete() || returned.status() == OperationStatus.PREPARED) {
         custody.abort(operationId);
       }
       return new CleanupSummary(returned.recoveryCopyIds(), returned.missingCopyIds());
     } catch (RuntimeException exception) {
-      return new CleanupSummary(expected, expected);
+      return known ? new CleanupSummary(expected, expected)
+          : new CleanupSummary(List.of(), List.of());
     }
   }
 

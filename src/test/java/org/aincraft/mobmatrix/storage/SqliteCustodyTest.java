@@ -59,6 +59,28 @@ final class SqliteCustodyTest {
     Files.deleteIfExists(path);
   }
   @Test
+  void reservationIdentityBindsOperationToMatchAcrossReopen() throws Exception {
+    var path = Files.createTempFile("mobmatrix-match-binding", ".sqlite");
+    UUID operation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {4, 2});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(operation, owner, List.of(copy), List.of(snapshot), "match-a");
+      assertEquals("match-a", repository.findReservation(operation).orElseThrow().matchId());
+      assertThrows(IllegalStateException.class,
+          () -> repository.prepare(operation, owner, List.of(copy), List.of(snapshot), "match-b"));
+    }
+    try (Database database = new Database(path)) {
+      assertEquals("match-a", new SqliteCardRepository(database).findReservation(operation)
+          .orElseThrow().matchId());
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
   void markingRestoredClearsRecoveryInSameTransaction() throws Exception {
     var path = Files.createTempFile("mobmatrix-recovery", ".sqlite");
     UUID operation = UUID.randomUUID();

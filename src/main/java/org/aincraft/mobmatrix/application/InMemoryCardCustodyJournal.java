@@ -21,15 +21,22 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
   @Override
   public synchronized void prepare(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
       List<SerializedItemSnapshot> snapshots) {
+    prepare(operationId, owner, copyIds, snapshots, null);
+  }
+
+  @Override
+  public synchronized void prepare(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
+      List<SerializedItemSnapshot> snapshots, String matchId) {
     MutableEntry existing = entries.get(operationId);
     if (existing != null) {
-      if (!existing.owner.equals(owner) || !existing.copyIds.equals(copyIds)) {
+      if (!existing.owner.equals(owner) || !existing.copyIds.equals(copyIds)
+          || !java.util.Objects.equals(existing.matchId, matchId)) {
         throw new IllegalStateException("operation does not match existing reservation");
       }
       return;
     }
     entries.put(operationId, new MutableEntry(operationId, owner, List.copyOf(copyIds),
-        List.copyOf(snapshots), CardCustodyPort.OperationStatus.PREPARED));
+        List.copyOf(snapshots), CardCustodyPort.OperationStatus.PREPARED, matchId));
   }
 
   @Override
@@ -108,19 +115,22 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
     private final List<CardCopyId> copyIds;
     private final List<SerializedItemSnapshot> snapshots;
     private final Set<CardCopyId> restored = new HashSet<>();
+    private final String matchId;
     private CardCustodyPort.OperationStatus status;
 
     private MutableEntry(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
-        List<SerializedItemSnapshot> snapshots, CardCustodyPort.OperationStatus status) {
+        List<SerializedItemSnapshot> snapshots, CardCustodyPort.OperationStatus status,
+        String matchId) {
       this.operationId = operationId;
       this.owner = owner;
       this.copyIds = copyIds;
       this.snapshots = snapshots;
       this.status = status;
+      this.matchId = matchId;
     }
 
     private Entry snapshot() {
-      return new Entry(operationId, owner, copyIds, snapshots, status, restored);
+      return new Entry(operationId, owner, copyIds, snapshots, status, restored, matchId);
     }
   }
 }

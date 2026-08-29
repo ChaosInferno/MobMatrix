@@ -19,6 +19,11 @@ public interface CardCustodyPort {
   default List<UUID> openOperationIds() {
     return List.of();
   }
+  default PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId,
+      org.aincraft.mobmatrix.domain.MatchId matchId) {
+    Objects.requireNonNull(matchId, "match id is required");
+    return PrepareResult.rejected(operationId, owner, copyIds, Failure.MISMATCHED_OPERATION);
+  }
 
 
   default PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, String operationId) {

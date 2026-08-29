@@ -32,14 +32,14 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   public Optional<CardCustodyJournal.Entry> find(UUID operationId) {
     return findReservation(operationId).map(reservation -> new CardCustodyJournal.Entry(
         reservation.operationId(), reservation.owner(), reservation.copyIds(), reservation.snapshots(),
-        reservation.status(), Set.copyOf(reservation.restoredCopyIds())));
+        reservation.status(), Set.copyOf(reservation.restoredCopyIds()), reservation.matchId()));
   }
 
   @Override
   public List<CardCustodyJournal.Entry> openEntries() {
     return findOpenReservations().stream().map(reservation -> new CardCustodyJournal.Entry(
         reservation.operationId(), reservation.owner(), reservation.copyIds(), reservation.snapshots(),
-        reservation.status(), Set.copyOf(reservation.restoredCopyIds()))).toList();
+        reservation.status(), Set.copyOf(reservation.restoredCopyIds()), reservation.matchId())).toList();
   }
 
   public List<UUID> openOperationIds() {
@@ -149,6 +149,12 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   @Override
   public void prepare(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
       List<SerializedItemSnapshot> snapshots) {
+    prepare(operationId, owner, copyIds, snapshots, null);
+  }
+
+  @Override
+  public void prepare(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
+      List<SerializedItemSnapshot> snapshots, String matchId) {
     Objects.requireNonNull(operationId, "operation id is required");
     Objects.requireNonNull(owner, "owner is required");
     List<CardCopyId> copies = copyList(copyIds);
@@ -162,10 +168,12 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         throw new IllegalArgumentException("snapshot copy does not match reservation");
       }
     }
+    if (matchId != null && matchId.isBlank()) throw new IllegalArgumentException("match id cannot be blank");
     inTransaction(() -> {
       Reservation existing = findReservationInternal(operationId);
       if (existing != null) {
-        if (!existing.owner().equals(owner) || !existing.copyIds().equals(copies)) {
+        if (!existing.owner().equals(owner) || !existing.copyIds().equals(copies)
+            || !Objects.equals(existing.matchId(), matchId)) {
           throw new IllegalStateException("operation does not match existing reservation");
         }
         return;
@@ -176,9 +184,11 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         if (!ledger.owner().equals(owner)) throw new IllegalStateException("copy owner mismatch");
       }
       try (var insert = connection.prepareStatement(
-          "INSERT INTO reservations(operation_id, owner_kind, owner_uuid, status, created_at, updated_at) VALUES (?, ?, ?, 'PREPARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")) {
+          "INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status, created_at, updated_at) "
+              + "VALUES (?, ?, ?, ?, 'PREPARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")) {
         insert.setString(1, operationId.toString());
         writeOwner(insert, 2, 3, owner);
+        insert.setString(4, matchId);
         insert.executeUpdate();
       }
       try (var insert = connection.prepareStatement(
@@ -319,20 +329,15 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       }
     });
   }
-  /** Compatibility alias for callers that track recovery rows separately. */
-  public void markRecoveryRestored(UUID operationId, CardCopyId copyId) {
-    markRestored(operationId, copyId);
-  }
-
-
   private Reservation findReservationInternal(UUID operationId) throws SQLException {
     try (var query = connection.prepareStatement(
-        "SELECT owner_kind, owner_uuid, status FROM reservations WHERE operation_id = ?")) {
+        "SELECT owner_kind, owner_uuid, match_id, status FROM reservations WHERE operation_id = ?")) {
       query.setString(1, operationId.toString());
       try (var rows = query.executeQuery()) {
         if (!rows.next()) return null;
         CopyOwner owner = readOwner(rows.getString(1), rows.getString(2));
-        OperationStatus status = OperationStatus.valueOf(rows.getString(3));
+        String matchId = rows.getString(3);
+        OperationStatus status = OperationStatus.valueOf(rows.getString(4));
         List<CardCopyId> copies = new ArrayList<>();
         try (var copyQuery = connection.prepareStatement(
             "SELECT copy_uuid FROM reservation_copies WHERE operation_id = ? ORDER BY rowid")) {
@@ -360,7 +365,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
             while (restoredRows.next()) restored.add(new CardCopyId(UUID.fromString(restoredRows.getString(1))));
           }
         }
-        return new Reservation(operationId, owner, copies, snapshots, status, restored);
+        return new Reservation(operationId, owner, copies, snapshots, status, restored, matchId);
       }
     }
   }
@@ -453,17 +458,24 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     }
   }
   public record Reservation(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
-      List<SerializedItemSnapshot> snapshots, OperationStatus status, List<CardCopyId> restoredCopyIds) {
+      List<SerializedItemSnapshot> snapshots, OperationStatus status, List<CardCopyId> restoredCopyIds,
+      String matchId) {
     public Reservation {
       Objects.requireNonNull(operationId); Objects.requireNonNull(owner);
       copyIds = List.copyOf(copyIds); snapshots = List.copyOf(snapshots); Objects.requireNonNull(status);
       restoredCopyIds = List.copyOf(Objects.requireNonNull(restoredCopyIds));
+      if (matchId != null && matchId.isBlank()) throw new IllegalArgumentException("match id cannot be blank");
       if (!copyIds.containsAll(restoredCopyIds)) throw new IllegalArgumentException("restored copy is not reserved");
     }
 
     public Reservation(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
+        List<SerializedItemSnapshot> snapshots, OperationStatus status, List<CardCopyId> restoredCopyIds) {
+      this(operationId, owner, copyIds, snapshots, status, restoredCopyIds, null);
+    }
+
+    public Reservation(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
         List<SerializedItemSnapshot> snapshots, OperationStatus status) {
-      this(operationId, owner, copyIds, snapshots, status, List.of());
+      this(operationId, owner, copyIds, snapshots, status, List.of(), null);
     }
 
     public List<CardCopyId> expectedCopyIds() { return copyIds; }

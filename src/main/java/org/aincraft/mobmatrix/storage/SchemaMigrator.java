@@ -10,7 +10,7 @@ import java.util.Set;
 
 /** Explicit, repeatable schema migrations for custody and active-match state. */
 public final class SchemaMigrator {
-  public static final int CURRENT_VERSION = 2;
+  public static final int CURRENT_VERSION = 3;
 
   private SchemaMigrator() {}
 
@@ -45,6 +45,24 @@ public final class SchemaMigrator {
         applyV2(connection);
         try (var insert = connection.prepareStatement(
             "INSERT INTO schema_migrations(version, applied_at) VALUES (2, CURRENT_TIMESTAMP)")) {
+          insert.executeUpdate();
+        }
+        connection.commit();
+      } catch (SQLException exception) {
+        try { connection.rollback(); } catch (SQLException ignored) { }
+        throw exception;
+      } finally {
+        connection.setAutoCommit(autoCommit);
+      }
+    }
+    version = currentVersion(connection);
+    if (version < 3) {
+      boolean autoCommit = connection.getAutoCommit();
+      try {
+        connection.setAutoCommit(false);
+        applyV3(connection);
+        try (var insert = connection.prepareStatement(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES (3, CURRENT_TIMESTAMP)")) {
           insert.executeUpdate();
         }
         connection.commit();
@@ -249,6 +267,11 @@ public final class SchemaMigrator {
           )
           """);
       statement.execute("CREATE INDEX IF NOT EXISTS recovery_pending ON recovery_rows(status, owner_uuid)");
+    }
+  }
+  private static void applyV3(Connection connection) throws SQLException {
+    try (var statement = connection.createStatement()) {
+      statement.execute("ALTER TABLE reservations ADD COLUMN match_id TEXT");
     }
   }
 }

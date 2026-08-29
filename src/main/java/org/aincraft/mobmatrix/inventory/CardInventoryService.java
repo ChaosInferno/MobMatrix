@@ -58,28 +58,38 @@ public final class CardInventoryService implements CardCustodyPort {
   private void hydrate() {
     for (var entry : journal.openEntries()) {
       operations.put(entry.operationId(), new PreparedOperation(entry.owner(), entry.copyIds(),
-          entry.snapshots(), entry.status(), entry.restoredCopyIds()));
+          entry.snapshots(), entry.status(), entry.restoredCopyIds(), entry.matchId()));
     }
   }
 
   @Override
   public synchronized PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
+    return prepare(owner, copyIds, operationId, null);
+  }
+
+  @Override
+  public synchronized PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds,
+      UUID operationId, org.aincraft.mobmatrix.domain.MatchId matchId) {
     requirePrimaryThread();
     Objects.requireNonNull(operationId, "operation id is required");
     if (owner == null || !owner.isPlayer()) return PrepareResult.rejected(operationId,
-        owner == null ? CopyOwner.house() : owner, copyIds == null ? List.of() : copyIds, Failure.INVALID_OWNER);
+        owner == null ? CopyOwner.house() : owner, copyIds == null ? List.of() : copyIds,
+        Failure.INVALID_OWNER);
+    if (matchId != null) Objects.requireNonNull(matchId, "match id is required");
     List<CardCopyId> copies;
     try {
       copies = exactCopies(copyIds);
     } catch (IllegalArgumentException exception) {
-      return PrepareResult.rejected(operationId, owner, copyIds == null ? List.of() : copyIds, Failure.INVALID_COPY_SET);
+      return PrepareResult.rejected(operationId, owner, copyIds == null ? List.of() : copyIds,
+          Failure.INVALID_COPY_SET);
     }
     PreparedOperation existing = operation(operationId);
     if (existing != null) {
-      if (!existing.owner.equals(owner) || !existing.copyIds.equals(copies)) {
+      if (!existing.owner.equals(owner) || !existing.copyIds.equals(copies)
+          || !Objects.equals(existing.matchId, matchId == null ? null : matchId.value())) {
         return PrepareResult.rejected(operationId, owner, copies, Failure.MISMATCHED_OPERATION);
       }
-      if (existing.status == OperationStatus.ABORTED) {
+      if (existing.status == OperationStatus.ABORTED || existing.status == OperationStatus.RETURNED) {
         return PrepareResult.rejected(operationId, owner, copies, Failure.INVALID_STATE);
       }
       return PrepareResult.success(operationId, owner, copies, existing.snapshots);
@@ -93,13 +103,14 @@ public final class CardInventoryService implements CardCustodyPort {
     for (CardCopyId copy : copies) {
       Located located = scan.cards.get(copy);
       if (located == null) return PrepareResult.rejected(operationId, owner, copies, Failure.COPY_NOT_FOUND);
-      if (!located.data.owner().equals(owner)) return PrepareResult.rejected(operationId, owner, copies, Failure.MISMATCHED_OWNER);
+      if (!located.data.owner().equals(owner)) return PrepareResult.rejected(operationId, owner, copies,
+          Failure.MISMATCHED_OWNER);
       snapshots.add(new SerializedItemSnapshot(copy, serialize(located.item.clone())));
     }
     // The durable PREPARED row is written before any inventory mutation.
-    journal.prepare(operationId, owner, copies, snapshots);
+    journal.prepare(operationId, owner, copies, snapshots, matchId == null ? null : matchId.value());
     PreparedOperation operation = new PreparedOperation(owner, copies, List.copyOf(snapshots),
-        OperationStatus.PREPARED, Set.of());
+        OperationStatus.PREPARED, Set.of(), matchId == null ? null : matchId.value());
     operations.put(operationId, operation);
     return PrepareResult.success(operationId, owner, copies, snapshots);
   }
@@ -261,7 +272,7 @@ public final class CardInventoryService implements CardCustodyPort {
     var entry = journal.find(operationId).orElse(null);
     if (entry == null) return null;
     PreparedOperation hydrated = new PreparedOperation(entry.owner(), entry.copyIds(), entry.snapshots(),
-        entry.status(), entry.restoredCopyIds());
+        entry.status(), entry.restoredCopyIds(), entry.matchId());
     operations.put(operationId, hydrated);
     return hydrated;
   }
@@ -351,18 +362,31 @@ public final class CardInventoryService implements CardCustodyPort {
     return handleInventoryClick(event);
   }
 
-  public boolean handleDeath(org.bukkit.event.entity.PlayerDeathEvent event) {
-    return handlePlayerDeath(event);
-  }
 
   public boolean handleQuit(org.bukkit.event.player.PlayerQuitEvent event) {
     return hasReservedInventory(event.getPlayer().getInventory());
   }
 
 
+  static boolean restorationMustRemainPending(boolean duplicate, boolean counterfeit) {
+    return duplicate || counterfeit;
+  }
   private ReturnResult restore(UUID operationId, PreparedOperation operation, Inventory inventory) {
     List<CardCopyId> returned = new ArrayList<>(restored(operation));
     Scan scan = scan(inventory);
+    // Never acknowledge any copy while the scan is ambiguous. A duplicate UUID or invalid
+    // identity-bearing item means there are multiple or untrusted physical candidates; leave
+    // every unresolved snapshot durable and pending until a later scan reconciles the inventory.
+    if (restorationMustRemainPending(scan.duplicate, scan.counterfeit)) {
+      List<CardCopyId> pending = new ArrayList<>();
+      for (SerializedItemSnapshot snapshot : operation.snapshots) {
+        if (!operation.restored.contains(snapshot.copyId())) {
+          journal.addRecovery(operationId, operation.owner, snapshot);
+          pending.add(snapshot.copyId());
+        }
+      }
+      return ReturnResult.pending(operationId, operation.copyIds, restored(operation), pending, pending);
+    }
     List<CardCopyId> missing = new ArrayList<>();
     for (SerializedItemSnapshot snapshot : operation.snapshots) {
       CardCopyId copy = snapshot.copyId();
@@ -432,6 +456,8 @@ public final class CardInventoryService implements CardCustodyPort {
       if (!org.bukkit.Bukkit.isPrimaryThread()) {
         throw new IllegalStateException("inventory custody must run on the Paper primary thread");
       }
+    } catch (NullPointerException unavailable) {
+      // Unit tests may use the Paper API without a running server.
     } catch (IllegalStateException unavailable) {
       // Unit tests may use the Paper API without a running server.
       if (unavailable.getMessage() != null
@@ -499,21 +525,24 @@ public final class CardInventoryService implements CardCustodyPort {
     private final CopyOwner owner;
     private final List<CardCopyId> copyIds;
     private final List<SerializedItemSnapshot> snapshots;
+    private final String matchId;
     private final Set<CardCopyId> restored = new HashSet<>();
     private OperationStatus status;
 
     private PreparedOperation(CopyOwner owner, List<CardCopyId> copyIds,
         List<SerializedItemSnapshot> snapshots, OperationStatus status) {
-      this(owner, copyIds, snapshots, status, Set.of());
+      this(owner, copyIds, snapshots, status, Set.of(), null);
     }
 
     private PreparedOperation(CopyOwner owner, List<CardCopyId> copyIds,
-        List<SerializedItemSnapshot> snapshots, OperationStatus status, Set<CardCopyId> restored) {
+        List<SerializedItemSnapshot> snapshots, OperationStatus status, Set<CardCopyId> restored,
+        String matchId) {
       this.owner = owner;
       this.copyIds = List.copyOf(copyIds);
       this.snapshots = List.copyOf(snapshots);
       this.restored.addAll(restored);
       this.status = status;
+      this.matchId = matchId;
     }
   }
   private record Located(int slot, ItemStack item, CardItemData data) {}
