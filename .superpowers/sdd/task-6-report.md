@@ -1317,3 +1317,91 @@ Changes remain within persistence, snapshot rehydration, and pure custody journa
 No live Bukkit/Paper objects cross into application or storage. Paper registry codec tests remain
 environment-skipped where no running Paper server is available, and SQLite emits the documented
 restricted-native-access warning.
+# Task 6 status, counterfeit, and seat-owner validation corrections
+
+## Status
+
+Implemented and committed as `2779316` (`fix: validate persisted status and seat owners`).
+SQLite match-row authentication now covers the canonical envelope `(match_id, revision, status,
+state_bytes, transcript_json)`, and verification runs before `find`, `activeMatches`, and either
+rehydration path exposes persisted data. Decoded state status must agree with the persisted status,
+and active-match enumeration validates every row before returning only unfinished matches.
+Inventory scans now classify every invalid identity-bearing ItemStack as counterfeit regardless of
+material. Match starts reject the same player UUID in both seats before pure start evaluation or
+custody.
+
+## TDD and focused verification
+
+Focused red command, run after adding the regressions and before the production changes:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest
+```
+
+Exact red result:
+
+```text
+> Task :compileTestJava FAILED
+CardInventoryServiceTest.java:123: error: cannot find symbol
+    method isCounterfeit(ReadResult,boolean)
+3 errors
+FAILURE: Build failed with an exception.
+```
+
+The first post-implementation focused run exposed three expected test-fixture adjustments:
+the pre-existing RANDOM wrong-owner regression used the same UUID in both seats, and row identity/
+revision tests called `find` after mutating authenticated envelope fields. Those tests were updated
+to use distinct wrong-owner data and to assert fail-closed `find` behavior.
+
+Focused green command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+Required focused adapter/domain/bot regression command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 1 executed, 3 up-to-date
+```
+
+The focused runs emitted only SQLite's JVM restricted-native-access warning. The four Paper codec
+tests remain assumption-skipped because this environment has no running Paper registry. No
+formatter, linter, project-wide build, or project-wide test suite was run.
+
+## Corrective coverage
+
+- Every SQLite match write computes the keyed MAC from all canonical row envelope fields, including
+  revision, mutable status, state bytes, and transcript JSON; stale or modified rows fail before
+  snapshot exposure.
+- `findState` and both `rehydrate` paths decode only after integrity verification and reject a
+  status that differs from `state.isFinished() ? "FINISHED" : "ACTIVE"`.
+- `activeMatches` no longer trusts `WHERE status = 'ACTIVE'`; it authenticates and decodes all
+  rows, rejects row/state status mismatches, and excludes decoded terminal matches.
+- Invalid identity-bearing inventory items are counterfeit even when their material is not PAPER;
+  ordinary non-card items with no card namespace identity remain ignored.
+- Start owner validation returns structured `INVALID_OWNER` before `MatchEngine.start` or either
+  custody preparation when both seats carry the same player UUID.
+
+## Thread-boundary notes and concerns
+
+Changes remain inside the existing application, inventory, and SQLite storage boundaries. The
+counterfeit classifier is package-private and pure so its material-independent behavior is
+focused-tested without requiring a live Paper registry. Existing Paper primary-thread custody
+requirements, exact snapshots, and durable recovery behavior are unchanged.
