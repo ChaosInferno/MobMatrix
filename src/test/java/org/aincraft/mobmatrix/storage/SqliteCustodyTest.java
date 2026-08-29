@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.nio.file.Files;
 import java.time.Instant;
@@ -76,6 +77,34 @@ final class SqliteCustodyTest {
     try (Database database = new Database(path)) {
       assertEquals("match-a", new SqliteCardRepository(database).findReservation(operation)
           .orElseThrow().matchId());
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void v2DatabaseMigrationAddsMatchBindingWithoutLosingReservations() throws Exception {
+    var path = Files.createTempFile("mobmatrix-v2-migration", ".sqlite");
+    UUID existingOperation = UUID.randomUUID();
+    UUID newOperation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId existingCopy = new CardCopyId(UUID.randomUUID());
+    CardCopyId newCopy = new CardCopyId(UUID.randomUUID());
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(existingCopy, new CardId(1), owner));
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(newCopy, new CardId(1), owner));
+      repository.prepare(existingOperation, owner, List.of(existingCopy),
+          List.of(new SerializedItemSnapshot(existingCopy, new byte[] {1})));
+      try (var statement = database.connection().createStatement()) {
+        statement.execute("ALTER TABLE reservations DROP COLUMN match_id");
+        statement.execute("DELETE FROM schema_migrations WHERE version = 3");
+      }
+      SchemaMigrator.migrate(database.connection());
+      assertEquals(3, SchemaMigrator.currentVersion(database.connection()));
+      assertNull(repository.findReservation(existingOperation).orElseThrow().matchId());
+      repository.prepare(newOperation, owner, List.of(newCopy),
+          List.of(new SerializedItemSnapshot(newCopy, new byte[] {2})), "migrated-match");
+      assertEquals("migrated-match", repository.findReservation(newOperation).orElseThrow().matchId());
     }
     Files.deleteIfExists(path);
   }

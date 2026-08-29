@@ -368,8 +368,26 @@ public final class CardInventoryService implements CardCustodyPort {
   }
 
 
-  static boolean restorationMustRemainPending(boolean duplicate, boolean counterfeit) {
-    return duplicate || counterfeit;
+  static ReturnResult restoreAmbiguous(UUID operationId, CopyOwner owner,
+      List<CardCopyId> copyIds, List<SerializedItemSnapshot> snapshots,
+      Set<CardCopyId> restoredCopyIds,
+      org.aincraft.mobmatrix.application.CardCustodyJournal journal) {
+    Objects.requireNonNull(operationId, "operation id is required");
+    Objects.requireNonNull(owner, "owner is required");
+    Objects.requireNonNull(copyIds, "copy ids are required");
+    Objects.requireNonNull(snapshots, "snapshots are required");
+    Objects.requireNonNull(restoredCopyIds, "restored copies are required");
+    Objects.requireNonNull(journal, "journal is required");
+    journal.transition(operationId, OperationStatus.RETURN_PENDING);
+    List<CardCopyId> returned = new ArrayList<>(restoredCopyIds);
+    List<CardCopyId> pending = new ArrayList<>();
+    for (SerializedItemSnapshot snapshot : snapshots) {
+      if (!restoredCopyIds.contains(snapshot.copyId())) {
+        journal.addRecovery(operationId, owner, snapshot);
+        pending.add(snapshot.copyId());
+      }
+    }
+    return ReturnResult.pending(operationId, copyIds, returned, pending, pending);
   }
   private ReturnResult restore(UUID operationId, PreparedOperation operation, Inventory inventory) {
     List<CardCopyId> returned = new ArrayList<>(restored(operation));
@@ -377,15 +395,9 @@ public final class CardInventoryService implements CardCustodyPort {
     // Never acknowledge any copy while the scan is ambiguous. A duplicate UUID or invalid
     // identity-bearing item means there are multiple or untrusted physical candidates; leave
     // every unresolved snapshot durable and pending until a later scan reconciles the inventory.
-    if (restorationMustRemainPending(scan.duplicate, scan.counterfeit)) {
-      List<CardCopyId> pending = new ArrayList<>();
-      for (SerializedItemSnapshot snapshot : operation.snapshots) {
-        if (!operation.restored.contains(snapshot.copyId())) {
-          journal.addRecovery(operationId, operation.owner, snapshot);
-          pending.add(snapshot.copyId());
-        }
-      }
-      return ReturnResult.pending(operationId, operation.copyIds, restored(operation), pending, pending);
+    if (scan.duplicate || scan.counterfeit) {
+      return restoreAmbiguous(operationId, operation.owner, operation.copyIds, operation.snapshots,
+          operation.restored, journal);
     }
     List<CardCopyId> missing = new ArrayList<>();
     for (SerializedItemSnapshot snapshot : operation.snapshots) {

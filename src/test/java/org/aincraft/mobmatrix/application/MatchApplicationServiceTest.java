@@ -1,10 +1,12 @@
 package org.aincraft.mobmatrix.application;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.time.Instant;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -20,6 +22,8 @@ import org.aincraft.mobmatrix.domain.Deck;
 import org.aincraft.mobmatrix.domain.MatchEngine;
 import org.aincraft.mobmatrix.domain.MatchId;
 import org.aincraft.mobmatrix.domain.MatchRules;
+import org.aincraft.mobmatrix.storage.Database;
+import org.aincraft.mobmatrix.storage.SqliteCardRepository;
 import org.junit.jupiter.api.Test;
 
 final class MatchApplicationServiceTest {
@@ -159,23 +163,32 @@ final class MatchApplicationServiceTest {
     assertTrue(result.pendingRecoveryCopyIds().isEmpty());
     assertTrue(result.missingCopyIds().isEmpty());
   }
+
   @Test
-  void preparedOperationRecoveryQueuesExactCopiesInsteadOfRetryingEscrow() {
+  void preparedOperationRecoveryQueuesExactCopiesInsteadOfRetryingEscrow() throws Exception {
     UUID operation = UUID.randomUUID();
     CopyOwner owner = CopyOwner.player(UUID.randomUUID());
     CardCopyId copy = new CardCopyId(UUID.randomUUID());
     SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {7, 6, 5});
-    InMemoryCardCustodyJournal journal = new InMemoryCardCustodyJournal();
-    journal.prepare(operation, owner, List.of(copy), List.of(snapshot));
+    var path = Files.createTempFile("mobmatrix-prepared-recovery", ".sqlite");
+    try (Database database = new Database(path)) {
+      SqliteCardRepository journal = new SqliteCardRepository(database);
+      journal.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      journal.prepare(operation, owner, List.of(copy), List.of(snapshot));
 
-    var service = new org.aincraft.mobmatrix.inventory.CardInventoryService(
-        new org.aincraft.mobmatrix.inventory.CardItemCodec("mobmatrix", "stable-server-secret"),
-        id -> null, journal);
-    CardCustodyPort.RecoveryResult result = service.recover(operation);
+      var service = new org.aincraft.mobmatrix.inventory.CardInventoryService(
+          new org.aincraft.mobmatrix.inventory.CardItemCodec("mobmatrix", "stable-server-secret"),
+          id -> null, journal);
+      CardCustodyPort.RecoveryResult result = service.recover(operation);
 
-    assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING, result.status());
-    assertEquals(List.of(copy), result.pendingCopyIds());
-    assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING, journal.find(operation).orElseThrow().status());
+      assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING, result.status());
+      assertEquals(List.of(copy), result.pendingCopyIds());
+      assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING,
+          journal.findReservation(operation).orElseThrow().status());
+      assertEquals(1, journal.pendingRecovery().size());
+      assertArrayEquals(snapshot.bytes(), journal.pendingRecovery().get(0).snapshot().bytes());
+    }
+    Files.deleteIfExists(path);
   }
 
   private static List<CardCopyId> copies() {
