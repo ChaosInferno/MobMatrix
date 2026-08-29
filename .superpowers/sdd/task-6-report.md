@@ -417,3 +417,84 @@ focused suite. No formatter, linter, project-wide build, or project-wide test su
 
 - Paper codec tests remain assumption-skipped without a running Paper item registry.
 - SQLite emits Java's restricted-native-access warning under this JVM.
+# Task 6 final persistence/owner/abort fixes
+
+## Status
+
+Implemented and committed as `ccbd1f3` (`fix: require persisted match state`).
+The production two-argument `MatchApplicationService` constructor now requires a repository, while
+the isolated one-argument constructor uses the explicit `InMemoryMatchRepository` with initial-save,
+snapshot lookup, and optimistic CAS semantics. Accepted starts and accepted commands always persist
+before success is reported. RANDOM starts validate selected UUIDs, physical-copy owners, and exact
+inventory card identities before custody. The `CardCustodyPort.abort` default is explicitly
+unsupported, and cleanup preserves pending recovery when an adapter cannot durably abort.
+
+## TDD and focused verification
+
+Focused adapter/domain/bot command (red, before implementation):
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact red output:
+
+```text
+> Task :test FAILED
+
+MatchApplicationServiceTest > cleanupPreservesRecoveryWhenAdapterUsesUnsupportedDefaultAbort() FAILED
+    org.opentest4j.AssertionFailedError at MatchApplicationServiceTest.java:537
+
+MatchApplicationServiceTest > oneArgumentServicePersistsApplyAndEnforcesCas() FAILED
+    org.opentest4j.AssertionFailedError at MatchApplicationServiceTest.java:68
+
+MatchApplicationServiceTest > randomStartRejectsWrongOwnerBeforeReservation() FAILED
+    org.opentest4j.AssertionFailedError at MatchApplicationServiceTest.java:161
+
+78 tests completed, 3 failed, 4 skipped
+
+FAILURE: Build failed with an exception.
+> There were failing tests. See the report at: file:///C:/Users/blaze/IdeaProjects/Aincraft-MobMatrix/build/reports/tests/test/index.html
+
+BUILD FAILED in 1s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+Focused adapter/domain/bot command (green, after implementation):
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact green output:
+
+```text
+> Task :test
+
+BUILD SUCCESSFUL in 1s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+The final focused selection completed 78 tests: 74 passed and 4 Paper-registry codec tests were
+assumption-skipped because no running Paper server was available. SQLite emitted only the JVM
+restricted-native-access warning. No formatter, linter, project-wide build, or project-wide test
+suite was run.
+
+## Corrective coverage
+
+- One-argument service starts and applies use explicit in-memory persistence; repeated application
+  against the same revision is rejected as `STALE_REVISION`.
+- RANDOM selection validates exactly five distinct UUIDs for each seat, each selected physical
+  `CardCopy.owner()`, each inventory copy owner, and matching inventory card IDs before `prepare`.
+  Pure domain RANDOM start rejects inconsistent seat inventory owners before generating a match.
+- Unsupported default abort returns a failure result rather than claiming `ABORTED`. Cleanup checks
+  both acceptance and status and retains expected UUIDs as pending recovery when abort is unsupported.
+- Existing SQLite custody, match-bound retry, atomic initial save, duplicate snapshot, SWAP, exact
+  restore, movement, startup recovery, and schema behavior remain covered by the focused command.
+
+## Thread-boundary notes and concerns
+
+The in-memory repository contains immutable domain states only; durable production wiring remains
+the explicit repository constructor. No Bukkit/Paper objects cross application or storage. Paper
+codec tests remain assumption-skipped without a running Paper registry, and SQLite emits the JVM
+restricted-native-access warning.
