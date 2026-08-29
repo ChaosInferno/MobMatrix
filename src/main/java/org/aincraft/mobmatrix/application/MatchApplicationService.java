@@ -644,12 +644,10 @@ public final class MatchApplicationService {
 
   private static OperationStatus pendingStatus(
       Optional<CardCustodyPort.OperationBinding> binding) {
-    if (binding.isEmpty()) return OperationStatus.RETURN_PENDING;
-    OperationStatus status = binding.get().status();
-    return status == OperationStatus.RETURNED || status == OperationStatus.ABORTED
-        ? status : OperationStatus.RETURN_PENDING;
+    // A thrown adapter call leaves terminality uncertain; never report a terminal status as
+    // successfully reconciled when exact custody may still be unresolved.
+    return OperationStatus.RETURN_PENDING;
   }
-
 
   /** Reconciles every durable custody row and active match on plugin startup. */
   public synchronized StartupRecoveryResult recoverStartup(
