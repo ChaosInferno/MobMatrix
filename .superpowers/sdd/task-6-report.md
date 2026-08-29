@@ -961,3 +961,61 @@ No formatter, linter, project-wide build, or project-wide test suite was run.
   both `findState` and direct `rehydrate`.
 - Legitimate Draft offering references remain accepted, while non-authoritative active HOUSE
   copies are rejected before executable state exposure.
+
+## Task 6 final custody/state integrity fixes
+
+### Status
+
+Implemented and committed as `a9a658d` (`fix: harden custody state transitions`).
+
+### Corrective coverage
+
+- `MatchApplicationService.apply` now catches runtime failures from successor `matches.save`
+  and returns `DATABASE_ERROR`, while preserving explicit stale/database/invalid-state mappings.
+- Inventory operation caches refresh durable journal status and restored-copy state before
+  `recover`/`abort`/return results. PREPARED escrow now compares each live serialized item
+  byte-for-byte with its prepare snapshot before removing it, returning `INVENTORY_CHANGED`
+  without mutation on drift.
+- SQLite `findState` and both `rehydrate` overloads reject decoded match revisions that differ
+  from the row revision; the in-memory rehydration seam applies the same identity check.
+- Active retry custody-binding reads distinguish runtime durable-read failures (`DATABASE_ERROR`)
+  from successfully absent or nonmatching metadata (`MISMATCHED_OPERATION`).
+- Startup catches `openOperationIds()` failures as a structured `StartupRecoveryResult`
+  `custodyFailure` without inventing an operation ID, leaves custody untouched, and continues
+  independent active-match rehydration.
+- Focused regressions cover thrown apply saves, unavailable retry binding reads, startup
+  enumeration failure, durable RETURN_PENDING visibility after ambiguous restore, and row/state
+  revision mismatch. Existing bounded collection, duplicate-entry, Draft reference, HOUSE/CHAOS,
+  original-owner, and decoded identity validations remain fail-closed.
+
+### TDD and focused verification
+
+Focused command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact red result after temporarily removing the production save-exception catch:
+
+```text
+> Task :test FAILED
+
+MatchApplicationServiceTest > applyCatchesThrownSaveAsDatabaseError() FAILED
+    java.lang.IllegalStateException at MatchApplicationServiceTest.java:126
+
+115 tests completed, 1 failed, 4 skipped
+```
+
+Exact green result after restoring the implementation:
+
+```text
+> Task :test
+
+BUILD SUCCESSFUL in 653ms
+4 actionable tasks: 2 from cache, 2 up-to-date
+```
+
+The four Paper codec tests remain assumption-skipped because this environment has no running
+Paper item registry. SQLite emitted only the JVM restricted-native-access warning. No formatter,
+linter, project-wide build, or project-wide test suite was run.
