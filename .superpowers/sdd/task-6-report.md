@@ -1168,3 +1168,61 @@ The four Paper-registry codec tests remain assumption-skipped because no running
 available. SQLite emitted the JVM restricted-native-access warning only. Inventory custody
 continues to enforce the Paper primary-thread boundary; no formatter, linter, project-wide build,
 or project-wide test suite was run.
+# Task 6 final authenticated custody fixes
+
+## Status
+
+Implemented and committed as `542aceb` (`fix: authenticate durable match state`) with authenticated
+SQLite match snapshots, durable ABORTED restoration invariants, and safe empty-owner inference
+while preserving prior custody/state behavior.
+
+### Corrective coverage
+
+- Schema migration 4 adds nullable `matches.state_digest`; legacy rows remain fail-closed rather
+  than being silently trusted.
+- Every SQLite `save` and `saveInitial` stores a versioned SHA-256 digest over complete state bytes.
+  `findState` and both `rehydrate` paths verify the digest before decoding; missing or mismatched
+  envelopes are rejected.
+- In-memory and SQLite custody journals reject `ABORTED` unless every expected copy is present in
+  the restored-copy ledger. `CardInventoryService.abort` already routes PREPARED, ESCROWED, and
+  RETURN_PENDING through return/recovery before requesting terminal abort.
+- Empty original-owner metadata is inferred only for a no-RANDOM/no-SWAP snapshot with an empty
+  board. Placed or captured snapshots require exact owner metadata; plain initial fixtures remain
+  compatible.
+
+### TDD and focused verification
+
+Focused red command after adding the three regressions:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest
+```
+
+Exact red result before production changes:
+
+```text
+> Task :test FAILED
+SqliteCustodyTest > custodyJournalsRejectAbortedUntilEveryCopyIsRestored() FAILED
+SqliteCustodyTest > matchSnapshotRejectsMissingAndMismatchedIntegrity() FAILED
+SqliteCustodyTest > snapshotRejectsEmptyOwnerInferenceAfterPlacement() FAILED
+46 tests completed, 3 failed
+FAILURE: Build failed with an exception.
+```
+
+Final focused command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact green result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+The focused run emitted only SQLite's JVM restricted-native-access warning. No formatter, linter,
+project-wide build, or project-wide test suite was run.
+
