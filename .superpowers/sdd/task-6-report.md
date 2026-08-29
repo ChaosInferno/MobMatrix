@@ -4,7 +4,7 @@
 
 Implemented and committed the durable custody journal, SQLite custody/recovery constraints, complete versioned MatchState snapshot codec, domain-safe state rehydration, startup recovery, movement protection adapters, stable codec secret handling, exact deck validation, failure cleanup, and strict match CAS rules.
 
-Implementation commit: `a504b4c` (`fix: make custody and recovery durable`)
+Implementation commits: `a504b4c` (`fix: make custody and recovery durable`) and `6d1af52` (`fix: validate rehydrated card definitions`)
 
 ## TDD and focused verification
 
