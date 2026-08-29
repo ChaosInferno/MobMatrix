@@ -418,6 +418,16 @@ public final class CardInventoryService implements CardCustodyPort {
     }
     return false;
   }
+  /** Cancels automated inventory pickup transfers of reserved physical cards. */
+  public boolean handleInventoryPickupItem(
+      org.bukkit.event.inventory.InventoryPickupItemEvent event) {
+    requirePrimaryThread();
+    Objects.requireNonNull(event, "event is required");
+    boolean reserved = isReserved(event.getItem().getItemStack());
+    if (reserved) event.setCancelled(true);
+    return reserved;
+  }
+
 
 
   static ReturnResult restoreAmbiguous(UUID operationId, CopyOwner owner,
