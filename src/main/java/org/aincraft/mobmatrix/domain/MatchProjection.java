@@ -44,8 +44,12 @@ public record MatchProjection(
         ? state.hand(viewer).stream().map(HandCard::copyId).toList() : List.of();
     List<Square> legalSquares = canAct
         ? state.board().emptySquares() : List.of();
-    return new MatchProjection(state.board().cells(), state.hand(viewer),
-        state.hand(viewer.opponent()).stream().map(card -> HandSlot.masked()).toList(),
+    List<HandSlot> opponentSlots = state.hand(viewer.opponent()).stream().map(card -> {
+      boolean reveal = state.ruleSet().has(Rule.ALL_OPEN)
+          || state.revealedCards(viewer.opponent()).contains(card.copyId());
+      return reveal ? new HandSlot(card.copyId(), card.cardId(), true) : HandSlot.masked();
+    }).toList();
+    return new MatchProjection(state.board().cells(), state.hand(viewer), opponentSlots,
         state.currentSeat(), legalCopies, legalSquares, state.revision(), state.result(),
         state.remainingBankMillis(viewer, now), state.remainingGraceMillis(viewer, now),
         state.remainingTurnMillis(viewer, now));

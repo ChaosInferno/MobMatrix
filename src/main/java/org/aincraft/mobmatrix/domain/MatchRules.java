@@ -9,16 +9,16 @@ import java.util.Set;
 public record MatchRules(Set<Rule> rules) {
   public MatchRules {
     Objects.requireNonNull(rules, "rules are required");
-    EnumSet<Rule> copy = rules.isEmpty() ? EnumSet.noneOf(Rule.class) : EnumSet.copyOf(rules);
-    rules = Set.copyOf(copy);
+    rules = Set.copyOf(new RuleSet(rules).rules());
   }
 
   public MatchRules(Rule... rules) {
-    this(rules == null ? Set.of() : Set.of(rules));
+    this(rules == null ? null : java.util.Arrays.asList(rules));
   }
 
   public MatchRules(Collection<Rule> rules) {
-    this(Set.copyOf(Objects.requireNonNull(rules, "rules are required")));
+    this(Objects.requireNonNull(rules, "rules are required").stream().collect(java.util.stream.Collectors.toSet()));
+    if (rules.size() != this.rules.size()) throw new IllegalArgumentException("duplicate rule");
   }
 
   public MatchRules() {
@@ -28,4 +28,7 @@ public record MatchRules(Set<Rule> rules) {
   public boolean has(Rule rule) {
     return rules.contains(Objects.requireNonNull(rule, "rule is required"));
   }
+
+  public RuleSet asRuleSet() { return new RuleSet(rules); }
 }
+
