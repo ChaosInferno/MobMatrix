@@ -1,0 +1,10 @@
+.gradle/
+build/
+run/
+!gradle/wrapper/gradle-wrapper.jar
+.idea/
+*.iml
+.classpath
+.project
+.settings/
+.superpowers/

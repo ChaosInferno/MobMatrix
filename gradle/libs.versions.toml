@@ -1,0 +1,30 @@
+[versions]
+paper = "26.2.build.+"
+mapgui = "1.1.0"
+run-paper = "3.1.0"
+shadow = "9.6.1"
+spotless = "8.10.0"
+google-java-format = "1.36.1"
+checkstyle = "13.11.0"
+pmd = "7.26.0"
+spotbugs-plugin = "6.5.10"
+spotbugs-engine = "4.9.7"
+junit = "5.13.4"
+junit-platform = "1.13.4"
+sqlite = "3.49.1.0"
+
+[libraries]
+paper-api = { module = "io.papermc.paper:paper-api", version.ref = "paper" }
+mapgui-api = { module = "io.github.flog99:mapgui-api", version.ref = "mapgui" }
+junit-bom = { module = "org.junit:junit-bom", version.ref = "junit" }
+junit-jupiter = { module = "org.junit.jupiter:junit-jupiter" }
+junit-launcher = { module = "org.junit.platform:junit-platform-launcher", version.ref = "junit-platform" }
+sqlite-jdbc = { module = "org.xerial:sqlite-jdbc", version.ref = "sqlite" }
+checkstyle = { module = "com.puppycrawl.tools:checkstyle", version.ref = "checkstyle" }
+spotbugs-engine = { module = "com.github.spotbugs:spotbugs", version.ref = "spotbugs-engine" }
+
+[plugins]
+run-paper = { id = "xyz.jpenilla.run-paper", version.ref = "run-paper" }
+shadow = { id = "com.gradleup.shadow", version.ref = "shadow" }
+spotless = { id = "com.diffplug.spotless", version.ref = "spotless" }
+spotbugs = { id = "com.github.spotbugs", version.ref = "spotbugs-plugin" }
