@@ -10,91 +10,57 @@ import java.util.Set;
 
 /** Explicit, repeatable schema migrations for custody and active-match state. */
 public final class SchemaMigrator {
-  public static final int CURRENT_VERSION = 4;
+  public static final int CURRENT_VERSION = 5;
 
   private SchemaMigrator() {}
 
   public static void migrate(Connection connection) throws SQLException {
     Objects.requireNonNull(connection, "connection is required");
+    ensureMigrationTable(connection);
+    Set<Integer> markers = appliedMarkers(connection);
+    int version = contiguousVersion(markers);
+    for (int next = version + 1; next <= CURRENT_VERSION; next++) {
+      applyMigration(connection, next);
+    }
+    validateSchema(connection);
+  }
+
+  private static void ensureMigrationTable(Connection connection) throws SQLException {
     try (var statement = connection.createStatement()) {
-      statement.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL)");
+      statement.execute("""
+          CREATE TABLE IF NOT EXISTS schema_migrations (
+            version INTEGER PRIMARY KEY,
+            applied_at TEXT NOT NULL
+          )
+          """);
     }
-    int version = currentVersion(connection);
-    if (version < 1) {
-      boolean autoCommit = connection.getAutoCommit();
-      try {
-        connection.setAutoCommit(false);
-        applyV1(connection);
-        try (var insert = connection.prepareStatement(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (1, CURRENT_TIMESTAMP)")) {
-          insert.executeUpdate();
-        }
-        connection.commit();
-      } catch (SQLException exception) {
-        try { connection.rollback(); } catch (SQLException ignored) { }
-        throw exception;
-      } finally {
-        connection.setAutoCommit(autoCommit);
+  }
+
+  private static void applyMigration(Connection connection, int version) throws SQLException {
+    boolean autoCommit = connection.getAutoCommit();
+    try {
+      connection.setAutoCommit(false);
+      switch (version) {
+        case 1 -> applyV1(connection);
+        case 2 -> applyV2(connection);
+        case 3 -> applyV3(connection);
+        case 4 -> applyV4(connection);
+        case 5 -> applyV5(connection);
+        default -> throw new SQLException("unsupported schema migration: " + version);
       }
-    }
-    version = currentVersion(connection);
-    if (version < 2) {
-      boolean autoCommit = connection.getAutoCommit();
-      try {
-        connection.setAutoCommit(false);
-        applyV2(connection);
-        try (var insert = connection.prepareStatement(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (2, CURRENT_TIMESTAMP)")) {
-          insert.executeUpdate();
-        }
-        connection.commit();
-      } catch (SQLException exception) {
-        try { connection.rollback(); } catch (SQLException ignored) { }
-        throw exception;
-      } finally {
-        connection.setAutoCommit(autoCommit);
+      try (var insert = connection.prepareStatement(
+          "INSERT INTO schema_migrations(version, applied_at) VALUES (?, CURRENT_TIMESTAMP)")) {
+        insert.setInt(1, version);
+        insert.executeUpdate();
       }
+      connection.commit();
+    } catch (SQLException | RuntimeException exception) {
+      try { connection.rollback(); } catch (SQLException ignored) { }
+      if (exception instanceof SQLException sql) throw sql;
+      throw exception;
+    } finally {
+      connection.setAutoCommit(autoCommit);
     }
-    version = currentVersion(connection);
-    if (version < 3) {
-      boolean autoCommit = connection.getAutoCommit();
-      try {
-        connection.setAutoCommit(false);
-        applyV3(connection);
-        try (var insert = connection.prepareStatement(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (3, CURRENT_TIMESTAMP)")) {
-          insert.executeUpdate();
-        }
-        connection.commit();
-      } catch (SQLException exception) {
-        try { connection.rollback(); } catch (SQLException ignored) { }
-        throw exception;
-      } finally {
-        connection.setAutoCommit(autoCommit);
-      }
-    }
-    version = currentVersion(connection);
-    if (version < 4) {
-      boolean autoCommit = connection.getAutoCommit();
-      try {
-        connection.setAutoCommit(false);
-        applyV4(connection);
-        try (var insert = connection.prepareStatement(
-            "INSERT INTO schema_migrations(version, applied_at) VALUES (4, CURRENT_TIMESTAMP)")) {
-          insert.executeUpdate();
-        }
-        connection.commit();
-      } catch (SQLException exception) {
-        try { connection.rollback(); } catch (SQLException ignored) { }
-        throw exception;
-      } finally {
-        connection.setAutoCommit(autoCommit);
-      }
-    }
-    if (currentVersion(connection) > CURRENT_VERSION) {
-      throw new SQLException("database schema is newer than this plugin");
-    }
-    ensureStartBindings(connection);
   }
   private static void ensureStartBindings(Connection connection) throws SQLException {
     try (var statement = connection.createStatement()) {
@@ -122,10 +88,72 @@ public final class SchemaMigrator {
 
 
   public static int currentVersion(Connection connection) throws SQLException {
+    Objects.requireNonNull(connection, "connection is required");
+    return contiguousVersion(appliedMarkers(connection));
+  }
+
+  private static Set<Integer> appliedMarkers(Connection connection) throws SQLException {
+    Set<Integer> markers = new HashSet<>();
     try (var query = connection.createStatement();
-        var rows = query.executeQuery("SELECT COALESCE(MAX(version), 0) FROM schema_migrations")) {
-      return rows.next() ? rows.getInt(1) : 0;
+        var rows = query.executeQuery("SELECT version FROM schema_migrations")) {
+      while (rows.next()) {
+        int version = rows.getInt(1);
+        if (version < 1 || version > CURRENT_VERSION || !markers.add(version)) {
+          throw new SQLException("invalid schema migration marker: " + version);
+        }
+      }
     }
+    return markers;
+  }
+
+  private static int contiguousVersion(Set<Integer> markers) throws SQLException {
+    int version = 0;
+    while (markers.contains(version + 1)) version++;
+    if (markers.size() != version) {
+      throw new SQLException("schema migration markers are non-contiguous");
+    }
+    return version;
+  }
+
+  private static void validateSchema(Connection connection) throws SQLException {
+    String[][] required = {
+        {"catalog_snapshots", "snapshot_id", "source", "digest", "created_at", "metadata_json"},
+        {"card_definitions", "snapshot_id", "catalog_id", "public_number", "name", "stars", "type",
+            "top_value", "right_value", "bottom_value", "left_value", "sale_price"},
+        {"card_copies", "copy_uuid", "catalog_id", "owner_kind", "owner_uuid", "created_at"},
+        {"reservations", "operation_id", "owner_kind", "owner_uuid", "match_id", "status",
+            "created_at", "updated_at"},
+        {"reservation_copies", "operation_id", "copy_uuid"},
+        {"escrow_items", "operation_id", "copy_uuid", "item_bytes"},
+        {"matches", "match_id", "revision", "status", "state_bytes", "state_digest",
+            "transcript_json", "updated_at"},
+        {"recovery_rows", "recovery_id", "operation_id", "copy_uuid", "owner_kind", "owner_uuid",
+            "item_bytes", "status"},
+        {"reservation_restored", "operation_id", "copy_uuid"},
+        {"match_start_bindings", "match_id", "binding_version", "request_identity",
+            "one_owner_kind", "one_owner_uuid", "one_operation_id", "one_copy_ids",
+            "two_owner_kind", "two_owner_uuid", "two_operation_id", "two_copy_ids"}
+    };
+    for (String[] table : required) {
+      Set<String> columns = tableColumns(connection, table[0]);
+      if (columns.isEmpty()) {
+        throw new SQLException("schema migration incomplete: missing table " + table[0]);
+      }
+      for (int index = 1; index < table.length; index++) {
+        if (!columns.contains(table[index])) {
+          throw new SQLException("schema migration incomplete: missing column "
+              + table[0] + "." + table[index]);
+        }
+      }
+    }
+  }
+
+  private static Set<String> tableColumns(Connection connection, String table) throws SQLException {
+    Set<String> columns = new HashSet<>();
+    try (var query = connection.createStatement().executeQuery("PRAGMA table_info(" + table + ")")) {
+      while (query.next()) columns.add(query.getString("name"));
+    }
+    return columns;
   }
 
   private static void applyV1(Connection connection) throws SQLException {
@@ -313,18 +341,22 @@ public final class SchemaMigrator {
     }
   }
   private static void applyV3(Connection connection) throws SQLException {
-    try (var statement = connection.createStatement()) {
-      statement.execute("ALTER TABLE reservations ADD COLUMN match_id TEXT");
-    }
-  }
-  private static void applyV4(Connection connection) throws SQLException {
-    try (var query = connection.createStatement().executeQuery("PRAGMA table_info(matches)")) {
-      while (query.next()) {
-        if ("state_digest".equals(query.getString("name"))) return;
+    if (!tableColumns(connection, "reservations").contains("match_id")) {
+      try (var statement = connection.createStatement()) {
+        statement.execute("ALTER TABLE reservations ADD COLUMN match_id TEXT");
       }
     }
-    try (var statement = connection.createStatement()) {
-      statement.execute("ALTER TABLE matches ADD COLUMN state_digest TEXT");
+  }
+
+  private static void applyV4(Connection connection) throws SQLException {
+    if (!tableColumns(connection, "matches").contains("state_digest")) {
+      try (var statement = connection.createStatement()) {
+        statement.execute("ALTER TABLE matches ADD COLUMN state_digest TEXT");
+      }
     }
+  }
+
+  private static void applyV5(Connection connection) throws SQLException {
+    ensureStartBindings(connection);
   }
 }

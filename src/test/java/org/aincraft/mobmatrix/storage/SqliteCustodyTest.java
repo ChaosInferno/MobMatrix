@@ -39,9 +39,28 @@ import org.aincraft.mobmatrix.domain.MatchRules;
 import org.aincraft.mobmatrix.domain.PlayerSeat;
 import org.aincraft.mobmatrix.domain.CopyOwner;
 import org.aincraft.mobmatrix.domain.Square;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 final class SqliteCustodyTest {
+  private static final String MATCH_SECRET = "focused-match-secret-2026";
+  private static String previousMatchSecret;
+
+  @BeforeAll
+  static void configureMatchSecret() {
+    previousMatchSecret = System.getProperty("mobmatrix.match.server-secret");
+    System.setProperty("mobmatrix.match.server-secret", MATCH_SECRET);
+  }
+
+  @AfterAll
+  static void restoreMatchSecret() {
+    if (previousMatchSecret == null) {
+      System.clearProperty("mobmatrix.match.server-secret");
+    } else {
+      System.setProperty("mobmatrix.match.server-secret", previousMatchSecret);
+    }
+  }
   @Test
   void reservationsHaveUniqueCopiesAndDurableStatusTransitions() throws Exception {
     var path = Files.createTempFile("mobmatrix-custody", ".sqlite");
@@ -119,6 +138,40 @@ final class SqliteCustodyTest {
   }
 
   @Test
+  void migrationRejectsNonContiguousMarkers() throws Exception {
+    var path = Files.createTempFile("mobmatrix-migration-gap", ".sqlite");
+    try (Database database = new Database(path)) {
+      try (var statement = database.connection().createStatement()) {
+        statement.execute("DELETE FROM schema_migrations WHERE version = 3");
+      }
+      assertThrows(java.sql.SQLException.class,
+          () -> SchemaMigrator.migrate(database.connection()));
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void migrationRepairsPartialV3V4V5DdlAndRecordsV5Marker() throws Exception {
+    var path = Files.createTempFile("mobmatrix-migration-partial", ".sqlite");
+    try (Database database = new Database(path)) {
+      try (var statement = database.connection().createStatement()) {
+        statement.execute("ALTER TABLE reservations DROP COLUMN match_id");
+        statement.execute("ALTER TABLE matches DROP COLUMN state_digest");
+        statement.execute("DROP TABLE match_start_bindings");
+        statement.execute("DELETE FROM schema_migrations WHERE version >= 3");
+      }
+      SchemaMigrator.migrate(database.connection());
+      assertEquals(SchemaMigrator.CURRENT_VERSION,
+          SchemaMigrator.currentVersion(database.connection()));
+      try (var query = database.connection().prepareStatement(
+          "SELECT 1 FROM schema_migrations WHERE version = 5")) {
+        assertTrue(query.executeQuery().next());
+      }
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
   void matchSnapshotRejectsMissingAndMismatchedIntegrity() throws Exception {
     var path = Files.createTempFile("mobmatrix-match-integrity", ".sqlite");
     MatchState missing = snapshotState("missing-integrity");
@@ -151,6 +204,46 @@ final class SqliteCustodyTest {
   }
 
   @Test
+  void matchSnapshotUsesKeyedMacAndRejectsWrongKeyAndLegacyHash() throws Exception {
+    var path = Files.createTempFile("mobmatrix-match-hmac", ".sqlite");
+    MatchState original = snapshotState("hmac-integrity");
+    try (Database database = new Database(path)) {
+      SqliteMatchRepository repository = new SqliteMatchRepository(database, MATCH_SECRET);
+      assertTrue(repository.save(0L, original).accepted());
+      MatchRepository.MatchSnapshot persisted = repository.find(original.matchId()).orElseThrow();
+      assertTrue(persisted.stateDigest().startsWith("hmac-sha256-v1:"));
+
+      SqliteMatchRepository wrongKey = new SqliteMatchRepository(database,
+          "different-match-secret-2026");
+      assertThrows(IllegalArgumentException.class,
+          () -> wrongKey.findState(original.matchId(), original.catalog()));
+
+      byte[] tampered = persisted.stateBytes();
+      tampered[tampered.length - 1] ^= 1;
+      try (var update = database.connection().prepareStatement(
+          "UPDATE matches SET state_bytes = ?, state_digest = ? WHERE match_id = ?")) {
+        update.setBytes(1, tampered);
+        update.setString(2, legacySha256(tampered));
+        update.setString(3, original.matchId().value());
+        update.executeUpdate();
+      }
+      assertThrows(IllegalArgumentException.class,
+          () -> repository.findState(original.matchId(), original.catalog()));
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void matchRepositoryRejectsUnavailableOrShortSecret() throws Exception {
+    var path = Files.createTempFile("mobmatrix-match-secret", ".sqlite");
+    try (Database database = new Database(path)) {
+      assertThrows(IllegalArgumentException.class,
+          () -> new SqliteMatchRepository(database, "too-short"));
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
   void custodyJournalsRejectAbortedUntilEveryCopyIsRestored() throws Exception {
     CardCopyId first = new CardCopyId(UUID.randomUUID());
     CardCopyId second = new CardCopyId(UUID.randomUUID());
@@ -170,6 +263,9 @@ final class SqliteCustodyTest {
         () -> memory.transition(memoryOperation, OperationStatus.ABORTED));
     memory.markRestored(memoryOperation, second);
     memory.transition(memoryOperation, OperationStatus.ABORTED);
+    assertThrows(IllegalArgumentException.class,
+        () -> new org.aincraft.mobmatrix.application.CardCustodyJournal.Entry(memoryOperation,
+            owner, copies, snapshots, OperationStatus.ABORTED, java.util.Set.of()));
 
     var path = Files.createTempFile("mobmatrix-aborted-invariant", ".sqlite");
     try (Database database = new Database(path)) {
@@ -185,7 +281,40 @@ final class SqliteCustodyTest {
           () -> repository.transition(operation, OperationStatus.ABORTED));
       repository.markRestored(operation, second);
       repository.transition(operation, OperationStatus.ABORTED);
-      assertEquals(OperationStatus.ABORTED, repository.findReservation(operation).orElseThrow().status());
+      assertEquals(OperationStatus.ABORTED,
+          repository.findReservation(operation).orElseThrow().status());
+      try (var delete = database.connection().prepareStatement(
+          "DELETE FROM reservation_restored WHERE operation_id = ? AND copy_uuid = ?")) {
+        delete.setString(1, operation.toString());
+        delete.setString(2, second.value().toString());
+        delete.executeUpdate();
+      }
+      assertThrows(IllegalStateException.class,
+          () -> repository.transition(operation, OperationStatus.ABORTED));
+      assertThrows(IllegalStateException.class, () -> repository.findReservation(operation));
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void legacyAbortedRowWithMissingSnapshotsIsNotHydratedAsComplete() throws Exception {
+    var path = Files.createTempFile("mobmatrix-legacy-aborted", ".sqlite");
+    UUID operation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {3, 1, 4});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(operation, owner, List.of(copy), List.of(snapshot));
+      repository.markRestored(operation, copy);
+      repository.transition(operation, OperationStatus.ABORTED);
+      try (var delete = database.connection().prepareStatement(
+          "DELETE FROM escrow_items WHERE operation_id = ?")) {
+        delete.setString(1, operation.toString());
+        delete.executeUpdate();
+      }
+      assertThrows(IllegalStateException.class, () -> repository.findReservation(operation));
     }
     Files.deleteIfExists(path);
   }
@@ -788,6 +917,21 @@ final class SqliteCustodyTest {
   }
 
   @Test
+  void snapshotRejectsEmptyOwnerInferenceAfterSuddenDeathProgress() {
+    MatchState started = snapshotState("sudden-death-empty-board");
+    MatchState postSuddenDeath = MatchState.rehydrate(started.matchId(), started.catalog(),
+        new MatchRules(org.aincraft.mobmatrix.domain.Rule.SUDDEN_DEATH), started.board(),
+        started.hands(), started.currentSeat(), 0L, null, started.bankMillis(),
+        started.turnStartedAt(), started.graceDeadline(), started.turnDeadline(),
+        started.commandIds(), started.seed(), started.transcript(), started.revealedCardsMap(),
+        Map.of(), 1, started.draftOfferings(), started.draftSelections(), started.chaosChoices());
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(
+            MatchStateSnapshotCodec.encode(postSuddenDeath), postSuddenDeath.catalog()));
+  }
+
+  @Test
   void snapshotRejectsDuplicateHandAndBoardCopyUuid() {
     MatchState initial = snapshotState("duplicate-snapshot");
     PlayerSeat actor = initial.currentSeat();
@@ -1085,6 +1229,14 @@ final class SqliteCustodyTest {
   private static void skipUuidSet(DataInputStream in) throws IOException {
     int count = in.readInt();
     in.skipNBytes(16L * count);
+  }
+  private static String legacySha256(byte[] bytes) {
+    try {
+      return "sha256-v1:" + java.util.HexFormat.of().formatHex(
+          java.security.MessageDigest.getInstance("SHA-256").digest(bytes));
+    } catch (java.security.NoSuchAlgorithmException exception) {
+      throw new AssertionError(exception);
+    }
   }
 
   private static void putInt(byte[] encoded, int offset, int value) {

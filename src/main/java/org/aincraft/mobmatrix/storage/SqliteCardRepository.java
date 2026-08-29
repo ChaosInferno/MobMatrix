@@ -292,6 +292,14 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     inTransaction(() -> {
       Reservation reservation = findReservationInternal(operationId);
       if (reservation == null) throw new IllegalStateException("unknown operation: " + operationId);
+      if (reservation.status() == OperationStatus.ABORTED
+          && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
+        throw new IllegalStateException("cannot abort custody with unresolved copies");
+      }
+      if (reservation.status() == OperationStatus.ABORTED
+          && !hasExactSnapshots(reservation)) {
+        throw new IllegalStateException("aborted custody is missing exact snapshots");
+      }
       if (reservation.status() == target) return;
       if (target == OperationStatus.ABORTED
           && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
@@ -446,6 +454,14 @@ public final class SqliteCardRepository implements CardCustodyJournal {
             while (restoredRows.next()) restored.add(new CardCopyId(UUID.fromString(restoredRows.getString(1))));
           }
         }
+        if (status == OperationStatus.ABORTED
+            && !new HashSet<>(restored).containsAll(copies)) {
+          throw new IllegalStateException("cannot hydrate aborted custody with unresolved copies");
+        }
+        if (status == OperationStatus.ABORTED
+            && !hasExactSnapshots(copies, snapshots)) {
+          throw new IllegalStateException("cannot hydrate aborted custody without exact snapshots");
+        }
         return new Reservation(operationId, owner, copies, snapshots, status, restored, matchId);
       }
     }
@@ -503,6 +519,18 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     return List.copyOf(copies);
   }
 
+  private static boolean hasExactSnapshots(Reservation reservation) {
+    return hasExactSnapshots(reservation.copyIds(), reservation.snapshots());
+  }
+
+  private static boolean hasExactSnapshots(List<CardCopyId> copies,
+      List<SerializedItemSnapshot> snapshots) {
+    Set<CardCopyId> snapshotIds = new HashSet<>();
+    for (SerializedItemSnapshot snapshot : snapshots) {
+      if (!snapshotIds.add(snapshot.copyId())) return false;
+    }
+    return snapshotIds.equals(new HashSet<>(copies));
+  }
   private static boolean allowed(OperationStatus from, OperationStatus to) {
     return to == OperationStatus.ABORTED && (from == OperationStatus.PREPARED
         || from == OperationStatus.ESCROWED || from == OperationStatus.RETURN_PENDING

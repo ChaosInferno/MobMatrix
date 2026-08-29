@@ -61,6 +61,10 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
   @Override
   public synchronized void transition(UUID operationId, CardCustodyPort.OperationStatus status) {
     MutableEntry entry = require(operationId);
+    if (status == CardCustodyPort.OperationStatus.ABORTED
+        && !entry.restored.containsAll(entry.copyIds)) {
+      throw new IllegalStateException("cannot abort custody with unresolved copies");
+    }
     if (entry.status == status) return;
     if (status == CardCustodyPort.OperationStatus.ESCROWED
         && entry.status != CardCustodyPort.OperationStatus.PREPARED) {
@@ -74,10 +78,6 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
     if (status == CardCustodyPort.OperationStatus.RETURNED
         && entry.status != CardCustodyPort.OperationStatus.RETURN_PENDING) {
       throw new IllegalStateException("invalid custody transition");
-    }
-    if (status == CardCustodyPort.OperationStatus.ABORTED
-        && !entry.restored.containsAll(entry.copyIds)) {
-      throw new IllegalStateException("cannot abort custody with unresolved copies");
     }
     if (status == CardCustodyPort.OperationStatus.ABORTED
         && entry.status != CardCustodyPort.OperationStatus.PREPARED

@@ -54,6 +54,17 @@ public interface CardCustodyJournal {
       if (!copyIds.containsAll(restoredCopyIds)) {
         throw new IllegalArgumentException("restored copy is not reserved");
       }
+      if (status == CardCustodyPort.OperationStatus.ABORTED) {
+        Set<CardCopyId> snapshotIds = new java.util.HashSet<>();
+        for (SerializedItemSnapshot snapshot : snapshots) {
+          if (!snapshotIds.add(snapshot.copyId())) {
+            throw new IllegalArgumentException("duplicate aborted snapshot copy");
+          }
+        }
+        if (!restoredCopyIds.containsAll(copyIds) || !snapshotIds.equals(new java.util.HashSet<>(copyIds))) {
+          throw new IllegalArgumentException("aborted custody has unresolved or missing snapshots");
+        }
+      }
     }
 
     public List<CardCopyId> expectedCopyIds() { return copyIds; }

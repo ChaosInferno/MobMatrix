@@ -245,35 +245,10 @@ public final class MatchStateSnapshotCodec {
       }
       boolean ownershipMetadataRequired = rules.contains(Rule.RANDOM) || rules.contains(Rule.SWAP);
       boolean plainInitialBoard = board.cells().stream().allMatch(Objects::isNull);
-      boolean inferredOwnership = originalOwners.isEmpty() && !ownershipMetadataRequired
-          && plainInitialBoard;
-      if (inferredOwnership) {
-        for (PlayerSeat seat : PlayerSeat.values()) {
-          for (HandCard card : hands.get(seat)) {
-            if (card.copy().owner().isPlayer()) originalOwners.put(card.copyId(), seat);
-          }
-        }
-        for (Board.Cell cell : board.cells()) {
-          if (cell != null && cell.copy().owner().isPlayer()) {
-            originalOwners.put(cell.copy().copyId(), cell.owner());
-          }
-        }
-      }
-      Set<CardCopyId> expectedOriginalOwners = new HashSet<>();
-      Map<UUID, PlayerSeat> originalSeatByOwner = new HashMap<>();
-      for (var entry : activeCopies.entrySet()) {
-        CardCopy copy = entry.getValue();
-        if (!copy.owner().isPlayer()) continue;
-        expectedOriginalOwners.add(copy.copyId());
-        PlayerSeat originalSeat = originalOwners.get(copy.copyId());
-        PlayerSeat priorSeat = originalSeatByOwner.putIfAbsent(copy.owner().playerId(), originalSeat);
-        if (originalSeat == null || (!inferredOwnership && priorSeat != null && priorSeat != originalSeat)) {
-          throw new IllegalArgumentException("original-owner seat mismatch");
-        }
-      }
-      if (!originalOwners.keySet().equals(expectedOriginalOwners)) {
-        throw new IllegalArgumentException("original-owner metadata does not cover active copies");
-      }
+      boolean initialStateCandidate = originalOwners.isEmpty() && !ownershipMetadataRequired
+          && plainInitialBoard && revision == 0 && result == null && transcript.cursor() >= 0
+          && isInitialTranscript(transcript) && commandIds.isEmpty()
+          && revealed.values().stream().allMatch(Set::isEmpty);
       int consecutiveDraws = in.readInt();
       Map<PlayerSeat, DraftOfferings.SeatOffers> offerings = new EnumMap<>(PlayerSeat.class);
       Set<UUID> offeringIds = new HashSet<>();
@@ -388,6 +363,35 @@ public final class MatchStateSnapshotCodec {
             throw new IllegalArgumentException("chaos choice is not in that seat's hand");
           }
         }
+      }
+      boolean inferredOwnership = initialStateCandidate && consecutiveDraws == 0
+          && offerings.isEmpty() && selections.isEmpty() && chaos.isEmpty();
+      if (inferredOwnership) {
+        for (PlayerSeat seat : PlayerSeat.values()) {
+          for (HandCard card : hands.get(seat)) {
+            if (card.copy().owner().isPlayer()) originalOwners.put(card.copyId(), seat);
+          }
+        }
+        for (Board.Cell cell : board.cells()) {
+          if (cell != null && cell.copy().owner().isPlayer()) {
+            originalOwners.put(cell.copy().copyId(), cell.owner());
+          }
+        }
+      }
+      Set<CardCopyId> expectedOriginalOwners = new HashSet<>();
+      Map<UUID, PlayerSeat> originalSeatByOwner = new HashMap<>();
+      for (var entry : activeCopies.entrySet()) {
+        CardCopy copy = entry.getValue();
+        if (!copy.owner().isPlayer()) continue;
+        expectedOriginalOwners.add(copy.copyId());
+        PlayerSeat originalSeat = originalOwners.get(copy.copyId());
+        PlayerSeat priorSeat = originalSeatByOwner.putIfAbsent(copy.owner().playerId(), originalSeat);
+        if (originalSeat == null || (!inferredOwnership && priorSeat != null && priorSeat != originalSeat)) {
+          throw new IllegalArgumentException("original-owner seat mismatch");
+        }
+      }
+      if (!originalOwners.keySet().equals(expectedOriginalOwners)) {
+        throw new IllegalArgumentException("original-owner metadata does not cover active copies");
       }
       MatchState state = MatchState.rehydrate(matchId, catalog, new MatchRules(rules), board, hands,
           currentSeat, revision, result, banks, turnStartedAt, graceDeadline, turnDeadline,
@@ -537,6 +541,13 @@ public final class MatchStateSnapshotCodec {
     }
     budget.collection(count, field);
     return count;
+  }
+
+  private static boolean isInitialTranscript(RandomTranscript transcript) {
+    if (transcript.decisions().isEmpty()) return transcript.cursor() == 0;
+    if (transcript.decisions().size() != 1 || transcript.cursor() != 1) return false;
+    RandomTranscript.Decision decision = transcript.decisions().getFirst();
+    return decision.decision().equals("first-seat") && decision.bound() == 2;
   }
 
   private static final class DecodeBudget {

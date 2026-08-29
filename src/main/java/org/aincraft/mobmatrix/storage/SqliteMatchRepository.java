@@ -6,10 +6,13 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.sql.Connection;
 import java.sql.SQLException;
+import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -25,14 +28,28 @@ import org.aincraft.mobmatrix.domain.Side;
 
 /** Optimistic-CAS repository for immutable active match snapshots and random transcripts. */
 public final class SqliteMatchRepository implements MatchRepository {
+  private static final String SECRET_PROPERTY = "mobmatrix.match.server-secret";
+  private static final String SECRET_ENVIRONMENT = "MOBMATRIX_SERVER_SECRET";
   private final Connection connection;
+  private final byte[] serverSecret;
 
-  public SqliteMatchRepository(Database database) {
-    this(Objects.requireNonNull(database, "database is required").connection());
+  /** Production constructor; secret provisioning is explicit and fail-closed. */
+  public SqliteMatchRepository(Database database, String serverSecret) {
+    this(Objects.requireNonNull(database, "database is required").connection(), serverSecret);
   }
 
-  public SqliteMatchRepository(Connection connection) {
+  /** Production constructor; secret is read from explicit process configuration. */
+  public SqliteMatchRepository(Database database) {
+    this(database, configuredSecret());
+  }
+
+  public SqliteMatchRepository(Connection connection, String serverSecret) {
     this.connection = Objects.requireNonNull(connection, "connection is required");
+    this.serverSecret = requireSecret(serverSecret).getBytes(StandardCharsets.UTF_8);
+  }
+  /** Production constructor; secret is read from explicit process configuration. */
+  public SqliteMatchRepository(Connection connection) {
+    this(connection, configuredSecret());
   }
 
   @Override
@@ -375,28 +392,43 @@ public final class SqliteMatchRepository implements MatchRepository {
     }
   }
 
-  private static String digest(byte[] stateBytes) {
+  private String digest(byte[] stateBytes) {
+    Objects.requireNonNull(stateBytes, "state bytes are required");
     try {
-      byte[] hash = MessageDigest.getInstance("SHA-256").digest(stateBytes);
-      char[] hex = "0123456789abcdef".toCharArray();
-      StringBuilder result = new StringBuilder("sha256-v1:");
-      for (byte value : hash) {
-        int unsigned = value & 0xff;
-        result.append(hex[unsigned >>> 4]).append(hex[unsigned & 0x0f]);
-      }
-      return result.toString();
-    } catch (NoSuchAlgorithmException exception) {
-      throw new IllegalStateException("SHA-256 is unavailable", exception);
+      Mac mac = Mac.getInstance("HmacSHA256");
+      mac.init(new SecretKeySpec(serverSecret, "HmacSHA256"));
+      return "hmac-sha256-v1:" + HexFormat.of().formatHex(mac.doFinal(stateBytes));
+    } catch (GeneralSecurityException exception) {
+      throw new IllegalStateException("HMAC-SHA-256 is unavailable", exception);
     }
   }
 
-  private static void verifyIntegrity(MatchSnapshot snapshot) {
+  private void verifyIntegrity(MatchSnapshot snapshot) {
     String persisted = snapshot.stateDigest();
+    String expected = digest(snapshot.stateBytes());
     if (persisted == null || persisted.isBlank()
         || !MessageDigest.isEqual(persisted.getBytes(StandardCharsets.US_ASCII),
-            digest(snapshot.stateBytes()).getBytes(StandardCharsets.US_ASCII))) {
+            expected.getBytes(StandardCharsets.US_ASCII))) {
       throw new IllegalArgumentException("match snapshot integrity verification failed");
     }
+  }
+
+  private static String requireSecret(String value) {
+    if (value == null || value.isBlank()) {
+      throw new IllegalArgumentException("match snapshot server secret is required");
+    }
+    byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
+    if (bytes.length < 16) {
+      throw new IllegalArgumentException("match snapshot server secret must contain at least 16 bytes");
+    }
+    return value;
+  }
+
+  private static String configuredSecret() {
+    String property = System.getProperty(SECRET_PROPERTY);
+    String value = property == null || property.isBlank()
+        ? System.getenv(SECRET_ENVIRONMENT) : property;
+    return requireSecret(value);
   }
 
   private long currentRevision(String matchId) throws SQLException {
