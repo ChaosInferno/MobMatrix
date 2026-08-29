@@ -56,7 +56,7 @@ BUILD SUCCESSFUL in 1s
 4 actionable tasks: 1 executed, 3 up-to-date
 ```
 
-The selected codec test class contains 4 tests and all 4 were skipped by its explicit Paper-registry assumption (`Paper API item registry requires a running Paper server`). They were not executed proof. The selected storage tests (4), application tests (2), AdvancedRules (17), RandomTranscript, MatchEngineStandard, MatchClock, and HeuristicBot tests executed with zero failures or errors. SQLite emitted the environment's Java restricted-native-access warning; it did not fail the suite. No formatter, linter, project-wide build, or project-wide test suite was run.
+That earlier corrective run selected 4 storage tests, 2 application tests, AdvancedRules (17), RandomTranscript, MatchEngineStandard, MatchClock, and HeuristicBot; all selected non-codec tests passed. The selected codec test class contains 4 tests and all 4 were skipped by its explicit Paper-registry assumption (`Paper API item registry requires a running Paper server`). They were not executed proof. SQLite emitted the environment's Java restricted-native-access warning; it did not fail the suite. Final third-review counts and exact commands are recorded below. No formatter, linter, project-wide build, or project-wide test suite was run.
 
 ## Corrected coverage
 
