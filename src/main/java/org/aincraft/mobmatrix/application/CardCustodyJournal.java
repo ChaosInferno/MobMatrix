@@ -26,6 +26,14 @@ public interface CardCustodyJournal {
   Optional<Entry> find(UUID operationId);
 
   List<Entry> openEntries();
+  /**
+   * Enumerates open operation identities without hydrating their rows. Durable implementations
+   * override this so malformed rows can still be surfaced individually during startup recovery.
+   */
+  default List<UUID> openOperationIds() {
+    return openEntries().stream().map(Entry::operationId).toList();
+  }
+
 
   void transition(UUID operationId, CardCustodyPort.OperationStatus status);
   void markRestored(UUID operationId, CardCopyId copyId);
@@ -55,6 +63,10 @@ public interface CardCustodyJournal {
         throw new IllegalArgumentException("restored copy is not reserved");
       }
       if (status == CardCustodyPort.OperationStatus.RETURNED
+          && !hasExactSnapshots(copyIds, snapshots)) {
+        throw new IllegalArgumentException("returned custody is missing exact escrow snapshots");
+      }
+      if (status == CardCustodyPort.OperationStatus.RETURNED
           && !restoredCopyIds.containsAll(copyIds)) {
         throw new IllegalArgumentException("returned custody has unresolved copies");
       }
@@ -74,5 +86,17 @@ public interface CardCustodyJournal {
     }
 
     public List<CardCopyId> expectedCopyIds() { return copyIds; }
+    private static boolean hasExactSnapshots(List<CardCopyId> copies,
+        List<SerializedItemSnapshot> snapshots) {
+      if (copies.size() != new java.util.HashSet<>(copies).size()
+          || snapshots.size() != copies.size()) {
+        return false;
+      }
+      Set<CardCopyId> snapshotIds = new java.util.HashSet<>();
+      for (SerializedItemSnapshot snapshot : snapshots) {
+        if (!snapshotIds.add(snapshot.copyId())) return false;
+      }
+      return snapshotIds.equals(new java.util.HashSet<>(copies));
+    }
   }
 }

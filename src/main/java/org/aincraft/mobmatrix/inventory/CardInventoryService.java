@@ -56,9 +56,17 @@ public final class CardInventoryService implements CardCustodyPort {
   }
 
   private void hydrate() {
-    for (var entry : journal.openEntries()) {
-      operations.put(entry.operationId(), new PreparedOperation(entry.owner(), entry.copyIds(),
-          entry.snapshots(), entry.status(), entry.restoredCopyIds(), entry.matchId()));
+    for (UUID operationId : journal.openOperationIds()) {
+      try {
+        var entry = journal.find(operationId).orElse(null);
+        if (entry != null) {
+          operations.put(entry.operationId(), new PreparedOperation(entry.owner(), entry.copyIds(),
+              entry.snapshots(), entry.status(), entry.restoredCopyIds(), entry.matchId()));
+        }
+      } catch (RuntimeException ignored) {
+        // Keep malformed durable rows out of the in-memory cache. Startup recovery will query the
+        // journal again and convert the structured integrity failure into a pending result.
+      }
     }
   }
 
@@ -281,8 +289,7 @@ public final class CardInventoryService implements CardCustodyPort {
   }
   @Override
   public synchronized List<UUID> openOperationIds() {
-    return journal.openEntries().stream().map(
-        org.aincraft.mobmatrix.application.CardCustodyJournal.Entry::operationId).toList();
+    return journal.openOperationIds();
   }
   @Override
   public synchronized java.util.Optional<org.aincraft.mobmatrix.domain.MatchId> operationMatchId(

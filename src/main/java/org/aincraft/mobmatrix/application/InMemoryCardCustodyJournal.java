@@ -62,6 +62,10 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
   public synchronized void transition(UUID operationId, CardCustodyPort.OperationStatus status) {
     MutableEntry entry = require(operationId);
     if (status == CardCustodyPort.OperationStatus.RETURNED
+        && !hasExactSnapshots(entry.copyIds, entry.snapshots)) {
+      throw new IllegalStateException("cannot return custody without exact snapshots");
+    }
+    if (status == CardCustodyPort.OperationStatus.RETURNED
         && !entry.restored.containsAll(entry.copyIds)) {
       throw new IllegalStateException("cannot return custody with unresolved copies");
     }

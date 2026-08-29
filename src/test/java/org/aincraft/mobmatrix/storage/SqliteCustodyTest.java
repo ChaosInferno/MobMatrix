@@ -119,6 +119,45 @@ final class SqliteCustodyTest {
     }
     Files.deleteIfExists(path);
   }
+  @Test
+  void malformedReservationOwnerAndStatusPreserveIdentity() throws Exception {
+    var path = Files.createTempFile("mobmatrix-malformed-reservation", ".sqlite");
+    UUID operation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {7, 3});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(operation, owner, List.of(copy), List.of(snapshot));
+
+      try (var update = database.connection().prepareStatement(
+          "UPDATE reservations SET owner_uuid = ? WHERE operation_id = ?")) {
+        update.setString(1, "not-a-uuid");
+        update.setString(2, operation.toString());
+        update.executeUpdate();
+      }
+      var ownerFailure = assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+          () -> repository.findReservation(operation));
+      assertEquals(operation, ownerFailure.operationId());
+      assertEquals(List.of(copy), ownerFailure.expectedCopyIds());
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA ignore_check_constraints = ON");
+      }
+      try (var update = database.connection().prepareStatement(
+          "UPDATE reservations SET owner_uuid = ?, status = ? WHERE operation_id = ?")) {
+        update.setString(1, owner.playerId().toString());
+        update.setString(2, "CORRUPT");
+        update.setString(3, operation.toString());
+        update.executeUpdate();
+      }
+      var statusFailure = assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+          () -> repository.findReservation(operation));
+      assertEquals(operation, statusFailure.operationId());
+      assertEquals(List.of(copy), statusFailure.expectedCopyIds());
+    }
+    Files.deleteIfExists(path);
+  }
 
   @Test
   void abortedTransitionRequiresExactEscrowSnapshotsBeforeIdempotence() throws Exception {

@@ -641,37 +641,63 @@ public final class MatchApplicationService {
     try {
       return custody.recover(operationId);
     } catch (RuntimeException exception) {
-      return recoveryFailure(operationId);
+      return recoveryFailure(operationId, exception);
     }
   }
+
   private ReturnResult returnFailure(UUID operationId) {
-    Optional<CardCustodyPort.OperationBinding> binding = safeOperationBinding(operationId);
-    List<CardCopyId> expected = binding.map(CardCustodyPort.OperationBinding::copyIds).orElse(List.of());
-    return new ReturnResult(operationId, pendingStatus(binding), expected, List.of(), expected, expected,
+    RecoveryIdentity identity = operationIdentity(operationId, null);
+    return new ReturnResult(identity.operationId(), OperationStatus.RETURN_PENDING,
+        identity.copyIds(), List.of(), identity.copyIds(), identity.copyIds(),
         Failure.DATABASE_ERROR);
   }
 
   private RecoveryResult recoveryFailure(UUID operationId) {
-    Optional<CardCustodyPort.OperationBinding> binding = safeOperationBinding(operationId);
-    List<CardCopyId> expected = binding.map(CardCustodyPort.OperationBinding::copyIds).orElse(List.of());
-    return new RecoveryResult(operationId, pendingStatus(binding), expected, List.of(), expected,
-        Failure.DATABASE_ERROR);
+    return recoveryFailure(operationId, null);
   }
 
-  private Optional<CardCustodyPort.OperationBinding> safeOperationBinding(UUID operationId) {
+  private RecoveryResult recoveryFailure(UUID operationId, RuntimeException source) {
+    RecoveryIdentity identity = operationIdentity(operationId, source);
+    return new RecoveryResult(identity.operationId(), OperationStatus.RETURN_PENDING,
+        identity.copyIds(), List.of(), identity.copyIds(), Failure.DATABASE_ERROR);
+  }
+
+  private RecoveryIdentity operationIdentity(UUID operationId, RuntimeException source) {
+    RecoveryIdentity identity = identityFrom(operationId, source);
+    if (!identity.copyIds().isEmpty()) return identity;
     try {
-      return custody.operationBinding(operationId);
+      Optional<CardCustodyPort.OperationBinding> binding = custody.operationBinding(operationId);
+      if (binding.isPresent()) {
+        CardCustodyPort.OperationBinding value = binding.get();
+        return new RecoveryIdentity(operationId, value.copyIds());
+      }
     } catch (RuntimeException exception) {
-      return Optional.empty();
+      RecoveryIdentity bindingIdentity = identityFrom(operationId, exception);
+      if (!bindingIdentity.copyIds().isEmpty()
+          || !bindingIdentity.operationId().equals(operationId)) {
+        return bindingIdentity;
+      }
+    }
+    return identity;
+  }
+
+  private static RecoveryIdentity identityFrom(UUID operationId, RuntimeException source) {
+    if (source instanceof CardCustodyPort.CustodyIntegrityFailure integrity) {
+      return new RecoveryIdentity(integrity.operationId(), integrity.expectedCopyIds());
+    }
+    return new RecoveryIdentity(operationId, List.of());
+  }
+
+  private record RecoveryIdentity(UUID operationId, List<CardCopyId> copyIds) {
+    private RecoveryIdentity {
+      Objects.requireNonNull(operationId, "operation id is required");
+      copyIds = List.copyOf(Objects.requireNonNull(copyIds, "copy ids are required"));
     }
   }
-
-  private static OperationStatus pendingStatus(
-      Optional<CardCustodyPort.OperationBinding> binding) {
-    // A thrown adapter call leaves terminality uncertain; never report a terminal status as
-    // successfully reconciled when exact custody may still be unresolved.
-    return OperationStatus.RETURN_PENDING;
+  private static boolean isTerminal(OperationStatus status) {
+    return status == OperationStatus.RETURNED || status == OperationStatus.ABORTED;
   }
+
 
   /** Reconciles every durable custody row and active match on plugin startup. */
   public synchronized StartupRecoveryResult recoverStartup(
@@ -679,16 +705,16 @@ public final class MatchApplicationService {
     Objects.requireNonNull(catalogResolver, "catalog resolver is required");
     Objects.requireNonNull(now, "time is required");
 
-    // Read active match IDs before touching custody. An escrow bound to one of these IDs is still
-    // in use and must not be returned during a restart.
+    // Read active match IDs before touching custody. A reservation bound to one of these IDs is
+    // still in use and must not be returned during a restart, even if its state is malformed.
     List<MatchRepository.MatchSnapshot> snapshots = List.of();
     Failure matchRepositoryFailure = Failure.NONE;
     boolean activeMatchesLoadFailed = false;
     try {
       snapshots = matches.activeMatches();
     } catch (RuntimeException ignored) {
-      // A match repository outage must not prevent independent custody recovery. Keep bound
-      // escrow rather than risking release when active IDs cannot be read.
+      // A match repository outage must not prevent independent custody recovery. Keep every
+      // reservation with a durable binding rather than risking release when active IDs are unreadable.
       activeMatchesLoadFailed = true;
       matchRepositoryFailure = Failure.DATABASE_ERROR;
     }
@@ -711,18 +737,34 @@ public final class MatchApplicationService {
         Optional<OperationStatus> status = custody.operationStatus(operationId);
         Optional<org.aincraft.mobmatrix.domain.MatchId> binding =
             custody.operationMatchId(operationId);
-        boolean activeEscrow = status.filter(value -> value == OperationStatus.ESCROWED)
-            .isPresent() && (binding.map(activeMatchIds::contains).orElse(false)
-                || (activeMatchesLoadFailed && binding.isPresent()));
-        if (activeEscrow) continue;
-        recoveries.add(custody.recover(operationId));
+        Optional<CardCustodyPort.OperationBinding> detailedBinding = binding.isEmpty()
+            ? custody.operationBinding(operationId) : Optional.empty();
+        boolean boundToActiveMatch = binding.map(activeMatchIds::contains).orElse(false)
+            || detailedBinding.map(CardCustodyPort.OperationBinding::matchId)
+                .map(activeMatchIds::contains).orElse(false)
+            || (activeMatchesLoadFailed && (binding.isPresent() || detailedBinding.isPresent()));
+        if (boundToActiveMatch) {
+          if (status.isEmpty()) {
+            // An active binding plus an unreadable status is ambiguous: preserving custody is safer
+            // than attempting a return that could release cards still held by the match.
+            recoveries.add(recoveryFailure(operationId));
+          } else if (!isTerminal(status.get())) {
+            // PREPARED, ESCROWED, and RETURN_PENDING all remain match-bound until terminality is
+            // durably proven. Never reconcile active custody based on a nonterminal row.
+          } else {
+            recoveries.add(custody.recover(operationId));
+          }
+        } else {
+          recoveries.add(custody.recover(operationId));
+        }
       } catch (RuntimeException exception) {
-        recoveries.add(recoveryFailure(operationId));
+        recoveries.add(recoveryFailure(operationId, exception));
       }
     }
 
     List<MatchState> states = new ArrayList<>();
     List<MatchFailure> matchFailures = new ArrayList<>();
+
     for (MatchRepository.MatchSnapshot snapshot : snapshots) {
       try {
         java.util.Optional<MatchState> loaded = matches.rehydrate(snapshot, catalogResolver);

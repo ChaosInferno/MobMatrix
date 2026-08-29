@@ -37,6 +37,15 @@ public interface CardCustodyPort {
     Objects.requireNonNull(operationId, "operation id is required");
     return Optional.empty();
   }
+  /**
+   * Structured identity exposed by durable custody integrity failures. Application recovery uses
+   * this contract without depending on a particular storage implementation.
+   */
+  interface CustodyIntegrityFailure {
+    UUID operationId();
+    List<CardCopyId> expectedCopyIds();
+  }
+
 
   record OperationBinding(CopyOwner owner, List<CardCopyId> copyIds, OperationStatus status,
       org.aincraft.mobmatrix.domain.MatchId matchId) {
