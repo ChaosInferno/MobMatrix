@@ -110,6 +110,11 @@ public final class InMemoryMatchRepository implements MatchRepository {
     Objects.requireNonNull(snapshot, "snapshot is required");
     Objects.requireNonNull(catalogResolver, "catalog resolver is required");
     MatchState state = states.get(snapshot.matchId());
-    return state == null ? Optional.empty() : Optional.of(state);
+    if (state == null) return Optional.empty();
+    if (!state.matchId().equals(snapshot.matchId())
+        || state.revision() != snapshot.revision()) {
+      throw new IllegalArgumentException("snapshot state identity does not match row");
+    }
+    return Optional.of(state);
   }
 }

@@ -182,6 +182,9 @@ public final class SqliteMatchRepository implements MatchRepository {
       if (!state.matchId().equals(matchId)) {
         throw new IllegalArgumentException("snapshot state match ID does not match row");
       }
+      if (state.revision() != snapshot.revision()) {
+        throw new IllegalArgumentException("snapshot state revision does not match row");
+      }
       return state;
     });
   }
@@ -193,6 +196,9 @@ public final class SqliteMatchRepository implements MatchRepository {
     MatchState state = MatchStateSnapshotCodec.decode(snapshot.stateBytes(), catalog);
     if (!state.matchId().equals(snapshot.matchId())) {
       throw new IllegalArgumentException("snapshot state match ID does not match row");
+    }
+    if (state.revision() != snapshot.revision()) {
+      throw new IllegalArgumentException("snapshot state revision does not match row");
     }
     return state;
   }

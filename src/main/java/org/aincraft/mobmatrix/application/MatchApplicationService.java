@@ -72,9 +72,14 @@ public final class MatchApplicationService {
         Optional<MatchRepository.StartBinding> binding =
             matches.findStartBinding(request.match().matchId());
         if (binding.isPresent() && startBindingMatches(binding.get(), request, plan)
-            && sameInitialState(state, started.state())
-            && operationBindingsMatch(request, state.matchId())) {
-          return MatchStartResult.active(state.matchId(), state);
+            && sameInitialState(state, started.state())) {
+          BindingCheck custodyCheck = operationBindingsMatch(request, state.matchId());
+          if (custodyCheck == BindingCheck.MATCH) {
+            return MatchStartResult.active(state.matchId(), state);
+          }
+          if (custodyCheck == BindingCheck.UNAVAILABLE) {
+            return MatchStartResult.rejected(request.match().matchId(), Failure.DATABASE_ERROR);
+          }
         }
         return MatchStartResult.rejected(request.match().matchId(), Failure.MISMATCHED_OPERATION);
       }
@@ -219,7 +224,12 @@ public final class MatchApplicationService {
       }
       return ApplyResult.rejected(transition);
     }
-    MatchRepository.SaveResult saved = matches.save(canonical.revision(), transition.state());
+    MatchRepository.SaveResult saved;
+    try {
+      saved = matches.save(canonical.revision(), transition.state());
+    } catch (RuntimeException exception) {
+      return new ApplyResult(transition, Failure.DATABASE_ERROR, canonical.revision());
+    }
     if (!saved.accepted()) {
       Failure failure = switch (saved.failure()) {
         case STALE_REVISION -> Failure.STALE_REVISION;
@@ -313,32 +323,37 @@ public final class MatchApplicationService {
     }
   }
 
-  private boolean operationBindingsMatch(StartMatchRequest request,
+  private BindingCheck operationBindingsMatch(StartMatchRequest request,
       org.aincraft.mobmatrix.domain.MatchId matchId) {
-    return bindingMatchesIfNeeded(request.oneOperationId(), request.oneOwner(), request.oneCopies(), matchId)
-        && bindingMatchesIfNeeded(request.twoOperationId(), request.twoOwner(), request.twoCopies(), matchId);
+    BindingCheck one = bindingMatchesIfNeeded(request.oneOperationId(), request.oneOwner(),
+        request.oneCopies(), matchId);
+    if (one != BindingCheck.MATCH) return one;
+    return bindingMatchesIfNeeded(request.twoOperationId(), request.twoOwner(),
+        request.twoCopies(), matchId);
   }
 
-  private boolean bindingMatchesIfNeeded(UUID operationId, CopyOwner owner,
+  private BindingCheck bindingMatchesIfNeeded(UUID operationId, CopyOwner owner,
       List<CardCopyId> copies, org.aincraft.mobmatrix.domain.MatchId matchId) {
     // Draft's intentionally empty house-custody plan has no custody operation to bind.
-    if (copies.isEmpty()) return true;
-    return bindingMatches(operationId, owner, copies, matchId);
-  }
-
-  private boolean bindingMatches(UUID operationId, CopyOwner owner, List<CardCopyId> copies,
-      org.aincraft.mobmatrix.domain.MatchId matchId) {
+    if (copies.isEmpty()) return BindingCheck.MATCH;
     try {
       Optional<CardCustodyPort.OperationBinding> binding = custody.operationBinding(operationId);
-      if (binding.isEmpty()) return false;
+      if (binding.isEmpty()) return BindingCheck.MISMATCH;
       CardCustodyPort.OperationBinding value = binding.get();
       return value.status() == OperationStatus.ESCROWED
           && value.owner().equals(owner)
           && value.copyIds().equals(copies)
-          && Objects.equals(value.matchId(), matchId);
+          && Objects.equals(value.matchId(), matchId)
+          ? BindingCheck.MATCH : BindingCheck.MISMATCH;
     } catch (RuntimeException exception) {
-      return false;
+      return BindingCheck.UNAVAILABLE;
     }
+  }
+
+  private enum BindingCheck {
+    MATCH,
+    MISMATCH,
+    UNAVAILABLE
   }
   private static boolean startBindingMatches(MatchRepository.StartBinding binding,
       StartMatchRequest request, ReservationPlan plan) {
@@ -615,12 +630,20 @@ public final class MatchApplicationService {
       activeMatchesLoadFailed = true;
     }
     Set<org.aincraft.mobmatrix.domain.MatchId> activeMatchIds = new HashSet<>();
-    for (MatchRepository.MatchSnapshot snapshot : snapshots) {
-      activeMatchIds.add(snapshot.matchId());
-    }
+    for (MatchRepository.MatchSnapshot snapshot : snapshots) activeMatchIds.add(snapshot.matchId());
 
     List<RecoveryResult> recoveries = new ArrayList<>();
-    for (UUID operationId : custody.openOperationIds()) {
+    Failure custodyEnumerationFailure = Failure.NONE;
+    List<UUID> openOperations;
+    try {
+      openOperations = custody.openOperationIds();
+    } catch (RuntimeException exception) {
+      // Do not invent an operation ID for an unavailable enumeration. Active escrow remains
+      // untouched, while active match rehydration below can proceed independently.
+      openOperations = List.of();
+      custodyEnumerationFailure = Failure.DATABASE_ERROR;
+    }
+    for (UUID operationId : openOperations) {
       try {
         Optional<OperationStatus> status = custody.operationStatus(operationId);
         Optional<org.aincraft.mobmatrix.domain.MatchId> binding =
@@ -655,17 +678,23 @@ public final class MatchApplicationService {
         // Missing catalog snapshots and unsupported state versions are isolated to one match.
       }
     }
-    return new StartupRecoveryResult(states, recoveries);
+    return new StartupRecoveryResult(states, recoveries, custodyEnumerationFailure);
   }
 
   public StartupRecoveryResult recoverStartup(Function<String, CardCatalog> catalogResolver) {
     return recoverStartup(catalogResolver, Instant.now());
   }
 
-  public record StartupRecoveryResult(List<MatchState> matches, List<RecoveryResult> recoveries) {
+  public record StartupRecoveryResult(List<MatchState> matches, List<RecoveryResult> recoveries,
+      Failure custodyFailure) {
+    public StartupRecoveryResult(List<MatchState> matches, List<RecoveryResult> recoveries) {
+      this(matches, recoveries, Failure.NONE);
+    }
+
     public StartupRecoveryResult {
       matches = List.copyOf(Objects.requireNonNull(matches));
       recoveries = List.copyOf(Objects.requireNonNull(recoveries));
+      Objects.requireNonNull(custodyFailure);
     }
   }
 

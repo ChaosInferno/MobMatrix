@@ -112,6 +112,34 @@ final class MatchApplicationServiceTest {
           result.failure());
     }
   }
+  @Test
+  void applyCatchesThrownSaveAsDatabaseError() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    MatchState canonical = MatchEngine.start(
+        match("apply-thrown-save", oneOwner, copies(), twoOwner, copies())).state();
+    MatchCommand.PlaceCard command = new MatchCommand.PlaceCard(canonical.currentSeat(),
+        canonical.hand(canonical.currentSeat()).getFirst().copyId(), Square.CENTER,
+        canonical.revision(), UUID.randomUUID(), canonical.turnStartedAt());
+
+    MatchApplicationService.ApplyResult result = new MatchApplicationService(
+        new RecordingCustody(), new ThrowingSaveMatchRepository(canonical)).apply(canonical, command);
+
+    assertFalse(result.accepted());
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, result.failure());
+  }
+
+  @Test
+  void startupReportsCustodyEnumerationFailureWithoutBlockingMatchLoad() {
+    MatchApplicationService.StartupRecoveryResult result = new MatchApplicationService(
+        new EnumerationFailingCustody(), new InMemoryMatchRepository()).recoverStartup(
+            snapshot -> new CardCatalog(List.of(), snapshot), Instant.parse("2026-01-01T00:00:00Z"));
+
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, result.custodyFailure());
+    assertTrue(result.matches().isEmpty());
+    assertTrue(result.recoveries().isEmpty());
+  }
+
 
   @Test
   void rejectedInitialSaveKeepsConcurrentMatchingWinnerCustody() {
@@ -651,6 +679,27 @@ final class MatchApplicationServiceTest {
     assertFalse(retry.accepted());
     assertEquals(CardCustodyPort.Failure.MISMATCHED_OPERATION, retry.failure());
   }
+  @Test
+  void activeRetryReportsDatabaseErrorWhenCustodyBindingReadFails() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = copies();
+    UUID oneOperation = UUID.randomUUID();
+    UUID twoOperation = UUID.randomUUID();
+    MatchEngine.StartMatch start = match("unavailable-retry-binding", oneOwner, oneCopies,
+        twoOwner, twoCopies);
+    RecordingMatchRepository repository = new RecordingMatchRepository();
+    MatchApplicationService.StartMatchRequest request = new MatchApplicationService.StartMatchRequest(
+        start, oneOwner, oneCopies, oneOperation, twoOwner, twoCopies, twoOperation);
+    assertTrue(new MatchApplicationService(new RecordingCustody(), repository).start(request).accepted());
+
+    MatchApplicationService.MatchStartResult retry = new MatchApplicationService(
+        new AbsentMetadataCustody(true), repository).start(request);
+
+    assertFalse(retry.accepted());
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, retry.failure());
+  }
 
   private static List<CardCopyId> copies() {
     return List.of(new CardCopyId(UUID.randomUUID()), new CardCopyId(UUID.randomUUID()),
@@ -745,6 +794,23 @@ final class MatchApplicationServiceTest {
     }
   }
 
+  private static final class FailingInitialRepository implements MatchRepository {
+    @Override
+    public SaveResult save(long expectedRevision, MatchState state) {
+      throw new AssertionError("start must use saveInitial");
+    }
+
+    @Override
+    public SaveResult saveInitial(MatchState state, MatchRepository.StartBinding binding) {
+      return new SaveResult(false, -1L, Failure.DATABASE_ERROR);
+    }
+
+    @Override
+    public java.util.Optional<MatchSnapshot> find(MatchId matchId) {
+      return java.util.Optional.empty();
+    }
+  }
+
   private static final class StartupCustody implements CardCustodyPort {
     private final UUID active;
     private final MatchId matchId;
@@ -798,24 +864,24 @@ final class MatchApplicationServiceTest {
       return RecoveryResult.complete(operationId, List.of());
     }
   }
-  private static final class FailingInitialRepository implements MatchRepository {
-    @Override
-    public SaveResult save(long expectedRevision, MatchState state) {
-      throw new AssertionError("start must use saveInitial");
-    }
-
-    @Override
-    public SaveResult saveInitial(MatchState state, MatchRepository.StartBinding binding) {
-      return new SaveResult(false, -1L, Failure.DATABASE_ERROR);
-    }
-
-    @Override
-    public java.util.Optional<MatchSnapshot> find(MatchId matchId) {
-      return java.util.Optional.empty();
-    }
-  }
 
   private static final class AbsentMetadataCustody implements CardCustodyPort {
+    private final boolean unavailable;
+
+    private AbsentMetadataCustody() {
+      this(false);
+    }
+
+    private AbsentMetadataCustody(boolean unavailable) {
+      this.unavailable = unavailable;
+    }
+
+    @Override
+    public java.util.Optional<CardCustodyPort.OperationBinding> operationBinding(UUID operationId) {
+      if (unavailable) throw new IllegalStateException("database unavailable");
+      return java.util.Optional.empty();
+    }
+
     @Override
     public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
       throw new AssertionError("retry must reject before preparing custody");
@@ -1058,6 +1124,55 @@ final class MatchApplicationServiceTest {
 
     @Override
     public java.util.Optional<MatchState> findState(MatchId matchId, CardCatalog catalog) {
+      throw new IllegalStateException("database unavailable");
+    }
+  }
+  private static final class ThrowingSaveMatchRepository implements MatchRepository {
+    private final MatchState state;
+
+    private ThrowingSaveMatchRepository(MatchState state) {
+      this.state = state;
+    }
+
+    @Override
+    public SaveResult save(long expectedRevision, MatchState successor) {
+      throw new IllegalStateException("database unavailable");
+    }
+    @Override
+    public java.util.Optional<MatchSnapshot> find(MatchId matchId) {
+      return java.util.Optional.empty();
+    }
+
+    @Override
+    public java.util.Optional<MatchState> findState(MatchId matchId, CardCatalog catalog) {
+      return java.util.Optional.of(state);
+    }
+  }
+
+  private static final class EnumerationFailingCustody implements CardCustodyPort {
+    @Override
+    public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
+      return PrepareResult.rejected(operationId, owner, copyIds, Failure.DATABASE_ERROR);
+    }
+
+    @Override
+    public CustodyResult escrow(UUID operationId) {
+      return CustodyResult.rejected(operationId, OperationStatus.PREPARED, Failure.DATABASE_ERROR);
+    }
+
+    @Override
+    public ReturnResult returnCopies(UUID operationId) {
+      return ReturnResult.pending(operationId, List.of(), List.of(), List.of(), List.of());
+    }
+
+    @Override
+    public RecoveryResult recover(UUID operationId) {
+      return RecoveryResult.failed(operationId, OperationStatus.RETURN_PENDING,
+          Failure.DATABASE_ERROR);
+    }
+
+    @Override
+    public List<UUID> openOperationIds() {
       throw new IllegalStateException("database unavailable");
     }
   }

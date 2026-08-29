@@ -456,6 +456,27 @@ final class SqliteCustodyTest {
     }
     Files.deleteIfExists(path);
   }
+  @Test
+  void findStateAndRehydrateRejectSnapshotRevisionMismatch() throws Exception {
+    var path = Files.createTempFile("mobmatrix-row-revision", ".sqlite");
+    MatchState original = snapshotState("embedded-revision");
+    try (Database database = new Database(path)) {
+      SqliteMatchRepository repository = new SqliteMatchRepository(database);
+      assertTrue(repository.save(0L, original).accepted());
+      try (var update = database.connection().prepareStatement(
+          "UPDATE matches SET revision = ? WHERE match_id = ?")) {
+        update.setLong(1, original.revision() + 1);
+        update.setString(2, original.matchId().value());
+        update.executeUpdate();
+      }
+      MatchRepository.MatchSnapshot snapshot = repository.find(original.matchId()).orElseThrow();
+      assertThrows(IllegalArgumentException.class,
+          () -> repository.findState(original.matchId(), original.catalog()));
+      assertThrows(IllegalArgumentException.class,
+          () -> repository.rehydrate(snapshot, original.catalog()));
+    }
+    Files.deleteIfExists(path);
+  }
 
   @Test
   void findStateRejectsSameIdAlteredPersistedCatalogDefinition() throws Exception {

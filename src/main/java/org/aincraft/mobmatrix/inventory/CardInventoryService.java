@@ -138,8 +138,16 @@ public final class CardInventoryService implements CardCustodyPort {
     List<Integer> slots = new ArrayList<>();
     for (CardCopyId copy : operation.copyIds) {
       Located located = scan.cards.get(copy);
-      if (located == null) return CustodyResult.rejected(operationId, operation.status, Failure.INVENTORY_CHANGED);
-      if (!located.data.owner().equals(operation.owner)) return CustodyResult.rejected(operationId, operation.status, Failure.MISMATCHED_OWNER);
+      if (located == null) return CustodyResult.rejected(operationId, operation.status,
+          Failure.INVENTORY_CHANGED);
+      if (!located.data.owner().equals(operation.owner)) {
+        return CustodyResult.rejected(operationId, operation.status, Failure.MISMATCHED_OWNER);
+      }
+      SerializedItemSnapshot snapshot = operation.snapshots.stream()
+          .filter(value -> value.copyId().equals(copy)).findFirst().orElse(null);
+      if (snapshot == null || !Arrays.equals(serialize(located.item.clone()), snapshot.bytes())) {
+        return CustodyResult.rejected(operationId, operation.status, Failure.INVENTORY_CHANGED);
+      }
       slots.add(located.slot);
     }
     for (int slot : slots) player.getInventory().setItem(slot, null);
@@ -308,14 +316,25 @@ public final class CardInventoryService implements CardCustodyPort {
 
 
   private PreparedOperation operation(UUID operationId) {
-    PreparedOperation existing = operations.get(operationId);
-    if (existing != null) return existing;
     var entry = journal.find(operationId).orElse(null);
-    if (entry == null) return null;
-    PreparedOperation hydrated = new PreparedOperation(entry.owner(), entry.copyIds(), entry.snapshots(),
-        entry.status(), entry.restoredCopyIds(), entry.matchId());
-    operations.put(operationId, hydrated);
-    return hydrated;
+    if (entry == null) {
+      operations.remove(operationId);
+      return null;
+    }
+    PreparedOperation existing = operations.get(operationId);
+    if (existing == null) {
+      existing = new PreparedOperation(entry.owner(), entry.copyIds(), entry.snapshots(),
+          entry.status(), entry.restoredCopyIds(), entry.matchId());
+      operations.put(operationId, existing);
+    } else {
+      // Durable transitions can be made by startup recovery or another adapter instance.
+      // Refresh the cache before returning any result so later recover/abort calls cannot
+      // act on a stale PREPARED/ESCROWED status.
+      existing.status = entry.status();
+      existing.restored.clear();
+      existing.restored.addAll(entry.restoredCopyIds());
+    }
+    return existing;
   }
 
   private static List<CardCopyId> restored(PreparedOperation operation) {
