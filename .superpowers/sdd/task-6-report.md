@@ -818,3 +818,64 @@ Changes remain within the pure custody result API, Paper inventory recovery adap
 JDBC catalog persistence boundary. No live Bukkit/Paper objects cross into storage or
 application. Existing Paper registry and SQLite native-access environment limitations remain
 as documented above.
+
+## Task 6 final catalog metadata/count hardening
+
+### Status
+
+Implemented catalog metadata reuse for match snapshot saves and bounded, fail-closed
+collection decoding.
+
+Implementation commit: `08eb8ce` (`fix: harden snapshot persistence`).
+
+### Corrective coverage
+
+- `SqliteMatchRepository` now checks an existing catalog snapshot's complete persisted
+  definition set without comparing against synthetic match metadata. Existing imported
+  `source`, `digest`, and `metadata_json` remain untouched; altered definitions still
+  reject atomically. New snapshot IDs still create deterministic metadata and all
+  definitions in the match transaction, for both direct revision-0 saves and atomic
+  initial saves.
+- `MatchStateSnapshotCodec` uses a bounded nonnegative `readCount` for every encoded
+  dynamic collection: rules, transcript decisions, hands, revealed IDs, original
+  owners, Draft seats/offerings/cards, selections/choices/selected/deck/provenance,
+  house copies, Chaos entries, UUID sets, and nested collections.
+- Duplicate set/rule entries are rejected rather than normalized. Existing duplicate
+  map validations remain fail-closed, while repeated valid Draft references continue
+  to resolve to authoritative offering copies.
+- Focused regressions cover pre-imported catalog metadata followed by match save,
+  negative original-owner count, and negative nested hand count.
+
+### TDD and focused verification
+
+Focused command used for the red and green runs:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact red result before the production implementation:
+
+```text
+> Task :test FAILED
+
+SqliteCustodyTest > matchSaveReusesMetadataFromPreImportedCatalogSnapshot() FAILED
+    java.lang.IllegalArgumentException at SqliteCustodyTest.java:466
+
+101 tests completed, 1 failed, 4 skipped
+
+FAILURE: Build failed with an exception.
+```
+
+Exact green result after implementation:
+
+```text
+> Task :test
+
+BUILD SUCCESSFUL in 4s
+4 actionable tasks: 3 executed, 1 up-to-date
+```
+
+SQLite emitted the JVM restricted-native-access warning; it did not fail the focused
+selection. No formatter, linter, project-wide build, or project-wide test suite was
+run.
