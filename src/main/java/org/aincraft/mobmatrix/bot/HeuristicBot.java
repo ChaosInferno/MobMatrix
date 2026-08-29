@@ -58,13 +58,8 @@ public final class HeuristicBot implements BotMovePolicy {
 
     Score bestScore = candidates.stream().map(Candidate::score).max(Score::compareTo).orElseThrow();
     List<Candidate> best = candidates.stream().filter(candidate -> candidate.score().equals(bestScore)).toList();
-    int selected = 0;
-    try {
-      RandomTranscript tieBreaker = transcript.fork();
-      selected = tieBreaker.nextInt("bot-tie-" + state.revision() + "-" + seat, best.size());
-    } catch (IllegalArgumentException | IllegalStateException ignored) {
-      // A replay transcript without a bot decision still gets a stable lexical choice.
-    }
+    RandomTranscript tieBreaker = transcript.fork();
+    int selected = tieBreaker.nextInt("bot-tie-" + state.revision() + "-" + seat, best.size());
     return new Command(best.stream().sorted(SCORE_ORDER.reversed()).toList().get(selected).command());
   }
 

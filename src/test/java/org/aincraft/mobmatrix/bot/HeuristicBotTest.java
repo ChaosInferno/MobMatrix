@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import java.time.Instant;
 import java.util.ArrayList;
@@ -97,6 +98,15 @@ final class HeuristicBotTest {
     assertEquals(left, right);
     assertEquals(before, transcript.decisions());
     assertEquals(stateBefore, state.randomDecisions());
+  }
+
+  @Test
+  void rejectsReplayWithMissingBotTieBreakDecision() {
+    MatchState state = start(37L, RuleSet.empty());
+    RandomTranscript replay = RandomTranscript.replay(List.of());
+
+    assertThrows(IllegalStateException.class,
+        () -> bot.choose(state, state.currentSeat(), replay, START.plusSeconds(1)));
   }
 
   @Test
