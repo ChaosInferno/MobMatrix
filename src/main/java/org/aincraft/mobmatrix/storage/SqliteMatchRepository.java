@@ -100,6 +100,51 @@ public final class SqliteMatchRepository implements MatchRepository {
       throw new IllegalStateException("SQLite match save failed", exception);
     }
   }
+  /**
+   * Inserts the revision-0 match and its durable start identity in one SQLite transaction.
+   */
+  @Override
+  public SaveResult saveInitial(MatchState state, StartBinding binding) {
+    Objects.requireNonNull(state, "state is required");
+    Objects.requireNonNull(binding, "start binding is required");
+    if (state.revision() != 0 || !state.matchId().equals(binding.matchId())) {
+      return new SaveResult(false, -1L, Failure.INVALID_STATE);
+    }
+    byte[] stateBytes = MatchStateSnapshotCodec.encode(state);
+    String transcript = transcriptJson(state);
+    try {
+      boolean autoCommit = connection.getAutoCommit();
+      connection.setAutoCommit(false);
+      try {
+        long current = currentRevision(state.matchId().value());
+        if (current >= 0) {
+          connection.rollback();
+          return SaveResult.stale(current);
+        }
+        try (var insert = connection.prepareStatement("""
+            INSERT INTO matches(match_id, revision, status, state_bytes, transcript_json, updated_at)
+            VALUES (?, 0, ?, ?, ?, CURRENT_TIMESTAMP)
+            """)) {
+          insert.setString(1, state.matchId().value());
+          insert.setString(2, state.isFinished() ? "FINISHED" : "ACTIVE");
+          insert.setBytes(3, stateBytes);
+          insert.setString(4, transcript);
+          insert.executeUpdate();
+        }
+        insertStartBinding(connection, binding);
+        connection.commit();
+        return SaveResult.success(0L);
+      } catch (SQLException | RuntimeException exception) {
+        try { connection.rollback(); } catch (SQLException ignored) { }
+        if (exception instanceof RuntimeException runtime) throw runtime;
+        throw exception;
+      } finally {
+        connection.setAutoCommit(autoCommit);
+      }
+    } catch (SQLException exception) {
+      throw new IllegalStateException("SQLite initial match save failed", exception);
+    }
+  }
 
   @Override
   public Optional<MatchSnapshot> find(org.aincraft.mobmatrix.domain.MatchId matchId) {
@@ -191,6 +236,15 @@ public final class SqliteMatchRepository implements MatchRepository {
   @Override
   public void saveStartBinding(StartBinding binding) {
     Objects.requireNonNull(binding, "start binding is required");
+    try {
+      insertStartBinding(connection, binding);
+    } catch (SQLException exception) {
+      throw new IllegalStateException("SQLite start binding save failed", exception);
+    }
+  }
+
+  private static void insertStartBinding(Connection connection, StartBinding binding)
+      throws SQLException {
     try (var insert = connection.prepareStatement("""
         INSERT INTO match_start_bindings(match_id, binding_version, request_identity,
           one_owner_kind, one_owner_uuid, one_operation_id, one_copy_ids,
@@ -213,8 +267,6 @@ public final class SqliteMatchRepository implements MatchRepository {
       insert.setString(10, binding.twoOperationId().toString());
       insert.setString(11, writeCopies(binding.twoCopies()));
       insert.executeUpdate();
-    } catch (SQLException exception) {
-      throw new IllegalStateException("SQLite start binding save failed", exception);
     }
   }
 

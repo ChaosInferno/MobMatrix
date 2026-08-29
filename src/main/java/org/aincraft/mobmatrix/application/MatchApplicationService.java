@@ -23,6 +23,7 @@ import org.aincraft.mobmatrix.domain.CopyOwner;
 import org.aincraft.mobmatrix.domain.MatchCommand;
 import org.aincraft.mobmatrix.domain.MatchEngine;
 import org.aincraft.mobmatrix.domain.MatchState;
+import org.aincraft.mobmatrix.domain.PlayerSeat;
 
 /** Only orchestration path that commits match transitions around durable card custody. */
 public final class MatchApplicationService {
@@ -111,13 +112,10 @@ public final class MatchApplicationService {
     if (matches != null) {
       MatchRepository.SaveResult saved;
       try {
-        saved = matches.save(0L, started.state());
-        if (saved.accepted()) {
-          matches.saveStartBinding(new MatchRepository.StartBinding(
-              request.match().matchId(), 1, startIdentity(request), request.oneOwner(),
-              plan.oneCopies(), request.oneOperationId(), request.twoOwner(), plan.twoCopies(),
-              request.twoOperationId()));
-        }
+        saved = matches.saveInitial(started.state(), new MatchRepository.StartBinding(
+            request.match().matchId(), 1, startIdentity(request), request.oneOwner(),
+            plan.oneCopies(), request.oneOperationId(), request.twoOwner(), plan.twoCopies(),
+            request.twoOperationId()));
       } catch (RuntimeException exception) {
         CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
         cleanup = cleanup.plus(cleanup(request.twoOperationId(), plan.twoCopies()));
@@ -127,7 +125,9 @@ public final class MatchApplicationService {
         CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
         cleanup = cleanup.plus(cleanup(request.twoOperationId(), plan.twoCopies()));
         Failure failure = saved.failure() == MatchRepository.Failure.STALE_REVISION
-            ? Failure.STALE_REVISION : Failure.INVALID_STATE;
+            ? Failure.STALE_REVISION
+            : saved.failure() == MatchRepository.Failure.DATABASE_ERROR
+                ? Failure.DATABASE_ERROR : Failure.INVALID_STATE;
         return MatchStartResult.rejected(request.match().matchId(), failure, cleanup);
       }
     }
@@ -219,38 +219,27 @@ public final class MatchApplicationService {
 
   private boolean operationBindingsMatch(StartMatchRequest request,
       org.aincraft.mobmatrix.domain.MatchId matchId) {
-    List<UUID> open;
-    try {
-      open = custody.openOperationIds();
-    } catch (RuntimeException exception) {
-      return false;
-    }
-    // A durable adapter exposes its open rows. If rows are available, an operation that carries
-    // cards must still be present; empty DRAFT custody plans intentionally have no journal row.
-    if (!open.isEmpty() && (!request.oneCopies().isEmpty()
-        && !open.contains(request.oneOperationId())
-        || !request.twoCopies().isEmpty() && !open.contains(request.twoOperationId()))) {
-      return false;
-    }
-    return bindingMatches(request.oneOperationId(), request.oneOwner(), request.oneCopies(), matchId)
-        && bindingMatches(request.twoOperationId(), request.twoOwner(), request.twoCopies(), matchId);
+    return bindingMatchesIfNeeded(request.oneOperationId(), request.oneOwner(), request.oneCopies(), matchId)
+        && bindingMatchesIfNeeded(request.twoOperationId(), request.twoOwner(), request.twoCopies(), matchId);
+  }
+
+  private boolean bindingMatchesIfNeeded(UUID operationId, CopyOwner owner,
+      List<CardCopyId> copies, org.aincraft.mobmatrix.domain.MatchId matchId) {
+    // Draft's intentionally empty house-custody plan has no custody operation to bind.
+    if (copies.isEmpty()) return true;
+    return bindingMatches(operationId, owner, copies, matchId);
   }
 
   private boolean bindingMatches(UUID operationId, CopyOwner owner, List<CardCopyId> copies,
       org.aincraft.mobmatrix.domain.MatchId matchId) {
     try {
       Optional<CardCustodyPort.OperationBinding> binding = custody.operationBinding(operationId);
-      if (binding.isPresent()) {
-        CardCustodyPort.OperationBinding value = binding.get();
-        return value.status() == OperationStatus.ESCROWED
-            && value.owner().equals(owner)
-            && value.copyIds().equals(copies)
-            && Objects.equals(value.matchId(), matchId);
-      }
-
-      Optional<OperationStatus> status = custody.operationStatus(operationId);
-      if (status.isPresent() && status.get() != OperationStatus.ESCROWED) return false;
-      return custody.operationMatchId(operationId).map(matchId::equals).orElse(true);
+      if (binding.isEmpty()) return false;
+      CardCustodyPort.OperationBinding value = binding.get();
+      return value.status() == OperationStatus.ESCROWED
+          && value.owner().equals(owner)
+          && value.copyIds().equals(copies)
+          && Objects.equals(value.matchId(), matchId);
     } catch (RuntimeException exception) {
       return false;
     }
@@ -266,7 +255,6 @@ public final class MatchApplicationService {
         && binding.twoCopies().equals(plan.twoCopies())
         && binding.twoOperationId().equals(request.twoOperationId());
   }
-
   private static boolean sameInitialState(MatchState left, MatchState right) {
     return left.matchId().equals(right.matchId())
         && left.catalog().snapshotId().equals(right.catalog().snapshotId())
@@ -298,22 +286,27 @@ public final class MatchApplicationService {
   private static ReservationPlan reservationPlan(MatchState state, StartMatchRequest request) {
     boolean draft = request.match().rules().has(org.aincraft.mobmatrix.domain.Rule.DRAFT);
     boolean random = request.match().rules().has(org.aincraft.mobmatrix.domain.Rule.RANDOM);
-    List<CardCopyId> oneActive = state.hand(org.aincraft.mobmatrix.domain.PlayerSeat.ONE).stream()
-        .filter(card -> card.copy().owner().isPlayer())
-        .map(card -> card.copyId()).toList();
-    List<CardCopyId> twoActive = state.hand(org.aincraft.mobmatrix.domain.PlayerSeat.TWO).stream()
-        .filter(card -> card.copy().owner().isPlayer())
-        .map(card -> card.copyId()).toList();
-    if (random && oneActive.stream().allMatch(id -> findOwner(state, id).equals(request.oneOwner()))
-        && twoActive.stream().allMatch(id -> findOwner(state, id).equals(request.twoOwner()))) {
-      if (!request.oneCopies().equals(oneActive) || !request.twoCopies().equals(twoActive)) return null;
-      return new ReservationPlan(oneActive, twoActive);
+    if (random) {
+      Set<CardCopyId> oneOriginal = originalCopies(state, PlayerSeat.ONE);
+      Set<CardCopyId> twoOriginal = originalCopies(state, PlayerSeat.TWO);
+      if (!oneOriginal.equals(new HashSet<>(request.oneCopies()))
+          || !twoOriginal.equals(new HashSet<>(request.twoCopies()))) return null;
+      return new ReservationPlan(request.oneCopies(), request.twoCopies());
     }
+    // Deck validation has already checked the requested UUIDs and owners. Keep this pre-SWAP
+    // mapping: the post-SWAP hand intentionally contains one card from the opposite player.
+    if (!draft) return new ReservationPlan(request.oneCopies(), request.twoCopies());
     List<CardCopyId> oneOwned = activeOwned(state, request.oneOwner());
     List<CardCopyId> twoOwned = activeOwned(state, request.twoOwner());
-    if (!draft && (!new HashSet<>(request.oneCopies()).equals(new HashSet<>(oneOwned))
-        || !new HashSet<>(request.twoCopies()).equals(new HashSet<>(twoOwned)))) return null;
     return new ReservationPlan(oneOwned, twoOwned);
+  }
+
+  private static Set<CardCopyId> originalCopies(MatchState state, PlayerSeat seat) {
+    Set<CardCopyId> result = new HashSet<>();
+    state.originalOwners().forEach((copyId, owner) -> {
+      if (owner == seat) result.add(copyId);
+    });
+    return result;
   }
 
   private static List<CardCopyId> activeOwned(MatchState state, CopyOwner owner) {
@@ -326,14 +319,6 @@ public final class MatchApplicationService {
     return List.copyOf(result);
   }
 
-  private static CopyOwner findOwner(MatchState state, CardCopyId copyId) {
-    for (var seat : org.aincraft.mobmatrix.domain.PlayerSeat.values()) {
-      for (var card : state.hand(seat)) {
-        if (card.copyId().equals(copyId)) return card.copy().owner();
-      }
-    }
-    return CopyOwner.house();
-  }
 
   private record ReservationPlan(List<CardCopyId> oneCopies, List<CardCopyId> twoCopies) {}
 

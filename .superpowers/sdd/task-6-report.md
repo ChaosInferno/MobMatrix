@@ -162,7 +162,6 @@ Durability corrections:
 
 No formatter, linter, project-wide build, or project-wide test suite was run. SQLite emitted its Java restricted-native-access warning during the focused runs.
 
-## Task 6 final startup/retry corrections
 
 Implementation commits for this correction: `c2458e1` (`fix: preserve active custody on startup`) and
 `61e14c3` (`fix: preserve active custody on startup`, final DRAFT owner/copy validation repair).
@@ -281,3 +280,71 @@ The final focused result selected 69 tests: 65 executed successfully and 4
 `CardItemCodecTest` tests were assumption-skipped because Paper's item registry requires a running
 Paper server. SQLite emitted only the JVM restricted-native-access warning. No formatter, linter,
 project-wide build, or project-wide test suite was run.
+# Task 6 final custody/start fixes
+
+## Status
+
+Implemented SWAP reservation preservation, atomic revision-0 match/start-binding persistence,
+strict durable custody binding checks on retries, and the prior Task 6 custody/recovery behavior.
+
+Implementation commit: `e981092` (`fix: make start custody atomic`).
+
+## TDD and focused verification
+
+Focused adapter/domain/bot command (red, before implementation):
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact red result:
+
+```text
+> Task :compileTestJava FAILED
+MatchApplicationServiceTest.java:554: error: method does not override or implement a method from a supertype
+    @Override
+    ^
+1 error
+FAILURE: Build failed with an exception.
+```
+
+Focused adapter/domain/bot command (green):
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact green result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 3 executed, 1 up-to-date
+```
+
+The final focused selection completed 72 tests: 68 passed and 4 Paper-registry codec tests were
+assumption-skipped because no running Paper server was available. SQLite emitted only the JVM
+restricted-native-access warning. No formatter, linter, project-wide build, or project-wide test
+suite was run.
+
+## Corrective coverage
+
+- SWAP starts reserve the five requested pre-SWAP physical UUIDs per seat. Settlement state maps
+  all ten cards back to their original owner seats; the regression asserts both five-copy
+  reservations and original-owner settlement.
+- `MatchRepository.saveInitial` is the start-only persistence operation. SQLite inserts revision-0
+  match state and its durable start binding in one transaction; application start uses this
+  operation and performs durable custody cleanup on a transaction/binding failure.
+- Active retries require a present durable `OperationBinding` for every nonempty seat reservation,
+  with exact match ID, owner, ordered copy UUID list, and `ESCROWED` status. Default/absent metadata
+  is rejected; only intentionally empty Draft custody plans bypass the binding requirement.
+
+## Thread-boundary notes
+
+No new live Bukkit/Paper objects cross into application or storage. SQLite receives immutable match
+state and binding values only; custody cleanup remains through the custody port.
+
+## Concerns
+
+- Paper codec tests remain assumption-skipped without a running Paper item registry.
+- SQLite emits Java's restricted-native-access warning under this JVM.

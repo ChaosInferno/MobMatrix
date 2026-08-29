@@ -13,6 +13,20 @@ import org.aincraft.mobmatrix.domain.CopyOwner;
 /** Persistence boundary for immutable match snapshots with optimistic revisions. */
 public interface MatchRepository {
   SaveResult save(long expectedRevision, MatchState state);
+  /**
+   * Persists a revision-0 active match and its durable start binding.
+   *
+   * <p>Durable implementations must commit both rows atomically. The default keeps compatibility
+   * with simple test repositories; production startup uses the SQLite override.
+   */
+  default SaveResult saveInitial(MatchState state, StartBinding binding) {
+    Objects.requireNonNull(state, "state is required");
+    Objects.requireNonNull(binding, "start binding is required");
+    SaveResult saved = save(0L, state);
+    if (!saved.accepted()) return saved;
+    saveStartBinding(binding);
+    return saved;
+  }
 
   Optional<MatchSnapshot> find(MatchId matchId);
   /** Loads the executable state needed to compare an idempotent start request. */
