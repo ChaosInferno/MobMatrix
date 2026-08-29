@@ -1,0 +1,476 @@
+id,public_number,name,stars,type,top,right,bottom,left,sale_price
+1,No. 1,Dodo,1,Normal,4,2,3,4,0
+2,No. 2,Tonberry,1,Normal,2,2,7,2,100
+3,No. 3,Sabotender,1,Normal,4,3,3,3,0
+4,No. 4,Spriggan,1,Normal,2,3,4,4,100
+5,No. 5,Pudding,1,Normal,2,4,3,5,100
+6,No. 6,Bomb,1,Normal,3,4,3,3,0
+7,No. 7,Mandragora,1,Normal,4,2,5,3,0
+8,No. 8,Coblyn,1,Normal,3,3,3,4,100
+9,No. 9,Morbol,1,Normal,5,2,5,2,100
+10,No. 10,Coeurl,1,Normal,2,5,2,5,0
+11,No. 11,Ahriman,1,Normal,5,5,2,2,100
+12,No. 12,Goobbue,1,Normal,2,5,5,2,100
+13,No. 13,Chocobo,1,Normal,3,7,2,1,100
+14,No. 14,Amalj'aa,1,Society,1,4,7,1,100
+15,No. 15,Ixal,1,Society,6,1,3,4,100
+16,No. 16,Sylph,1,Society,2,4,5,4,100
+17,No. 17,Kobold,1,Society,2,2,4,6,100
+18,No. 18,Sahagin,1,Society,4,5,3,3,100
+19,No. 19,Tataru Taru,1,Scion,7,2,3,2,100
+20,No. 20,Moogle,1,Society,2,1,3,7,100
+21,No. 21,Siren,2,Normal,3,6,7,2,300
+22,No. 22,Ultros & Typhon,2,Normal,2,3,6,7,300
+23,No. 23,Demon Wall,2,Normal,6,7,2,3,300
+24,No. 24,Succubus,2,Normal,7,3,2,6,300
+25,No. 25,Chimera,2,Normal,7,7,2,2,300
+26,No. 26,Blue Dragon,2,Normal,2,2,7,7,300
+27,No. 27,Scarface Bugaal Ja,2,Society,6,6,2,6,300
+28,No. 28,Momodi Modi,2,Normal,7,5,5,3,300
+29,No. 29,Baderon Tenfingers,2,Normal,3,7,5,5,300
+30,No. 30,Mother Miounne,2,Normal,5,5,3,7,300
+31,No. 31,Livia sas Junius,2,Garlean,3,7,7,1,300
+32,No. 32,Rhitahtyn sas Arvina,2,Garlean,7,1,3,7,300
+33,No. 33,Biggs & Wedge,2,Normal,5,3,7,5,300
+34,No. 34,Gerolt,2,Normal,1,7,3,7,300
+35,No. 35,Frixio,2,Society,6,2,6,6,300
+36,No. 36,Mutamix Bubblypots,2,Society,2,6,6,6,300
+37,No. 37,Memeroon,2,Society,6,6,6,2,300
+38,No. 38,Behemoth,3,Normal,7,8,4,2,500
+39,No. 39,Gilgamesh & Enkidu,3,Normal,8,3,7,3,500
+40,No. 40,Ifrit,3,Primal,7,1,6,7,500
+41,No. 41,Titan,3,Primal,1,7,7,6,500
+42,No. 42,Garuda,3,Primal,7,6,1,7,500
+43,No. 43,Good King Moggle Mog XII,3,Primal,7,6,7,1,500
+44,No. 44,Raya-O-Senna & A-Ruhn-Senna,3,Normal,5,6,6,6,500
+45,No. 45,Godbert Manderville,3,Normal,6,6,5,6,500
+46,No. 46,Thancred,3,Scion,2,3,8,7,500
+47,No. 47,Nero tol Scaeva,3,Garlean,4,1,8,7,500
+48,No. 48,Papalymo & Yda,3,Scion,3,7,8,2,500
+49,No. 49,Y'shtola,3,Scion,7,8,1,4,500
+50,No. 50,Urianger,3,Scion,8,1,4,7,500
+51,No. 51,Ultima Weapon,4,Garlean,7,8,9,1,800
+52,No. 52,Odin,4,Primal,8,8,1,8,800
+53,No. 53,Ramuh,4,Primal,8,1,8,8,800
+54,No. 54,Leviathan,4,Primal,8,8,8,1,800
+55,No. 55,Shiva,4,Primal,1,8,8,8,800
+56,No. 56,Minfilia,4,Scion,9,8,3,5,800
+57,No. 57,Lahabrea,4,Normal,4,9,4,8,800
+58,No. 58,Cid Garlond,4,Normal,5,9,9,2,800
+59,No. 59,Alphinaud & Alisaie,4,Scion,9,3,3,9,800
+60,No. 60,Louisoix Leveilleur,4,Scion,9,4,9,3,800
+61,No. 61,Bahamut,5,Primal,9,5,9,6,1500
+62,No. 62,Hildibrand & Nashu Mhakaracca,5,Normal,1,8,10,8,1500
+63,No. 63,Nanamo Ul Namo,5,Normal,10,6,4,8,1500
+64,No. 64,Gaius van Baelsar,5,Garlean,4,10,5,9,1500
+65,No. 65,Merlwyb Bloefhiswyn,5,Normal,5,9,10,3,1500
+66,No. 66,Kan-E-Senna,5,Normal,9,10,1,7,1500
+67,No. 67,Raubahn Aldynn,5,Normal,6,2,9,10,1500
+68,Ex. 1,Warrior of Light,5,Normal,10,2,5,10,1500
+69,Ex. 2,Firion,5,Normal,10,5,10,1,1500
+70,Ex. 3,Onion Knight,5,Normal,8,2,8,10,1500
+71,Ex. 4,Cecil Harvey,5,Normal,4,10,4,10,1500
+72,Ex. 5,Bartz Klauser,5,Normal,4,4,10,10,1500
+73,Ex. 6,Terra Branford,5,Normal,10,10,2,5,1500
+74,Ex. 7,Cloud Strife,5,Normal,9,3,9,8,1500
+75,Ex. 8,Squall Leonhart,5,Normal,6,10,10,1,0
+76,Ex. 9,Zidane Tribal,5,Normal,5,10,6,8,1500
+77,Ex. 10,Tidus,5,Normal,10,7,1,9,1500
+78,Ex. 11,Shantotto,5,Normal,4,9,7,9,0
+79,Ex. 12,Vaan,5,Normal,1,7,10,9,0
+80,Ex. 13,Lightning,5,Normal,9,1,7,10,1500
+81,No. 68,Gaelicat,1,Normal,4,1,1,7,100
+82,No. 69,Vanu Vanu,2,Society,2,6,4,7,300
+83,No. 70,Gnath,2,Society,6,3,7,3,300
+84,No. 71,Yugiri Mistwalker,2,Normal,7,7,1,3,300
+85,No. 72,Fat Chocobo,2,Normal,5,5,5,5,300
+86,No. 73,Griffin,3,Normal,5,1,7,8,500
+87,No. 74,Tioman,3,Normal,1,5,8,7,500
+88,No. 75,Estinien,3,Normal,8,8,2,3,500
+89,No. 76,Lucia goe Junius,3,Normal,8,2,3,8,500
+90,No. 77,Ysayle,3,Normal,4,8,8,1,500
+91,No. 78,Hilda,3,Normal,1,4,8,8,500
+92,No. 79,Matoya,3,Normal,8,3,8,1,500
+93,No. 80,Count Edmont de Fortemps,3,Normal,1,8,3,8,500
+94,No. 81,Byblos,3,Normal,8,4,1,7,500
+95,No. 82,Haurchefant,3,Normal,7,1,5,8,0
+96,No. 83,Aymeric,4,Normal,1,5,9,9,800
+97,No. 84,Ravana,4,Primal,9,7,8,1,800
+98,No. 85,Bismarck,4,Primal,1,9,7,8,800
+99,No. 86,Nidhogg,5,Normal,10,7,3,8,1500
+100,No. 87,Midgardsormr,5,Normal,3,8,10,7,0
+101,No. 88,Deepeye,1,Normal,1,3,7,2,100
+102,No. 89,Archaeornis,2,Normal,5,4,6,5,300
+103,No. 90,Paissa,2,Normal,4,6,3,6,300
+104,No. 91,Dhalmel,2,Normal,6,5,3,5,300
+105,No. 92,Bandersnatch,2,Normal,6,6,3,4,300
+106,No. 93,Crawler,2,Normal,7,7,3,2,300
+107,No. 94,Poroggo,2,Normal,6,3,7,3,300
+108,No. 95,Vedrfolnir,3,Normal,8,2,7,4,500
+109,No. 96,Coeurlregina,3,Normal,5,5,5,8,500
+110,No. 97,Progenitrix,3,Normal,6,6,3,6,500
+111,No. 98,Belladonna,3,Normal,3,7,3,7,500
+112,No. 99,Echidna,3,Normal,6,4,7,4,500
+113,No. 100,Pipin Tarupin,3,Normal,6,5,6,6,500
+114,No. 101,Julyan Manderville,3,Normal,6,6,5,7,500
+115,No. 102,Moglin,3,Society,8,5,4,5,500
+116,No. 103,Charibert,3,Normal,7,8,4,3,500
+117,No. 104,Roundrox,3,Society,2,2,8,8,500
+118,No. 105,Senor Sabotender,4,Normal,9,5,7,6,800
+119,No. 106,Regula van Hydrus,5,Garlean,8,8,6,8,1500
+120,No. 107,Archbishop Thordan VII,5,Normal,7,1,10,9,1500
+121,No. 108,Honoroit,2,Normal,7,2,7,2,300
+122,No. 109,Hoary Boulder & Coultenet,2,Scion,2,7,2,7,300
+123,No. 110,Brachiosaur,3,Normal,8,4,5,4,500
+124,No. 111,Darkscale,3,Normal,2,8,4,7,500
+125,No. 112,Fenrir,3,Normal,7,3,6,4,500
+126,No. 113,Kraken,3,Normal,3,6,6,6,500
+127,No. 114,Vicegerent to the Warden,3,Normal,7,1,7,5,500
+128,No. 115,Manxome Molaa Ja Ja,3,Society,3,7,2,8,500
+129,No. 116,Ferdiad,3,Normal,4,6,8,4,500
+130,No. 117,Calcabrina,3,Normal,6,6,6,3,500
+131,No. 118,Kuribu,3,Normal,8,3,2,7,500
+132,No. 119,Phlegethon,3,Normal,1,7,6,7,500
+133,No. 120,Artoirel de Fortemps,3,Normal,4,7,3,7,500
+134,No. 121,Emmanellain de Fortemps,3,Normal,7,4,7,3,500
+135,No. 122,Xande,4,Normal,9,4,6,7,800
+136,No. 123,Brute Justice,4,Normal,7,7,7,7,800
+137,No. 124,Sephirot,4,Primal,6,8,8,6,800
+138,No. 125,F'lhaminn,4,Scion,9,7,3,7,800
+139,No. 126,Vidofnir,4,Normal,8,6,8,6,0
+140,No. 127,Cloud of Darkness,5,Normal,7,10,7,6,1500
+141,No. 128,Lolorito Nanarito,2,Normal,4,3,7,3,300
+142,No. 129,Gibrillont,2,Normal,2,6,3,6,300
+143,No. 130,Laniaitte de Haillenarte,2,Normal,7,6,3,3,300
+144,No. 131,Rhoswen,2,Normal,5,6,4,6,300
+145,No. 132,Carvallain de Gorgagne,2,Normal,2,7,7,2,300
+146,No. 133,Kal Myhk,3,Normal,1,8,4,8,500
+147,No. 134,Waukkeon,3,Normal,1,6,7,7,500
+148,No. 135,Curator,3,Normal,4,6,4,7,500
+149,No. 136,Mistbeard,3,Normal,5,6,7,6,500
+150,No. 137,Unei & Doga,4,Normal,6,8,6,8,800
+151,No. 138,Tiamat,4,Normal,9,6,5,6,800
+152,No. 139,Calofisteri,4,Normal,5,8,7,8,800
+153,No. 140,Hraesvelgr,5,Normal,7,7,10,6,1500
+154,No. 141,Apkallu,1,Normal,3,4,4,1,100
+155,No. 142,Colibri,1,Normal,6,1,4,1,100
+156,No. 143,Magitek Death Claw,1,Garlean,4,3,2,3,100
+157,No. 144,Liquid Flame,2,Normal,4,3,6,6,300
+158,No. 145,Lost Lamb,2,Normal,7,3,4,5,300
+159,No. 146,Delivery Moogle,2,Society,5,5,6,3,300
+160,No. 147,Magitek Colossus,2,Garlean,6,3,6,3,300
+161,No. 148,Strix,3,Normal,5,7,1,7,500
+162,No. 149,Tozol Huatotl,3,Society,7,6,6,2,500
+163,No. 150,Alexander Prime,3,Primal,7,3,2,8,500
+164,No. 151,"Brendt, Brennan, & Bremondt",3,Normal,4,7,6,5,500
+165,No. 152,Heavensward Thancred,4,Scion,8,1,7,9,0
+166,No. 153,Heavensward Y'shtola,4,Scion,9,9,2,5,0
+167,No. 154,Nael van Darnus,4,Garlean,3,9,3,9,800
+168,No. 155,Sophia,5,Primal,10,8,5,6,1500
+169,No. 156,Opo-opo,1,Normal,1,4,2,6,100
+170,No. 157,Adamantoise,2,Normal,5,7,4,4,300
+171,No. 158,Magitek Vanguard,2,Garlean,3,5,4,7,300
+172,No. 159,Magitek Gunship,2,Garlean,3,5,5,5,300
+173,No. 167,Gold Saucer Attendant,2,Normal,4,7,1,6,300
+174,No. 160,Lava Scorpion,3,Normal,3,8,5,5,500
+175,No. 161,Magitek Predator,3,Garlean,5,7,4,5,500
+176,No. 162,Magitek Sky Armor,3,Garlean,6,2,6,7,500
+177,No. 163,The Griffin,3,Normal,8,8,4,1,500
+178,No. 168,Roland,3,Normal,2,7,8,3,500
+179,No. 164,Diabolos Hollow,4,Normal,4,4,8,9,800
+180,No. 165,Armored Weapon,4,Garlean,3,5,9,7,800
+181,No. 169,Gigi,4,Normal,6,8,4,7,800
+182,No. 166,Zurvan,5,Primal,3,7,8,10,1500
+183,No. 170,Namazu,1,Society,1,6,1,5,100
+184,No. 171,Kojin,2,Society,4,5,5,4,300
+185,No. 172,Ananta,2,Society,3,7,5,2,300
+186,No. 173,M'naago,2,Normal,4,1,4,7,300
+187,No. 174,Kotokaze,2,Normal,5,6,2,6,300
+188,No. 175,Mammoth,3,Normal,6,3,8,3,500
+189,No. 176,Phoebad,3,Normal,8,8,3,1,500
+190,No. 177,Susano,3,Primal,2,8,3,8,500
+191,No. 178,Lakshmi,3,Primal,3,7,7,5,500
+192,No. 179,Grynewaht,3,Garlean,7,4,7,4,500
+193,No. 180,Rasho,3,Normal,4,7,8,2,500
+194,No. 181,Cirina,3,Normal,3,5,6,8,500
+195,No. 182,Magnai,3,Normal,6,7,4,4,500
+196,No. 183,Sadu,3,Normal,6,6,7,4,500
+197,No. 184,Shinryu,4,Primal,7,8,8,2,800
+198,No. 185,Yotsuyu,4,Garlean,9,2,8,6,800
+199,No. 186,Krile,4,Scion,2,8,8,7,0
+200,No. 187,Lyse,4,Scion,6,9,1,8,0
+201,No. 188,Zenos yae Galvus,5,Garlean,6,6,7,10,1500
+202,No. 189,Hien,5,Normal,2,10,5,10,1500
+203,No. 190,Mossling,1,Normal,5,2,5,1,100
+204,No. 191,Chapuli,2,Normal,7,2,2,6,300
+205,No. 192,Qiqirn Meateater,2,Society,1,5,7,5,300
+206,No. 193,Hrodric Poisontongue,3,Normal,2,7,6,7,500
+207,No. 194,Fordola rem Lupis,3,Normal,5,8,6,3,500
+208,No. 195,Rofocale,3,Normal,4,7,1,8,500
+209,No. 196,Argath Thadalfus,4,Normal,9,2,5,8,800
+210,No. 197,Raubahn & Pipin,5,Normal,1,10,10,6,1500
+211,No. 198,Koja,1,Normal,3,2,1,6,100
+212,No. 199,Ango,2,Normal,4,2,7,4,300
+213,No. 200,Guidance Node,2,Normal,6,4,4,4,300
+214,No. 201,Tansui,2,Normal,6,2,3,7,300
+215,No. 202,Genbu,3,Normal,7,7,1,7,500
+216,No. 203,Byakko,3,Normal,7,1,7,7,500
+217,No. 204,Arenvald Lentinus,3,Scion,8,4,8,2,500
+218,No. 205,Lupin,3,Society,3,3,8,7,500
+219,No. 206,Hancock,4,Normal,8,9,1,7,800
+220,No. 207,Hisui & Kurenai,5,Normal,10,2,7,9,1500
+221,No. 212,Wanyudo & Katasharin,1,Normal,6,1,1,5,100
+222,No. 213,Hatamoto,2,Normal,2,7,5,6,300
+223,No. 215,Yukinko,2,Normal,3,7,3,5,300
+224,No. 208,Qitian Dasheng,3,Normal,3,8,4,8,500
+225,No. 214,Hiruko,3,Normal,4,7,5,7,500
+226,No. 216,Happy Bunny,3,Normal,3,8,7,3,500
+227,No. 217,Louhi,3,Normal,5,8,2,7,500
+228,No. 209,Tsukuyomi,4,Primal,2,7,7,8,800
+229,No. 210,Yiazmat,5,Normal,7,6,10,7,1500
+230,No. 211,Gosetsu,5,Normal,10,5,10,2,0
+231,No. 224,Karakuri Hanya,1,Normal,7,1,1,4,100
+232,No. 218,Muud Suud,2,Normal,3,7,1,7,300
+233,No. 219,Tokkapchi,3,Normal,2,6,6,7,500
+234,No. 220,Mist Dragon,3,Normal,5,8,5,5,500
+235,No. 221,Suzaku,3,Normal,1,7,7,7,500
+236,No. 225,Pazuzu,3,Normal,4,8,4,7,500
+237,No. 226,Penthesilea,3,Normal,7,2,8,5,500
+238,No. 222,Asahi sas Brutus,3,Garlean,8,4,1,8,500
+239,No. 227,Yojimbo & Daigoro,5,Normal,10,8,1,8,1500
+240,No. 223,Omega,5,Normal,6,9,3,10,1500
+241,No. 228,Stormblood Tataru Taru,1,Scion,1,4,1,7,100
+242,No. 235,Dvergr,2,Normal,4,5,3,7,300
+243,No. 236,Ejika Tsunjika,2,Normal,7,1,1,7,300
+244,No. 229,Prometheus,3,Garlean,6,5,8,3,500
+245,No. 237,Provenance Watcher,3,Normal,7,4,4,8,500
+246,No. 230,Seiryu,3,Normal,7,7,7,1,500
+247,No. 231,Alpha,3,Normal,6,6,6,6,500
+248,No. 232,Great Gold Whisker,4,Society,6,9,6,7,800
+249,No. 238,Stormblood Gilgamesh,4,Normal,9,4,8,4,800
+250,No. 233,"Ultima, the High Seraph",5,Normal,6,10,7,7,1500
+251,No. 234,Stormblood Alphinaud & Alisaie,5,Scion,6,8,8,8,1500
+252,Ex. 14,Noctis Lucis Caelum,5,Normal,7,10,9,1,1500
+253,No. 239,Amaro,1,Normal,1,7,2,3,100
+254,No. 240,Evil Weapon,1,Normal,7,2,2,2,100
+255,No. 241,Lord and Lady Chai,1,Normal,5,1,6,1,100
+256,No. 242,Gigantender,2,Normal,7,4,4,4,300
+257,No. 243,Feo Ul,2,Society,7,5,5,1,300
+258,No. 244,Runar,2,Normal,6,4,7,1,300
+259,No. 245,Grenoldt,2,Normal,1,3,7,7,300
+260,No. 246,Philia,3,Normal,2,6,8,6,500
+261,No. 247,Titania,3,Normal,8,6,6,2,500
+262,No. 248,Eros,3,Normal,6,2,6,8,500
+263,No. 249,Storge,3,Normal,6,8,2,6,500
+264,No. 250,Formidable,3,Normal,8,5,5,5,500
+265,No. 251,Lyna,3,Normal,1,8,8,3,500
+266,No. 252,Jongleurs of Eulmore,3,Normal,4,4,7,6,500
+267,No. 253,Innocence,4,Normal,8,3,8,8,800
+268,No. 254,Shadowbringers Y'shtola,4,Scion,2,9,5,9,800
+269,No. 255,Shadowbringers Urianger,4,Scion,9,2,5,9,0
+270,No. 256,Ran'jit,4,Normal,1,9,9,5,800
+271,No. 257,Hades,5,Normal,8,6,6,10,1500
+272,No. 258,Ardbert,5,Normal,1,9,9,9,0
+273,No. 259,Hobgoblin,1,Normal,2,7,2,2,100
+274,No. 260,Porxie,1,Normal,1,2,6,4,100
+275,No. 261,Iguana,2,Normal,3,5,6,5,300
+276,No. 262,Nu Mou,2,Society,7,6,2,4,300
+277,No. 263,Fuath,2,Society,7,4,6,2,300
+278,No. 264,Leannan Sith,3,Normal,8,7,2,4,500
+279,No. 265,Seeker of Solitude,3,Normal,4,6,6,8,500
+280,No. 266,Oracle of Light,4,Normal,7,7,9,4,800
+281,No. 267,Archaeotania,5,Normal,10,9,7,1,1500
+282,No. 268,9S,5,Normal,4,8,6,10,1500
+283,No. 269,Flower Basket,1,Normal,2,2,2,7,100
+284,No. 270,Qitari,1,Society,4,6,2,2,100
+285,No. 271,Gnoll,2,Normal,2,4,7,6,300
+286,No. 278,Lizbeth,2,Normal,5,5,6,4,300
+287,No. 272,Batsquatch,3,Normal,6,2,8,6,500
+288,No. 273,Forgiven Obscenity,3,Normal,8,7,1,6,500
+289,No. 274,Huaca,3,Normal,7,5,8,2,500
+290,No. 275,Unknown,3,Normal,5,6,3,8,500
+291,No. 276,Ruby Weapon,4,Garlean,8,7,1,9,800
+292,No. 277,Therion,5,Normal,9,9,2,9,1500
+293,No. 279,Varis yae Galvus,5,Garlean,10,10,4,1,1500
+294,No. 280,Dwarf,1,Society,2,4,6,2,100
+295,No. 288,Ehll Tou,2,Normal,1,7,1,7,300
+296,No. 281,Rolling Tankard,2,Normal,6,4,2,6,300
+297,No. 282,Lugus,3,Normal,5,4,7,7,500
+298,No. 289,Dawon,3,Garlean,8,4,6,6,500
+299,No. 290,Adrammelech,3,Normal,6,1,7,8,500
+300,No. 283,Elidibus,4,Normal,8,4,9,4,800
+301,No. 284,Shadowbringers Thancred,4,Scion,7,9,8,1,0
+302,No. 285,Sapphire Weapon,4,Garlean,1,9,8,7,800
+303,No. 286,2P,5,Normal,4,8,10,6,1500
+304,No. 287,Shadowbringers Warrior of Light,5,Primal,2,10,10,5,1500
+305,No. 297,Great Azuro,1,Normal,4,7,1,1,100
+306,No. 291,Mother Porxie,2,Normal,3,3,7,6,300
+307,No. 298,Trinity Seeker,3,Normal,6,1,8,7,500
+308,No. 299,Trinity Avowed,3,Normal,8,7,6,1,500
+309,No. 300,Azulmagia,3,Normal,4,8,6,6,500
+310,No. 301,Siegfried,3,Normal,6,6,4,8,500
+311,No. 302,"Gogo, Master of Mimicry",3,Normal,8,6,4,6,500
+312,No. 292,Emerald Weapon,4,Garlean,7,1,9,8,800
+313,No. 293,Ryne,4,Normal,7,9,7,1,800
+314,No. 294,Gaia,4,Normal,5,9,1,9,800
+315,No. 295,Eden's Promise,5,Normal,10,5,8,6,1500
+316,No. 296,Phoenix,5,Primal,5,9,6,9,0
+317,No. 303,Keeper of the Keys,2,Normal,5,4,4,7,300
+318,No. 304,Lunar Bahamut,3,Primal,8,2,8,4,500
+319,No. 305,Valens van Varro,3,Garlean,7,5,8,3,500
+320,No. 309,Lunar Ifrit,3,Primal,8,3,4,7,500
+321,No. 310,4th-make Shemhazai,3,Normal,1,6,7,8,500
+322,No. 311,4th-make Cuchulainn,3,Normal,8,1,7,6,500
+323,No. 306,G-Warrior,4,Normal,9,1,7,8,800
+324,No. 307,Diamond Weapon,4,Garlean,9,8,7,1,800
+325,No. 312,Diablo Armament,4,Normal,4,4,9,9,800
+326,No. 308,2B,5,Normal,6,10,4,8,1500
+327,No. 313,Troll,1,Normal,4,4,3,4,100
+328,No. 314,Pisaca,1,Normal,3,4,4,4,100
+329,No. 315,Ea,1,Normal,5,4,1,4,100
+330,No. 316,Arkasodara,2,Society,4,4,7,4,300
+331,No. 317,Loporrit,2,Normal,4,6,6,4,300
+332,No. 318,Argos,2,Normal,7,3,7,1,300
+333,No. 319,Hermes,3,Normal,6,8,7,1,500
+334,No. 320,Amon the Undying,3,Normal,8,7,3,3,500
+335,No. 332,Erichthonios,3,Normal,5,8,5,6,500
+336,No. 321,Magus Sisters,3,Primal,4,1,8,8,500
+337,No. 322,Meteion,3,Normal,7,1,8,6,500
+338,No. 323,Fourchenault Leveilleur,3,Normal,7,7,3,7,500
+339,No. 324,Anima,4,Primal,5,1,9,9,800
+340,No. 325,Quintus van Cinna,4,Garlean,9,3,6,8,800
+341,No. 326,Endwalker Alphinaud & Alisaie,4,Scion,4,9,9,3,800
+342,No. 327,Hythlodaeus,4,Normal,7,9,6,6,800
+343,No. 328,Vrtra,4,Normal,9,3,7,7,0
+344,No. 329,Zodiark,5,Primal,5,10,3,10,1500
+345,No. 330,Hydaelyn,5,Primal,10,3,10,5,1500
+346,No. 331,Zenos Galvus,5,Garlean,6,6,9,9,0
+347,No. 333,Rampart,1,Normal,1,6,5,1,100
+348,No. 341,Hippo Cart,1,Normal,1,1,7,4,100
+349,No. 342,Gajasura,2,Society,4,7,4,4,300
+350,No. 334,Rhalgr,3,Normal,6,8,1,7,500
+351,No. 335,Azeyma,3,Normal,7,6,1,8,500
+352,No. 336,Nald,3,Normal,8,1,6,7,500
+353,No. 337,Thal,3,Normal,6,7,8,1,500
+354,No. 338,Chi,4,Normal,8,1,9,7,800
+355,No. 339,Daivadipa,4,Primal,7,8,1,9,800
+356,No. 340,Endsinger,5,Normal,7,10,2,9,1500
+357,No. 349,N-7000,1,Normal,1,5,1,6,100
+358,No. 350,Geryon the Steer,2,Normal,2,4,6,6,300
+359,No. 351,Gladiator of Sil'dih,2,Normal,7,2,5,5,300
+360,No. 352,Thorne Knight,2,Normal,4,7,2,6,300
+361,No. 343,Beatrice,3,Normal,6,7,7,4,500
+362,No. 344,Byregot,3,Normal,1,6,8,7,500
+363,No. 353,Shadowcaster Zeless Gah,3,Society,2,8,8,2,500
+364,No. 345,Scarmiglione,4,Normal,7,6,8,7,800
+365,No. 346,Barbariccia,4,Normal,6,7,7,8,800
+366,No. 347,Chief Keyward Lahabrea,4,Normal,5,9,5,8,800
+367,No. 348,Hephaistos,5,Normal,9,4,10,5,1500
+368,No. 354,Clockwork Onmyoji & Clockwork Yojimbo,1,Normal,6,3,1,3,100
+369,No. 360,Dreamingway,1,Normal,2,5,5,2,100
+370,No. 355,Felicitous Furball,2,Normal,5,5,7,1,300
+371,No. 356,Anden,2,Normal,4,1,6,7,300
+372,No. 361,Suprae-Lugae,3,Normal,5,7,5,6,500
+373,No. 362,Gancanagh,3,Normal,8,3,2,8,500
+374,No. 357,Menphina,3,Normal,1,7,6,8,500
+375,No. 358,Cagnazzo,4,Normal,8,6,7,7,800
+376,No. 359,Rubicante,4,Normal,7,8,6,7,800
+377,No. 363,Venat,5,Normal,4,8,7,10,0
+378,No. 369,Okuri Chochin,1,Normal,4,5,1,4,100
+379,No. 370,Gorai the Uncaged,2,Normal,7,2,6,4,300
+380,No. 371,Moko the Restless,2,Normal,3,6,7,3,300
+381,No. 364,Octomammoth,3,Normal,6,8,4,5,500
+382,No. 365,Proto-Carbuncle,3,Normal,3,7,5,7,500
+383,No. 372,Goldor,3,Normal,4,2,8,8,500
+384,No. 373,Shishio,3,Normal,7,5,2,8,500
+385,No. 366,Themis,4,Normal,5,5,9,8,800
+386,No. 374,Enenra,4,Normal,8,5,5,9,800
+387,No. 367,Golbez,5,Normal,10,5,2,10,1500
+388,No. 368,Athena,5,Normal,9,5,10,4,1500
+389,No. 385,Ketuduke,1,Normal,2,3,4,3,100
+390,No. 386,Lala,2,Normal,5,6,2,3,300
+391,No. 387,Statice,2,Normal,4,4,5,5,300
+392,No. 389,PuPu,2,Normal,5,7,4,3,300
+393,No. 388,Loquloqui,3,Normal,5,5,7,5,500
+394,No. 375,Nophica,3,Normal,8,6,7,1,500
+395,No. 376,Althyk,3,Normal,1,7,8,6,500
+396,No. 377,Nymeia,3,Normal,1,8,6,7,500
+397,No. 378,Halone,3,Normal,1,8,7,6,500
+398,No. 379,Thaliak,3,Normal,7,8,6,1,500
+399,No. 380,Llymlaen,3,Normal,7,8,1,6,500
+400,No. 381,Oschon,3,Normal,7,6,8,1,500
+401,No. 382,Durante,3,Normal,7,6,6,6,500
+402,No. 383,Eulogia,4,Normal,6,9,6,7,800
+403,No. 390,Asura,4,Primal,9,5,7,6,800
+404,No. 384,Zeromus,5,Normal,9,9,9,1,1500
+405,Ex. 15,Clive Rosfield,5,Normal,10,7,8,5,1500
+406,No. 391,Pelupelu,1,Society,5,3,4,2,100
+407,No. 392,Alpaca,1,Normal,3,5,3,3,100
+408,No. 393,Moblin,2,Society,5,5,4,5,300
+409,No. 394,Branchbearer,2,Normal,6,5,3,4,300
+410,No. 395,Rroneek,2,Normal,3,5,4,6,300
+411,No. 396,Sentry R8,2,Normal,4,6,4,5,300
+412,No. 397,Outrunner,2,Normal,5,3,6,5,300
+413,No. 398,Gulool Ja Ja,3,Normal,5,7,7,2,500
+414,No. 399,Drowsie,3,Normal,3,7,5,6,500
+415,No. 400,Ryoqor Terteh,3,Normal,6,6,4,6,500
+416,No. 401,Maulskull,3,Normal,7,7,4,4,500
+417,No. 402,Ambrose,3,Normal,5,3,7,6,500
+418,No. 403,Valigarmanda,4,Normal,7,5,6,8,800
+419,No. 404,Zoraal Ja,5,Normal,9,8,5,7,1500
+420,No. 405,Queen Eternal,5,Normal,3,10,9,5,1500
+421,No. 410,Black Cat,3,Normal,7,3,3,8,500
+422,No. 406,Otis,4,Normal,5,7,8,6,800
+423,No. 407,Cahciua,4,Normal,8,8,5,5,800
+424,No. 408,Wuk Lamat,5,Normal,5,5,10,9,0
+425,No. 409,Sphene,5,Normal,9,10,6,3,0
+426,No. 411,Overseer Kanilokka,2,Normal,6,4,5,4,300
+427,No. 412,Ark Angel MR,3,Normal,7,8,4,4,500
+428,No. 413,Ark Angel TT,3,Normal,8,4,4,7,500
+429,No. 414,Ark Angel GK,3,Normal,4,4,7,8,500
+430,No. 415,Ark Angel HM,3,Normal,4,7,4,8,500
+431,No. 416,Ark Angel EV,3,Normal,4,7,8,4,500
+432,No. 417,Ttokrrone,4,Normal,9,7,7,2,800
+433,No. 418,Mica the Magical Mu,4,Normal,8,2,9,6,800
+434,No. 419,Prishe of the Distant Chains,4,Normal,6,8,8,5,800
+435,No. 420,Shadow Lord,5,Normal,10,10,4,4,1500
+436,No. 421,Valia Pira,2,Normal,3,6,5,4,300
+437,No. 422,Ollier,3,Normal,8,5,6,3,500
+438,No. 423,Zelenia,4,Normal,7,7,7,7,800
+439,No. 424,Howling Blade,5,Normal,7,9,1,10,1500
+440,No. 425,Magitaur,4,Normal,8,6,5,8,800
+441,No. 426,Blue Leafkin,2,Normal,2,5,3,7,300
+442,No. 427,Wivre,2,Normal,7,2,6,2,300
+443,No. 428,Doppro,3,Society,2,7,4,8,500
+444,No. 455,King Elmer III,4,Normal,7,4,7,9,800
+445,No. 429,Immortal Remains,3,Normal,6,4,7,5,500
+446,No. 430,Kam'lanaut,3,Normal,5,8,2,7,500
+447,No. 431,Eald'narche,4,Normal,8,6,8,6,800
+448,No. 432,Necron,4,Primal,5,9,7,6,800
+449,No. 433,Vacuum Suit,2,Normal,4,7,2,5,300
+450,No. 434,Namingway,3,Normal,7,4,3,7,500
+451,No. 435,Rorrlo Teh,2,Normal,5,6,5,3,300
+452,No. 436,Ornamental Leafman,2,Normal,2,6,6,4,300
+453,No. 437,Fahrafahr,3,Society,4,7,8,3,500
+454,No. 438,Dawntrail Krile,5,Scion,2,8,10,8,0
+455,No. 439,Thundergust Griffin,3,Normal,3,7,5,7,500
+456,No. 440,Doomtrain,4,Normal,6,8,7,7,800
+457,No. 441,Lindwurm,5,Normal,10,7,8,4,1500
+458,No. 442,Interstellar Dhalmel,2,Normal,5,4,4,6,300
+459,No. 443,Rukhkh,2,Normal,6,7,2,3,300
+460,No. 444,Genie of the Lamp,2,Normal,4,2,7,5,300
+461,No. 445,Pari of Plenty,3,Normal,5,4,6,8,500
+462,No. 446,Darya the Sea-maid,3,Normal,6,5,7,6,500
+463,No. 447,Lone Swordmaster,3,Normal,8,7,4,4,500
+464,No. 448,Deadly Dandan,4,Normal,7,6,6,9,800
+465,No. 449,Nitowikwe,3,Normal,5,4,8,6,500
+466,No. 450,Jullus pyr Norbanus,3,Normal,4,7,6,7,500
+467,No. 451,Zero,3,Normal,6,6,3,8,500
+468,No. 452,Malphas,3,Normal,3,6,7,6,500
+469,No. 453,Shantotto the Demon,3,Normal,8,5,5,6,500
+470,No. 454,Alexander Resurrected,3,Normal,7,4,5,7,500
+471,No. 456,Enuo,4,Normal,7,7,8,5,800
+472,No. 457,Promathia,4,Normal,8,3,6,9,800
+473,No. 458,Shinryu (Vana'diel),5,Normal,9,6,3,10,1500
+474,No. 459,Cosmic Armored Weapon Beta,2,Normal,3,6,6,4,300
+475,No. 460,Tiisol Ja,3,Society,5,6,6,7,500
