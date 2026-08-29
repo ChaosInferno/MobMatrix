@@ -884,7 +884,8 @@ run.
 
 ### Status
 
-Implemented and committed as `5750a93` (`fix: close persistence integrity gaps`).
+Implemented and committed as `5750a93` and follow-up hardening `24f82b4` (both
+`fix: close persistence integrity gaps`).
 Initial-save rejection and exception paths now re-read durable match state, start binding, and
 exact ESCROWED custody bindings before cleanup. A matching concurrent winner is returned as the
 active state; unavailable or ambiguous durable reads report `DATABASE_ERROR` and leave custody
@@ -934,6 +935,15 @@ Exact final green output:
 > Task :test
 
 BUILD SUCCESSFUL in 2s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+The final fail-closed winner-binding hardening rerun used the same focused command and produced:
+
+```text
+> Task :test
+
+BUILD SUCCESSFUL in 3s
 4 actionable tasks: 2 executed, 2 up-to-date
 ```
 
