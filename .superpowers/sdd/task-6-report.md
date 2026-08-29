@@ -526,3 +526,82 @@ Consider enabling configuration cache to speed up this build: https://docs.gradl
 ```
 
 No formatter, linter, project-wide build, or project-wide test suite was run.
+
+## Task 6 canonical apply and strict Draft snapshot fixes
+
+### Status
+
+Implemented and committed canonical persisted apply and strict Draft snapshot metadata
+validation.
+
+Implementation commit: `a3953b7` (`fix: validate canonical match state`).
+
+### TDD and focused verification
+
+The focused adapter/domain/bot command was run after adding the divergent-state and Draft
+metadata regressions, before the production implementation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact red result:
+
+```text
+> Task :test FAILED
+
+MatchApplicationServiceTest > applyUsesPersistedCanonicalStateInsteadOfCallerSnapshot() FAILED
+SqliteCustodyTest > draftSnapshotRejectsMalformedProvenanceReference() FAILED
+SqliteCustodyTest > draftSnapshotRejectsSelectionReferenceOutsideOfferings() FAILED
+SqliteCustodyTest > draftSnapshotRejectsOfferingIdsDuplicatedAcrossSeats() FAILED
+SqliteCustodyTest > draftSnapshotRejectsOfferingCopyDuplicatedByAuthoritativeHand() FAILED
+SqliteCustodyTest > draftSnapshotRejectsPlayerOwnedOfferingCopy() FAILED
+
+85 tests completed, 6 failed, 4 skipped
+FAILURE: Build failed with an exception.
+```
+
+The same focused command passed after implementation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact green result:
+
+```text
+> Task :test
+
+BUILD SUCCESSFUL in 1s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+The focused selection completed 85 tests: 81 passed and 4 Paper-registry codec tests were
+assumption-skipped because no running Paper server is available. SQLite emitted only the JVM
+restricted-native-access warning. No formatter, linter, project-wide build, or project-wide
+test suite was run.
+
+### Corrective coverage
+
+- `MatchApplicationService.apply` first loads `matches.findState(state.matchId(), state.catalog())`,
+  rejects absent or failed rehydration, applies only to that canonical state, and CAS-saves with
+  the loaded revision. Revision mismatches retain structured stale handling.
+- The application regression passes a divergent same-revision caller snapshot and verifies that
+  its command is rejected without a save or persisted-state overwrite. Existing accepted-command
+  persistence and CAS coverage remains green.
+- Snapshot decode requires every offering copy to be HOUSE-owned and catalog-valid, rejects
+  duplicate offering seats/IDs/copy UUIDs and conflicting active hand/board identities, and keeps
+  legitimate DRAFT hand/deck references as references rather than new physical copies.
+- Draft selections, five-card decks, and provenance must resolve to exact authoritative offering
+  copies, match each seat's choice indexes, preserve HOUSE ownership, and use valid offering IDs.
+  Non-DRAFT snapshots cannot carry Draft metadata, while DRAFT snapshots require both seats'
+  offering and selection records.
+- Malformed provenance, outside references, player-owned/tampered offering copies, duplicate
+  offering IDs, and active-copy conflicts are covered by focused regressions. Legitimate encoded
+  DRAFT snapshots continue to rehydrate with player custody unaffected.
+
+### Thread-boundary notes and concerns
+
+No Bukkit/Paper objects cross into application or storage. Snapshot validation remains pure
+binary/domain rehydration. The Paper registry limitation and SQLite JVM warning remain as
+described in the preceding report sections.
