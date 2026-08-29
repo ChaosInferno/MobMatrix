@@ -1226,3 +1226,94 @@ BUILD SUCCESSFUL in 2s
 The focused run emitted only SQLite's JVM restricted-native-access warning. No formatter, linter,
 project-wide build, or project-wide test suite was run.
 
+
+## Task 6 final authenticated transition hardening
+
+### Status
+
+Implemented and committed as `6d8000f` (`fix: authenticate match transitions`).
+Match snapshots now use HMAC-SHA-256 over the complete serialized state bytes with an explicitly
+configured stable server secret. Missing, short, rotated, wrong, and legacy unauthenticated keys
+fail closed. Empty original-owner inference is restricted to true revision-zero initial state,
+including no result, draws, gameplay transcript, command IDs, revealed metadata, Draft metadata,
+or CHAOS metadata. SQLite migration markers must be exactly contiguous from 1 through the current
+version and the required schema is validated before startup succeeds. V3/V4 DDL is idempotent,
+and V5 records the idempotent start-binding table migration. ABORTED journal transitions validate
+restoration and exact escrow snapshots before same-status idempotence; malformed legacy ABORTED
+rows are rejected during hydration.
+
+### TDD and focused verification
+
+Focused red command after adding keyed-MAC, true-initial-owner, migration-gap/partial-DDL, and
+ABORTED hydration regressions, before the production implementation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest
+```
+
+Exact red result:
+
+```text
+> Task :compileTestJava FAILED
+SqliteCustodyTest.java:211: error: no suitable constructor found for
+    SqliteMatchRepository(Database,String)
+SqliteCustodyTest.java:216: error: no suitable constructor found for
+    SqliteMatchRepository(Database,String)
+SqliteCustodyTest.java:241: error: no suitable constructor found for
+    SqliteMatchRepository(Database,String)
+3 errors
+FAILURE: Build failed with an exception.
+```
+
+Focused storage green command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+Required focused adapter/domain/bot green command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 1 executed, 3 up-to-date
+```
+
+The focused runs emitted SQLite's JVM restricted-native-access warning only. No formatter, linter,
+project-wide build, or project-wide test suite was run.
+
+### Corrective coverage
+
+- `SqliteMatchRepository` has explicit secret constructors plus fail-closed process configuration.
+  Saved envelopes are `hmac-sha256-v1:` values, and `findState`/both `rehydrate` paths reject
+  missing, wrong-key, tampered, and old SHA-256 envelopes before decoding.
+- Plain direct initial snapshots remain compatible, while post-placement and post-Sudden-Death
+  empty-owner snapshots reject inference. Properly mapped non-SWAP Sudden-Death captures retain
+  their original settlement owner.
+- `SchemaMigrator` rejects gaps, out-of-range markers, and incomplete current schemas. Partial
+  V3/V4 upgrades repair missing columns, V5 recreates its table when absent, and each migration
+  marker is written only in the same transaction as its DDL.
+- In-memory and SQLite journals reject unresolved ABORTED operations even when the target status is
+  already ABORTED. Hydration requires every expected copy's restored ledger entry and exact escrow
+  snapshot, preventing legacy rows from reporting false completion.
+
+### Thread-boundary notes and concerns
+
+Changes remain within persistence, snapshot rehydration, and pure custody journal boundaries.
+No live Bukkit/Paper objects cross into application or storage. Paper registry codec tests remain
+environment-skipped where no running Paper server is available, and SQLite emits the documented
+restricted-native-access warning.
