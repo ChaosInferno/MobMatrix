@@ -605,3 +605,89 @@ test suite was run.
 No Bukkit/Paper objects cross into application or storage. Snapshot validation remains pure
 binary/domain rehydration. The Paper registry limitation and SQLite JVM warning remain as
 described in the preceding report sections.
+
+## Task 6 final ownership/CHAOS/catalog identity fixes
+
+### Status
+
+Implemented and committed snapshot ownership metadata completeness, CHAOS choice integrity,
+and persisted catalog-definition identity validation.
+
+Implementation commit: `f9b6710` (`fix: enforce snapshot ownership metadata`).
+
+### TDD and focused verification
+
+The focused adapter/domain/bot command was run red after adding incomplete/extra/wrong-seat
+original-owner, invalid CHAOS, and same-ID altered-catalog regressions:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact red output:
+
+```text
+> Task :compileJava UP-TO-DATE
+> Task :processResources UP-TO-DATE
+> Task :classes UP-TO-DATE
+> Task :compileTestJava
+> Task :processTestResources NO-SOURCE
+> Task :testClasses
+> Task :test FAILED
+
+SqliteCustodyTest > snapshotRejectsIncompleteOriginalOwnerMetadata() FAILED
+SqliteCustodyTest > snapshotRejectsChaosChoiceOutsideThatSeatsHand() FAILED
+SqliteCustodyTest > snapshotRejectsChaosChoiceInNonChaosState() FAILED
+SqliteCustodyTest > snapshotRejectsOriginalOwnerMappedToWrongSeat() FAILED
+SqliteCustodyTest > findStateRejectsSameIdAlteredPersistedCatalogDefinition() FAILED
+SqliteCustodyTest > snapshotRejectsExtraOriginalOwnerMetadata() FAILED
+
+91 tests completed, 6 failed, 4 skipped
+FAILURE: Build failed with an exception.
+```
+
+The same focused command passed after implementation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact green output:
+
+```text
+> Task :compileJava
+> Task :processResources UP-TO-DATE
+> Task :classes
+> Task :compileTestJava UP-TO-DATE
+> Task :processTestResources NO-SOURCE
+> Task :testClasses UP-TO-DATE
+> Task :test
+
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+The focused selection completed 91 tests: 87 passed and 4 Paper-registry codec tests were
+assumption-skipped because no running Paper server was available. SQLite emitted the JVM
+restricted-native-access warning. No formatter, linter, project-wide build, or project-wide
+test suite was run.
+
+### Corrective coverage
+
+- Snapshot decode now requires `originalOwners` to exactly cover every non-house physical copy
+  in active hands and occupied board cells. Duplicate entries, missing/extra IDs, null seats,
+  and inconsistent original seats for one player owner are rejected before rehydration. Generated
+  HOUSE-owned Draft offering copies remain excluded from the required key set.
+- CHAOS metadata now rejects all entries in non-CHAOS snapshots, rejects duplicate seat keys,
+  and requires every CHAOS choice to be a copy currently in that seat's authoritative hand.
+  Invalid choices therefore cannot reach timeout or recovery handling.
+- SQLite `findState` and catalog-resolver rehydration compare a supplied catalog's complete
+  persisted definition records when the snapshot ID has persisted catalog data. Same-ID altered
+  definitions are rejected; legacy fixtures without persisted catalog-definition rows retain
+  their existing snapshot-ID-only behavior.
+
+### Thread-boundary notes and concerns
+
+The changes remain inside pure snapshot/storage rehydration. No Bukkit/Paper objects cross into
+application or storage. Paper codec tests remain assumption-skipped without a running Paper
+registry, and SQLite emits the JVM restricted-native-access warning.
