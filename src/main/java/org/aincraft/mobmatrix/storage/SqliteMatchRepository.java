@@ -307,6 +307,13 @@ public final class SqliteMatchRepository implements MatchRepository {
   public void saveStartBinding(StartBinding binding) {
     Objects.requireNonNull(binding, "start binding is required");
     try {
+      Optional<StartBinding> existing = findStartBinding(binding.matchId());
+      if (existing.isPresent()) {
+        if (!existing.get().equals(binding)) {
+          throw new IllegalArgumentException("start binding identity mismatch");
+        }
+        return;
+      }
       insertStartBinding(connection, binding);
     } catch (SQLException exception) {
       throw new IllegalStateException("SQLite start binding save failed", exception);
@@ -320,12 +327,6 @@ public final class SqliteMatchRepository implements MatchRepository {
           one_owner_kind, one_owner_uuid, one_operation_id, one_copy_ids,
           two_owner_kind, two_owner_uuid, two_operation_id, two_copy_ids)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(match_id) DO UPDATE SET binding_version = excluded.binding_version,
-          request_identity = excluded.request_identity, one_owner_kind = excluded.one_owner_kind,
-          one_owner_uuid = excluded.one_owner_uuid, one_operation_id = excluded.one_operation_id,
-          one_copy_ids = excluded.one_copy_ids, two_owner_kind = excluded.two_owner_kind,
-          two_owner_uuid = excluded.two_owner_uuid, two_operation_id = excluded.two_operation_id,
-          two_copy_ids = excluded.two_copy_ids
         """)) {
       insert.setString(1, binding.matchId().value());
       insert.setInt(2, binding.version());

@@ -59,7 +59,10 @@ public final class RandomTranscript {
   public static RandomTranscript restore(long seed, List<Decision> decisions,
       boolean replay, int cursor) {
     Objects.requireNonNull(decisions, "decisions are required");
-    if (cursor < 0 || cursor > decisions.size()) throw new IllegalArgumentException("invalid transcript cursor");
+    if (cursor < 0 || cursor > decisions.size()
+        || (!replay && cursor != decisions.size())) {
+      throw new IllegalArgumentException("invalid transcript cursor");
+    }
     return new RandomTranscript(seed, decisions, replay, cursor);
   }
 

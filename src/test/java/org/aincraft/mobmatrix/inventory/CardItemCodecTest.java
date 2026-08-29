@@ -3,6 +3,7 @@ package org.aincraft.mobmatrix.inventory;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.UUID;
@@ -11,20 +12,14 @@ import org.aincraft.mobmatrix.domain.CardDefinition;
 import org.aincraft.mobmatrix.domain.CardId;
 import org.aincraft.mobmatrix.domain.CardType;
 import org.aincraft.mobmatrix.domain.CopyOwner;
-import org.junit.jupiter.api.Test;
 import org.bukkit.Material;
 import org.bukkit.inventory.ItemStack;
+import org.junit.jupiter.api.Test;
 
 final class CardItemCodecTest {
   private final CardDefinition definition = new CardDefinition(
       new CardId(1), "No. 1", "Dodo", 1, CardType.NORMAL, 4, 2, 3, 4, 0);
   private final CardItemCodec codec = new CardItemCodec("mobmatrix", "test-server-secret");
-
-  @org.junit.jupiter.api.BeforeEach
-  void requirePaperRegistry() {
-    org.junit.jupiter.api.Assumptions.assumeTrue(paperAvailable(),
-        "Paper API item registry requires a running Paper server");
-  }
 
   private static boolean paperAvailable() {
     try {
@@ -37,11 +32,11 @@ final class CardItemCodecTest {
 
   @Test
   void roundTripKeepsPhysicalIdentityAndReadableMetadata() {
+    org.junit.jupiter.api.Assumptions.assumeTrue(paperAvailable(),
+        "Paper API item registry requires a running Paper server");
     CardCopyId copyId = new CardCopyId(UUID.randomUUID());
     ItemStack item = codec.create(definition, copyId, CopyOwner.player(UUID.randomUUID()));
-
     CardItemCodec.ReadResult result = codec.read(item);
-
     assertTrue(result.isValid());
     assertEquals(copyId, result.data().copyId());
     assertEquals(definition.id(), result.data().catalogId());
@@ -51,27 +46,40 @@ final class CardItemCodecTest {
   }
 
   @Test
+  void createRejectsCatalogIdsOutsideAuthoritativeRange() {
+    CardDefinition invalid = new CardDefinition(
+        new CardId(476), "No. 476", "Invalid", 1, CardType.NORMAL, 4, 2, 3, 4, 0);
+    assertThrows(IllegalArgumentException.class,
+        () -> codec.create(invalid, new CardCopyId(UUID.randomUUID()), CopyOwner.house()));
+  }
+
+  @Test
   void malformedItemsReturnTypedInvalidResultsWithoutReadingDisplayText() {
+    org.junit.jupiter.api.Assumptions.assumeTrue(paperAvailable(),
+        "Paper API item registry requires a running Paper server");
     ItemStack item = new ItemStack(Material.PAPER);
     CardItemCodec.ReadResult missing = codec.read(item);
     assertFalse(missing.isValid());
     assertEquals(CardItemCodec.InvalidReason.MISSING_FIELD, missing.reason());
-
     ItemStack other = new ItemStack(Material.STONE);
     assertEquals(CardItemCodec.InvalidReason.NOT_PAPER, codec.read(other).reason());
   }
 
   @Test
   void differentCopyIdsProduceNonStackableDistinctItems() {
+    org.junit.jupiter.api.Assumptions.assumeTrue(paperAvailable(),
+        "Paper API item registry requires a running Paper server");
     ItemStack first = codec.create(definition, new CardCopyId(UUID.randomUUID()), CopyOwner.house());
     ItemStack second = codec.create(definition, new CardCopyId(UUID.randomUUID()), CopyOwner.house());
-
     assertNotEquals(first, second);
     assertEquals(1, first.getAmount());
     assertEquals(1, second.getAmount());
   }
+
   @Test
   void configuredSecretSurvivesCodecReconstruction() {
+    org.junit.jupiter.api.Assumptions.assumeTrue(paperAvailable(),
+        "Paper API item registry requires a running Paper server");
     CardCopyId copyId = new CardCopyId(UUID.randomUUID());
     CardItemCodec first = new CardItemCodec("mobmatrix", "stable-server-secret");
     ItemStack minted = first.create(definition, copyId, CopyOwner.house());

@@ -23,6 +23,8 @@ import org.bukkit.plugin.Plugin;
 /** Creates and validates the authoritative PDC identity of one physical paper card. */
 public final class CardItemCodec {
   public static final int SCHEMA_VERSION = 1;
+  public static final int MIN_CATALOG_ID = 1;
+  public static final int MAX_CATALOG_ID = 475;
 
   private final NamespacedKey schemaKey;
   private final NamespacedKey catalogIdKey;
@@ -76,6 +78,8 @@ public final class CardItemCodec {
     Objects.requireNonNull(definition, "definition is required");
     Objects.requireNonNull(copyId, "copy id is required");
     Objects.requireNonNull(owner, "owner is required");
+    int catalogId = definition.id().value();
+    if (!isCatalogId(catalogId)) throw new IllegalArgumentException("catalog id outside range");
     ItemStack item = new ItemStack(Material.PAPER, 1);
     ItemMeta meta = Objects.requireNonNull(item.getItemMeta(), "paper metadata is required");
     String copyUuid = copyId.value().toString();
@@ -83,12 +87,12 @@ public final class CardItemCodec {
     String ownerUuid = owner.playerId() == null ? "" : owner.playerId().toString();
     PersistentDataContainer pdc = meta.getPersistentDataContainer();
     pdc.set(schemaKey, PersistentDataType.INTEGER, SCHEMA_VERSION);
-    pdc.set(catalogIdKey, PersistentDataType.INTEGER, definition.id().value());
+    pdc.set(catalogIdKey, PersistentDataType.INTEGER, catalogId);
     pdc.set(copyIdKey, PersistentDataType.STRING, copyUuid);
     pdc.set(ownerKindKey, PersistentDataType.STRING, ownerKind);
     pdc.set(ownerIdKey, PersistentDataType.STRING, ownerUuid);
     pdc.set(integrityKey, PersistentDataType.STRING,
-        marker(SCHEMA_VERSION, definition.id().value(), copyUuid, ownerKind, ownerUuid));
+        marker(SCHEMA_VERSION, catalogId, copyUuid, ownerKind, ownerUuid));
     meta.displayName(Component.text(definition.name() + " (" + definition.publicNumber() + ")"));
     meta.lore(java.util.List.of(
         Component.text("★".repeat(definition.stars()) + " " + definition.type().name()),
@@ -125,7 +129,7 @@ public final class CardItemCodec {
         return ReadResult.invalid(InvalidReason.MISSING_FIELD);
       }
       if (schema != SCHEMA_VERSION) return ReadResult.invalid(InvalidReason.INVALID_SCHEMA);
-      if (catalogId < 1 || catalogId > 475) return ReadResult.invalid(InvalidReason.INVALID_CATALOG_ID);
+      if (!isCatalogId(catalogId)) return ReadResult.invalid(InvalidReason.INVALID_CATALOG_ID);
       UUID copy = parseCanonicalUuid(copyUuid);
       CopyOwner owner;
       if ("HOUSE".equals(ownerKind) && ownerUuid.isEmpty()) {
@@ -149,6 +153,9 @@ public final class CardItemCodec {
     } catch (RuntimeException exception) {
       return ReadResult.invalid(InvalidReason.INVALID_VALUE);
     }
+  }
+  private static boolean isCatalogId(int catalogId) {
+    return catalogId >= MIN_CATALOG_ID && catalogId <= MAX_CATALOG_ID;
   }
 
   public NamespacedKey schemaKey() { return schemaKey; }

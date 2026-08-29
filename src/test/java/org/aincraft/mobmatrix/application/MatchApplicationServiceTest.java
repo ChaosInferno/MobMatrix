@@ -128,6 +128,19 @@ final class MatchApplicationServiceTest {
     assertFalse(result.accepted());
     assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, result.failure());
   }
+  @Test
+  void applyClassifiesCanonicalLoadFailureAsDatabaseError() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    MatchState state = MatchEngine.start(
+        match("canonical-load-failure", oneOwner, copies(), twoOwner, copies())).state();
+    MatchCommand.PlaceCard command = new MatchCommand.PlaceCard(state.currentSeat(),
+        state.hand(state.currentSeat()).getFirst().copyId(), Square.CENTER, state.revision(),
+        UUID.randomUUID(), state.turnStartedAt());
+    MatchApplicationService.ApplyResult result = new MatchApplicationService(
+        new RecordingCustody(), new CanonicalLoadFailingRepository()).apply(state, command);
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, result.failure());
+  }
 
   @Test
   void startupReportsCustodyEnumerationFailureWithoutBlockingMatchLoad() {
@@ -164,6 +177,18 @@ final class MatchApplicationServiceTest {
     assertEquals(copies, result.expectedCopyIds());
     assertEquals(copies, result.missingCopyIds());
     assertEquals(copies, result.recoveryCopyIds());
+  }
+  @Test
+  void startupRecoveryFailurePreservesDurableCopyIds() {
+    UUID operation = UUID.randomUUID();
+    List<CardCopyId> copies = copies();
+    MatchApplicationService.StartupRecoveryResult result = new MatchApplicationService(
+        new BindingThrowingRecoveryCustody(copies), new InMemoryMatchRepository()).recoverStartup(
+            snapshot -> new CardCatalog(List.of(), snapshot), Instant.parse("2026-01-01T00:00:00Z"));
+    CardCustodyPort.RecoveryResult recovery = result.recoveries().getFirst();
+    assertEquals(copies, recovery.expectedCopyIds());
+    assertEquals(copies, recovery.pendingCopyIds());
+    assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING, recovery.status());
   }
 
   @Test
@@ -233,6 +258,10 @@ final class MatchApplicationServiceTest {
 
     assertFalse(result.accepted());
     assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, result.failure());
+    assertEquals(new java.util.HashSet<>(oneCopies),
+        new java.util.HashSet<>(result.pendingRecoveryCopyIds().subList(0, oneCopies.size())));
+    assertEquals(new java.util.HashSet<>(twoCopies),
+        new java.util.HashSet<>(result.pendingRecoveryCopyIds().subList(oneCopies.size(), oneCopies.size() + twoCopies.size())));
     assertFalse(custody.calls.contains("return"));
   }
 
@@ -1147,6 +1176,8 @@ final class MatchApplicationServiceTest {
   }
 
   private static final class AmbiguousInitialRepository implements MatchRepository {
+    private boolean saveAttempted;
+
     @Override
     public SaveResult save(long expectedRevision, MatchState state) {
       return SaveResult.stale(state.revision());
@@ -1154,16 +1185,19 @@ final class MatchApplicationServiceTest {
 
     @Override
     public SaveResult saveInitial(MatchState state, MatchRepository.StartBinding binding) {
+      saveAttempted = true;
       return new SaveResult(false, -1L, MatchRepository.Failure.DATABASE_ERROR);
     }
 
     @Override
     public java.util.Optional<MatchSnapshot> find(MatchId matchId) {
+      if (!saveAttempted) return java.util.Optional.empty();
       throw new IllegalStateException("database unavailable");
     }
 
     @Override
     public java.util.Optional<MatchState> findState(MatchId matchId, CardCatalog catalog) {
+      if (!saveAttempted) return java.util.Optional.empty();
       throw new IllegalStateException("database unavailable");
     }
   }
@@ -1186,6 +1220,22 @@ final class MatchApplicationServiceTest {
     @Override
     public java.util.Optional<MatchState> findState(MatchId matchId, CardCatalog catalog) {
       return java.util.Optional.of(state);
+    }
+  }
+  private static final class CanonicalLoadFailingRepository implements MatchRepository {
+    @Override
+    public SaveResult save(long expectedRevision, MatchState state) {
+      return SaveResult.stale(state.revision());
+    }
+
+    @Override
+    public java.util.Optional<MatchSnapshot> find(MatchId matchId) {
+      return java.util.Optional.empty();
+    }
+
+    @Override
+    public java.util.Optional<MatchState> findState(MatchId matchId, CardCatalog catalog) {
+      throw new IllegalStateException("database unavailable");
     }
   }
 
@@ -1295,7 +1345,7 @@ final class MatchApplicationServiceTest {
     }
   }
 
-  private static final class ThrowingRecoveryCustody extends ThrowingSettlementCustody {
+  private static class ThrowingRecoveryCustody extends ThrowingSettlementCustody {
     private ThrowingRecoveryCustody(List<CardCopyId> copies) {
       super(copies);
     }
@@ -1308,6 +1358,22 @@ final class MatchApplicationServiceTest {
     @Override
     public RecoveryResult recover(UUID operationId) {
       throw new IllegalStateException("database unavailable");
+    }
+  }
+  private static final class BindingThrowingRecoveryCustody extends ThrowingRecoveryCustody {
+    private BindingThrowingRecoveryCustody(List<CardCopyId> copies) {
+      super(copies);
+    }
+
+    @Override
+    public List<UUID> openOperationIds() {
+      return List.of(UUID.randomUUID());
+    }
+
+    @Override
+    public java.util.Optional<OperationBinding> operationBinding(UUID operationId) {
+      return java.util.Optional.of(new OperationBinding(CopyOwner.player(UUID.randomUUID()),
+          copies, OperationStatus.ESCROWED, null));
     }
   }
 

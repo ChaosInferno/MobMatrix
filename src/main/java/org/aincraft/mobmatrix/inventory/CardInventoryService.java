@@ -163,12 +163,9 @@ public final class CardInventoryService implements CardCustodyPort {
     PreparedOperation operation = operation(operationId);
     if (operation == null) return CustodyResult.rejected(operationId, OperationStatus.ABORTED, Failure.MISMATCHED_OPERATION);
     if (operation.status == OperationStatus.ABORTED) return CustodyResult.success(operationId, OperationStatus.ABORTED);
-    if (operation.status == OperationStatus.PREPARED) {
-      journal.transition(operationId, OperationStatus.ABORTED);
-      operation.status = OperationStatus.ABORTED;
-      return CustodyResult.success(operationId, OperationStatus.ABORTED);
-    }
-    if (operation.status == OperationStatus.ESCROWED || operation.status == OperationStatus.RETURN_PENDING) {
+    if (operation.status == OperationStatus.PREPARED
+        || operation.status == OperationStatus.ESCROWED
+        || operation.status == OperationStatus.RETURN_PENDING) {
       ReturnResult result = returnCopies(operationId);
       if (!result.complete()) return CustodyResult.rejected(operationId, operation.status, Failure.NO_ROOM);
     }
@@ -525,7 +522,12 @@ public final class CardInventoryService implements CardCustodyPort {
         } else {
           // Same UUID with changed metadata is not the escrowed physical card. Replace it
           // with the durable bytes; never mark a modified item as restored.
-          ItemStack exact = deserialize(snapshot.bytes());
+          ItemStack exact = validatedSnapshot(snapshot, operation.owner);
+          if (exact == null) {
+            journal.addRecovery(operationId, operation.owner, snapshot);
+            missing.add(copy);
+            continue;
+          }
           inventory.setItem(alreadyPresent.slot, null);
           Map<Integer, ItemStack> leftovers = inventory.addItem(exact);
           if (leftovers.isEmpty()) {
@@ -540,7 +542,12 @@ public final class CardInventoryService implements CardCustodyPort {
         }
         continue;
       }
-      ItemStack item = deserialize(snapshot.bytes());
+      ItemStack item = validatedSnapshot(snapshot, operation.owner);
+      if (item == null) {
+        journal.addRecovery(operationId, operation.owner, snapshot);
+        missing.add(copy);
+        continue;
+      }
       Map<Integer, ItemStack> leftovers = inventory.addItem(item);
       if (leftovers.isEmpty()) {
         // Mark only after Paper accepts the exact serialized item. A restart then sees this UUID
@@ -568,6 +575,20 @@ public final class CardInventoryService implements CardCustodyPort {
       }
     }
     return ReturnResult.pending(operationId, operation.copyIds, returned, missing, missing);
+  }
+
+  private ItemStack validatedSnapshot(SerializedItemSnapshot snapshot, CopyOwner owner) {
+    try {
+      ItemStack item = deserialize(snapshot.bytes());
+      CardItemCodec.ReadResult decoded = codec.read(item);
+      if (!decoded.isValid() || !decoded.data().copyId().equals(snapshot.copyId())
+          || !decoded.data().owner().equals(owner)) {
+        return null;
+      }
+      return item;
+    } catch (RuntimeException exception) {
+      return null;
+    }
   }
 
   private static void requirePrimaryThread() {

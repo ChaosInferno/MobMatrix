@@ -218,7 +218,9 @@ public final class MatchApplicationService {
       if (loaded.isEmpty()) return ApplyResult.unavailable(state);
       canonical = Objects.requireNonNull(loaded.get(), "persisted state is required");
     } catch (RuntimeException exception) {
-      return ApplyResult.unavailable(state);
+      return new ApplyResult(new MatchEngine.MatchTransition(state, List.of(),
+          new MatchRejection(MatchErrorCode.INVALID_COMMAND, "canonical match state unavailable")),
+          Failure.DATABASE_ERROR, state.revision());
     }
     MatchEngine.MatchTransition transition = MatchEngine.apply(canonical, command);
     if (!transition.accepted()) {
@@ -254,7 +256,10 @@ public final class MatchApplicationService {
       return MatchStartResult.active(request.match().matchId(), resolution.state());
     }
     if (resolution.ambiguous()) {
-      return MatchStartResult.rejected(request.match().matchId(), Failure.DATABASE_ERROR);
+      List<CardCopyId> pending = new ArrayList<>(plan.oneCopies());
+      pending.addAll(plan.twoCopies());
+      return MatchStartResult.rejected(request.match().matchId(), Failure.DATABASE_ERROR,
+          new CleanupSummary(pending, List.of()));
     }
     CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
     cleanup = cleanup.plus(cleanup(request.twoOperationId(), plan.twoCopies()));
@@ -693,8 +698,7 @@ public final class MatchApplicationService {
         if (activeEscrow) continue;
         recoveries.add(custody.recover(operationId));
       } catch (RuntimeException exception) {
-        recoveries.add(RecoveryResult.failed(operationId, OperationStatus.RETURN_PENDING,
-            Failure.DATABASE_ERROR));
+        recoveries.add(recoveryFailure(operationId));
       }
     }
 

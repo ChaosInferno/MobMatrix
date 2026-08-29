@@ -29,6 +29,14 @@ final class RandomTranscriptTest {
     assertEquals(1, replay.nextInt("x", 2));
     assertThrows(IllegalStateException.class, () -> replay.nextInt("x", 2));
   }
+  @Test
+  void nonReplayRestoreRequiresConsumedDecisionCursor() {
+    List<RandomTranscript.Decision> decisions = List.of(
+        new RandomTranscript.Decision("x", 2, 1));
+    assertThrows(IllegalArgumentException.class,
+        () -> RandomTranscript.restore(1L, decisions, false, 0));
+    assertDoesNotThrow(() -> RandomTranscript.restore(1L, decisions, false, decisions.size()));
+  }
  
   @Test
   void stateTransitionsForkTranscriptAndRejectedChaosDoesNotConsumeDecision() {

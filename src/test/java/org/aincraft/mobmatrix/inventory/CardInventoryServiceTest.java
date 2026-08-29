@@ -50,6 +50,27 @@ final class CardInventoryServiceTest {
     Files.deleteIfExists(path);
   }
   @Test
+  void preparedAbortMustAttemptRestoreBeforeTerminalAbort() throws Exception {
+    var path = Files.createTempFile("mobmatrix-prepared-abort", ".sqlite");
+    UUID operation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {1, 2, 3});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository journal = new SqliteCardRepository(database);
+      journal.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      journal.prepare(operation, owner, List.of(copy), List.of(snapshot));
+      CardInventoryService service = new CardInventoryService(
+          new CardItemCodec("test", "0123456789abcdef"), id -> null, journal);
+      CardCustodyPort.CustodyResult result = service.abort(operation);
+      assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING, result.status());
+      assertEquals(CardCustodyPort.Failure.NO_ROOM, result.failure());
+      assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING,
+          journal.findReservation(operation).orElseThrow().status());
+    }
+    Files.deleteIfExists(path);
+  }
+  @Test
   void recoverPreservesAbortedTerminalStatus() throws Exception {
     var path = Files.createTempFile("mobmatrix-aborted-recovery", ".sqlite");
     UUID operation = UUID.randomUUID();

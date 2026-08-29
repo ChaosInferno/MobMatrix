@@ -142,6 +142,32 @@ final class SqliteCustodyTest {
     }
     Files.deleteIfExists(path);
   }
+  @Test
+  void startBindingIsIdempotentButRejectsIdentityOverwrite() throws Exception {
+    var path = Files.createTempFile("mobmatrix-start-binding-immutable", ".sqlite");
+    MatchId matchId = new MatchId("immutable-start-binding");
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> copies = List.of(new CardCopyId(UUID.randomUUID()));
+    MatchRepository.StartBinding expected = new MatchRepository.StartBinding(matchId, 1, "identity",
+        owner, copies, UUID.randomUUID(), owner, copies, UUID.randomUUID());
+    try (Database database = new Database(path)) {
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO matches(match_id, revision, status, state_bytes, transcript_json, updated_at) "
+              + "VALUES (?, 0, 'ACTIVE', ?, '{}', CURRENT_TIMESTAMP)")) {
+        insert.setString(1, matchId.value());
+        insert.setBytes(2, new byte[] {1});
+        insert.executeUpdate();
+      }
+      SqliteMatchRepository repository = new SqliteMatchRepository(database);
+      repository.saveStartBinding(expected);
+      repository.saveStartBinding(expected);
+      MatchRepository.StartBinding changed = new MatchRepository.StartBinding(matchId, 2, "identity",
+          owner, copies, expected.oneOperationId(), owner, copies, expected.twoOperationId());
+      assertThrows(IllegalArgumentException.class, () -> repository.saveStartBinding(changed));
+      assertEquals(expected, repository.findStartBinding(matchId).orElseThrow());
+    }
+    Files.deleteIfExists(path);
+  }
 
 
   @Test
