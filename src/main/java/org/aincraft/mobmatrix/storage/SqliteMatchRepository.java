@@ -15,6 +15,9 @@ import org.aincraft.mobmatrix.application.MatchRepository;
 import org.aincraft.mobmatrix.domain.Board;
 import org.aincraft.mobmatrix.domain.CardCopy;
 import org.aincraft.mobmatrix.domain.MatchState;
+import org.aincraft.mobmatrix.domain.CardCatalog;
+import org.aincraft.mobmatrix.domain.CardDefinition;
+import org.aincraft.mobmatrix.domain.CardType;
 import org.aincraft.mobmatrix.domain.PlayerSeat;
 import org.aincraft.mobmatrix.domain.Side;
 
@@ -162,27 +165,68 @@ public final class SqliteMatchRepository implements MatchRepository {
     }
   }
 
-  /** Rehydrates the persisted state with the caller's catalog snapshot for start comparison. */
+  /** Rehydrates only when a persisted catalog definition set exactly matches the caller's catalog. */
   @Override
   public Optional<MatchState> findState(org.aincraft.mobmatrix.domain.MatchId matchId,
-      org.aincraft.mobmatrix.domain.CardCatalog catalog) {
-    return find(matchId).map(snapshot -> MatchStateSnapshotCodec.decode(snapshot.stateBytes(), catalog));
+      CardCatalog catalog) {
+    Objects.requireNonNull(matchId, "match id is required");
+    Objects.requireNonNull(catalog, "catalog is required");
+    return find(matchId).map(snapshot -> {
+      requirePersistedCatalogMatch(MatchStateSnapshotCodec.catalogSnapshotId(snapshot.stateBytes()), catalog);
+      return MatchStateSnapshotCodec.decode(snapshot.stateBytes(), catalog);
+    });
   }
 
-  public MatchState rehydrate(MatchSnapshot snapshot,
-      org.aincraft.mobmatrix.domain.CardCatalog catalog) {
+  public MatchState rehydrate(MatchSnapshot snapshot, CardCatalog catalog) {
     Objects.requireNonNull(snapshot, "snapshot is required");
+    Objects.requireNonNull(catalog, "catalog is required");
+    requirePersistedCatalogMatch(MatchStateSnapshotCodec.catalogSnapshotId(snapshot.stateBytes()), catalog);
     return MatchStateSnapshotCodec.decode(snapshot.stateBytes(), catalog);
   }
   @Override
   public Optional<MatchState> rehydrate(MatchSnapshot snapshot,
-      java.util.function.Function<String, org.aincraft.mobmatrix.domain.CardCatalog> catalogResolver) {
+      java.util.function.Function<String, CardCatalog> catalogResolver) {
     Objects.requireNonNull(snapshot, "snapshot is required");
     Objects.requireNonNull(catalogResolver, "catalog resolver is required");
     var catalog = Objects.requireNonNull(catalogResolver.apply(
         MatchStateSnapshotCodec.catalogSnapshotId(snapshot.stateBytes())), "catalog is required");
     return Optional.of(rehydrate(snapshot, catalog));
   }
+  private void requirePersistedCatalogMatch(String snapshotId, CardCatalog catalog) {
+    try {
+      boolean persisted;
+      try (var query = connection.prepareStatement(
+          "SELECT 1 FROM catalog_snapshots WHERE snapshot_id = ?")) {
+        query.setString(1, snapshotId);
+        try (var rows = query.executeQuery()) {
+          persisted = rows.next();
+        }
+      }
+      if (!persisted) return;
+      List<CardDefinition> definitions = new ArrayList<>();
+      try (var query = connection.prepareStatement("""
+          SELECT catalog_id, public_number, name, stars, type, top_value, right_value,
+            bottom_value, left_value, sale_price
+          FROM card_definitions WHERE snapshot_id = ? ORDER BY catalog_id
+          """)) {
+        query.setString(1, snapshotId);
+        try (var rows = query.executeQuery()) {
+          while (rows.next()) {
+            definitions.add(new CardDefinition(new org.aincraft.mobmatrix.domain.CardId(rows.getInt(1)),
+                rows.getString(2), rows.getString(3), rows.getInt(4),
+                CardType.valueOf(rows.getString(5)), rows.getInt(6), rows.getInt(7),
+                rows.getInt(8), rows.getInt(9), rows.getInt(10)));
+          }
+        }
+      }
+      if (!definitions.equals(new ArrayList<>(catalog.all()))) {
+        throw new IllegalArgumentException("catalog definitions do not match persisted snapshot");
+      }
+    } catch (SQLException exception) {
+      throw new IllegalStateException("SQLite catalog lookup failed", exception);
+    }
+  }
+
 
   @Override
   public List<MatchSnapshot> activeMatches() {

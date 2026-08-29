@@ -229,6 +229,32 @@ public final class MatchStateSnapshotCodec {
           throw new IllegalArgumentException("duplicate original-owner copy UUID");
         }
       }
+      Set<CardCopyId> expectedOriginalOwners = new HashSet<>();
+      Map<UUID, PlayerSeat> originalSeatByOwner = new HashMap<>();
+      for (var entry : activeCopies.entrySet()) {
+        CardCopy copy = entry.getValue();
+        if (!copy.owner().isPlayer()) continue;
+        expectedOriginalOwners.add(copy.copyId());
+        PlayerSeat originalSeat = originalOwners.get(copy.copyId());
+        PlayerSeat priorSeat = originalSeatByOwner.putIfAbsent(copy.owner().playerId(), originalSeat);
+        if (originalSeat == null || (priorSeat != null && priorSeat != originalSeat)) {
+          throw new IllegalArgumentException("original-owner seat mismatch");
+        }
+      }
+      if (!originalOwners.keySet().equals(expectedOriginalOwners)) {
+        throw new IllegalArgumentException("original-owner metadata does not cover active copies");
+      }
+      if (originalSeatByOwner.size() > 0) {
+        for (PlayerSeat seat : PlayerSeat.values()) {
+          for (HandCard card : hands.get(seat)) {
+            if (card.copy().owner().isPlayer()
+                && !rules.contains(Rule.SWAP)
+                && originalOwners.get(card.copyId()) != seat) {
+              throw new IllegalArgumentException("original-owner seat mismatch");
+            }
+          }
+        }
+      }
       int consecutiveDraws = in.readInt();
       Map<PlayerSeat, DraftOfferings.SeatOffers> offerings = new EnumMap<>(PlayerSeat.class);
       Set<UUID> offeringIds = new HashSet<>();
@@ -304,7 +330,23 @@ public final class MatchStateSnapshotCodec {
       }
       Set<CardCopyId> persistedHouseCopies = readCopyIdSet(in);
       Map<PlayerSeat, CardCopyId> chaos = new EnumMap<>(PlayerSeat.class);
-      for (int i = in.readInt(); i > 0; i--) chaos.put(PlayerSeat.valueOf(in.readUTF()), new CardCopyId(readUuid(in)));
+      for (int i = in.readInt(); i > 0; i--) {
+        PlayerSeat seat = PlayerSeat.valueOf(in.readUTF());
+        CardCopyId choice = new CardCopyId(readUuid(in));
+        if (chaos.putIfAbsent(seat, choice) != null) {
+          throw new IllegalArgumentException("duplicate chaos choice seat");
+        }
+      }
+      boolean chaosRule = rules.contains(Rule.CHAOS);
+      if (!chaosRule && !chaos.isEmpty()) {
+        throw new IllegalArgumentException("non-chaos snapshot contains chaos choices");
+      }
+      for (var entry : chaos.entrySet()) {
+        if (hands.get(entry.getKey()).stream()
+            .noneMatch(card -> card.copyId().equals(entry.getValue()))) {
+          throw new IllegalArgumentException("chaos choice is not in that seat's hand");
+        }
+      }
       MatchState state = MatchState.rehydrate(matchId, catalog, new MatchRules(rules), board, hands,
           currentSeat, revision, result, banks, turnStartedAt, graceDeadline, turnDeadline,
           commandIds, seed, transcript, revealed, originalOwners, consecutiveDraws, offerings,

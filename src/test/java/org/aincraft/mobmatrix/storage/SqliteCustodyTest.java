@@ -260,6 +260,117 @@ final class SqliteCustodyTest {
   }
 
   @Test
+  void snapshotRejectsIncompleteOriginalOwnerMetadata() {
+    MatchState original = snapshotState("missing-owner");
+    Map<CardCopyId, PlayerSeat> owners = new HashMap<>(original.originalOwners());
+    owners.remove(original.hand(PlayerSeat.ONE).getFirst().copyId());
+    MatchState tampered = MatchState.rehydrate(original.matchId(), original.catalog(), original.rules(),
+        original.board(), original.hands(), original.currentSeat(), original.revision(), original.result(),
+        original.bankMillis(), original.turnStartedAt(), original.graceDeadline(), original.turnDeadline(),
+        original.commandIds(), original.seed(), original.transcript(), original.revealedCardsMap(), owners,
+        original.consecutiveDraws(), original.draftOfferings(), original.draftSelections(),
+        original.chaosChoices());
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(tampered),
+            original.catalog()));
+  }
+
+  @Test
+  void snapshotRejectsExtraOriginalOwnerMetadata() {
+    MatchState original = snapshotState("extra-owner");
+    Map<CardCopyId, PlayerSeat> owners = new HashMap<>(original.originalOwners());
+    owners.put(new CardCopyId(UUID.randomUUID()), PlayerSeat.ONE);
+    MatchState tampered = MatchState.rehydrate(original.matchId(), original.catalog(), original.rules(),
+        original.board(), original.hands(), original.currentSeat(), original.revision(), original.result(),
+        original.bankMillis(), original.turnStartedAt(), original.graceDeadline(), original.turnDeadline(),
+        original.commandIds(), original.seed(), original.transcript(), original.revealedCardsMap(), owners,
+        original.consecutiveDraws(), original.draftOfferings(), original.draftSelections(),
+        original.chaosChoices());
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(tampered),
+            original.catalog()));
+  }
+
+  @Test
+  void snapshotRejectsOriginalOwnerMappedToWrongSeat() {
+    MatchState original = snapshotState("wrong-owner-seat");
+    Map<CardCopyId, PlayerSeat> owners = new HashMap<>(original.originalOwners());
+    CardCopyId copy = original.hand(PlayerSeat.ONE).getFirst().copyId();
+    owners.put(copy, PlayerSeat.TWO);
+    MatchState tampered = MatchState.rehydrate(original.matchId(), original.catalog(), original.rules(),
+        original.board(), original.hands(), original.currentSeat(), original.revision(), original.result(),
+        original.bankMillis(), original.turnStartedAt(), original.graceDeadline(), original.turnDeadline(),
+        original.commandIds(), original.seed(), original.transcript(), original.revealedCardsMap(), owners,
+        original.consecutiveDraws(), original.draftOfferings(), original.draftSelections(),
+        original.chaosChoices());
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(tampered),
+            original.catalog()));
+  }
+
+  @Test
+  void snapshotRejectsChaosChoiceInNonChaosState() {
+    MatchState original = snapshotState("non-chaos-choice");
+    Map<PlayerSeat, CardCopyId> choices = Map.of(PlayerSeat.ONE,
+        original.hand(PlayerSeat.ONE).getFirst().copyId());
+    MatchState tampered = MatchState.rehydrate(original.matchId(), original.catalog(), original.rules(),
+        original.board(), original.hands(), original.currentSeat(), original.revision(), original.result(),
+        original.bankMillis(), original.turnStartedAt(), original.graceDeadline(), original.turnDeadline(),
+        original.commandIds(), original.seed(), original.transcript(), original.revealedCardsMap(),
+        original.originalOwners(), original.consecutiveDraws(), original.draftOfferings(),
+        original.draftSelections(), choices);
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(tampered),
+            original.catalog()));
+  }
+
+  @Test
+  void snapshotRejectsChaosChoiceOutsideThatSeatsHand() {
+    MatchState original = chaosSnapshotState("chaos-out-of-hand");
+    PlayerSeat seat = original.currentSeat();
+    CardCopyId foreign = original.hand(seat == PlayerSeat.ONE ? PlayerSeat.TWO : PlayerSeat.ONE)
+        .getFirst().copyId();
+    Map<PlayerSeat, CardCopyId> choices = Map.of(seat, foreign);
+    MatchState tampered = MatchState.rehydrate(original.matchId(), original.catalog(), original.rules(),
+        original.board(), original.hands(), original.currentSeat(), original.revision(), original.result(),
+        original.bankMillis(), original.turnStartedAt(), original.graceDeadline(), original.turnDeadline(),
+        original.commandIds(), original.seed(), original.transcript(), original.revealedCardsMap(),
+        original.originalOwners(), original.consecutiveDraws(), original.draftOfferings(),
+        original.draftSelections(), choices);
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(tampered),
+            original.catalog()));
+  }
+
+  @Test
+  void findStateRejectsSameIdAlteredPersistedCatalogDefinition() throws Exception {
+    var path = Files.createTempFile("mobmatrix-catalog-identity", ".sqlite");
+    MatchState original = snapshotState("catalog-identity");
+    SqliteCardRepository.CatalogSnapshot snapshot = new SqliteCardRepository.CatalogSnapshot(
+        original.catalog().snapshotId(), "test", "digest", "{}");
+    try (Database database = new Database(path)) {
+      SqliteCardRepository cards = new SqliteCardRepository(database);
+      cards.saveCatalogSnapshot(snapshot, original.catalog().all());
+      SqliteMatchRepository repository = new SqliteMatchRepository(database);
+      assertTrue(repository.save(0L, original).accepted());
+      List<CardDefinition> alteredDefinitions = new ArrayList<>(original.catalog().all());
+      CardDefinition first = alteredDefinitions.getFirst();
+      alteredDefinitions.set(0, new CardDefinition(first.id(), first.publicNumber(), "Altered",
+          first.stars(), first.type(), first.top(), first.right(), first.bottom(), first.left(),
+          first.salePrice()));
+      CardCatalog altered = new CardCatalog(alteredDefinitions, original.catalog().snapshotId());
+
+      assertThrows(IllegalArgumentException.class,
+          () -> repository.findState(original.matchId(), altered));
+    }
+    Files.deleteIfExists(path);
+  }
+  @Test
   void snapshotRejectsDuplicateHandAndBoardCopyUuid() {
     MatchState initial = snapshotState("duplicate-snapshot");
     PlayerSeat actor = initial.currentSeat();
@@ -421,6 +532,24 @@ final class SqliteCustodyTest {
     }
     Files.deleteIfExists(path);
   }
+  private static MatchState chaosSnapshotState(String id) {
+    List<CardDefinition> definitions = new ArrayList<>();
+    List<CardCopy> one = new ArrayList<>();
+    List<CardCopy> two = new ArrayList<>();
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    for (int index = 1; index <= 5; index++) {
+      definitions.add(new CardDefinition(new CardId(index), "No. " + index, "Card " + index,
+          1, CardType.NORMAL, index, index, index, index, 0));
+      one.add(new CardCopy(new CardCopyId(UUID.randomUUID()), new CardId(index), oneOwner));
+      two.add(new CardCopy(new CardCopyId(UUID.randomUUID()), new CardId(index), twoOwner));
+    }
+    return MatchEngine.start(new MatchEngine.StartMatch(new MatchId(id), new Deck(one), new Deck(two),
+        new CardCatalog(definitions, id + "-catalog"), new MatchRules(
+            org.aincraft.mobmatrix.domain.Rule.CHAOS), 7L,
+        Instant.parse("2026-01-01T00:00:00Z"))).state();
+  }
+
   private static MatchState draftSnapshotState(String id) {
     List<CardDefinition> definitions = new ArrayList<>();
     List<CardCopy> one = new ArrayList<>();
