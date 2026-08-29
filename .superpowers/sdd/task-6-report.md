@@ -1111,3 +1111,53 @@ Exact result:
 BUILD SUCCESSFUL in 2s
 4 actionable tasks: 4 executed
 ```
+
+## Task 6 terminal custody gap closure
+
+### Status
+
+Implemented and committed as `88c46e5` (`fix: close terminal custody gaps`).
+
+### Corrective coverage
+
+- `CardInventoryService.abort` now routes `PREPARED` operations through durable return before
+  allowing `ABORTED`; snapshot restoration validates codec identity, exact copy UUID, and owner
+  before insertion/replacement or `markRestored`.
+- Startup recovery retains durable binding copy IDs on operation-status, match-binding, or recover
+  failures. Ambiguous initial-save cleanup reports both reservation plans as pending recovery.
+- `MatchApplicationService.apply` distinguishes thrown canonical lookup failures
+  (`DATABASE_ERROR`) from an absent canonical state (`INVALID_STATE`).
+- SQLite start bindings are immutable: exact retries are idempotent and mismatches reject without
+  overwriting the original row.
+- Non-replay transcript restoration requires a cursor equal to the decision count, while replay
+  cursors remain bounded.
+- `CardItemCodec` uses one authoritative catalog range (`1..475`) for both creation and reads.
+
+### TDD and focused verification
+
+Focused command used for red and green runs:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact red result after the regression tests were added:
+
+```text
+> Task :test FAILED
+125 tests completed, 7 failed, 4 skipped
+FAILURE: Build failed with an exception.
+```
+
+Exact final green result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+The four Paper-registry codec tests remain assumption-skipped because no running Paper server is
+available. SQLite emitted the JVM restricted-native-access warning only. Inventory custody
+continues to enforce the Paper primary-thread boundary; no formatter, linter, project-wide build,
+or project-wide test suite was run.
