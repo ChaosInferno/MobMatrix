@@ -48,7 +48,6 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   public List<UUID> openOperationIds() {
     try (var query = connection.prepareStatement("""
         SELECT operation_id FROM reservations
-        WHERE status IS NULL OR status NOT IN ('RETURNED', 'ABORTED')
         ORDER BY created_at
         """)) {
       List<UUID> result = new ArrayList<>();
@@ -370,7 +369,12 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       List<Reservation> result = new ArrayList<>();
       for (UUID operationId : openOperationIds()) {
         Reservation reservation = findReservationInternal(operationId);
-        if (reservation != null) result.add(reservation);
+        if (reservation != null
+            && (reservation.status() == OperationStatus.PREPARED
+                || reservation.status() == OperationStatus.ESCROWED
+                || reservation.status() == OperationStatus.RETURN_PENDING)) {
+          result.add(reservation);
+        }
       }
       return List.copyOf(result);
     } catch (SQLException exception) {

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.UUID;
+import java.util.List;
 import org.aincraft.mobmatrix.domain.CardCopyId;
 import org.aincraft.mobmatrix.domain.CardDefinition;
 import org.aincraft.mobmatrix.domain.CardId;
@@ -98,5 +99,22 @@ final class CardItemCodecTest {
     CardItemCodec restarted = new CardItemCodec("mobmatrix", "stable-server-secret");
     assertTrue(restarted.read(minted).isValid());
     assertEquals(copyId, restarted.read(minted).data().copyId());
+  }
+  @Test
+  void malformedReservedIdentityCannotMove() {
+    org.junit.jupiter.api.Assumptions.assumeTrue(paperAvailable(),
+        "Paper API item registry requires a running Paper server");
+    CardCopyId copyId = new CardCopyId(UUID.randomUUID());
+    ItemStack item = codec.create(definition, copyId, CopyOwner.house());
+    var meta = item.getItemMeta();
+    meta.getPersistentDataContainer().set(codec.integrityKey(),
+        org.bukkit.persistence.PersistentDataType.STRING, "tampered");
+    item.setItemMeta(meta);
+    var journal = new org.aincraft.mobmatrix.application.InMemoryCardCustodyJournal();
+    journal.prepare(UUID.randomUUID(), CopyOwner.player(UUID.randomUUID()), List.of(copyId),
+        List.of(new org.aincraft.mobmatrix.application.SerializedItemSnapshot(copyId, new byte[] {1})));
+    var service = new CardInventoryService(codec, id -> null, journal);
+    assertFalse(codec.read(item).isValid());
+    assertTrue(service.isReserved(item));
   }
 }

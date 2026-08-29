@@ -389,7 +389,10 @@ public final class CardInventoryService implements CardCustodyPort {
 
   public boolean isReserved(ItemStack item) {
     CardItemCodec.ReadResult result = codec.read(item);
-    return result.isValid() && isReserved(result.data().copyId());
+    if (result.isValid()) return isReserved(result.data().copyId());
+    var copyId = codec.identityCopyId(item);
+    if (copyId.isPresent() && isReserved(copyId.get())) return true;
+    return codec.hasIdentity(item) && !reservedCopyIds().isEmpty();
   }
 
   public synchronized Set<CardCopyId> reservedCopyIds() {

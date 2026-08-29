@@ -10,7 +10,7 @@ import java.util.Set;
 
 /** Explicit, repeatable schema migrations for custody and active-match state. */
 public final class SchemaMigrator {
-  public static final int CURRENT_VERSION = 5;
+  public static final int CURRENT_VERSION = 6;
 
   private SchemaMigrator() {}
 
@@ -46,6 +46,7 @@ public final class SchemaMigrator {
         case 3 -> applyV3(connection);
         case 4 -> applyV4(connection);
         case 5 -> applyV5(connection);
+        case 6 -> applyV6(connection);
         default -> throw new SQLException("unsupported schema migration: " + version);
       }
       try (var insert = connection.prepareStatement(
@@ -358,5 +359,64 @@ public final class SchemaMigrator {
 
   private static void applyV5(Connection connection) throws SQLException {
     ensureStartBindings(connection);
+  }
+
+  private static void applyV6(Connection connection) throws SQLException {
+    try (var statement = connection.createStatement()) {
+      statement.execute("DROP TRIGGER IF EXISTS active_copy_reservation_guard");
+      statement.execute("""
+          CREATE TRIGGER active_copy_reservation_guard
+          BEFORE INSERT ON reservation_copies
+          WHEN EXISTS (
+            SELECT 1
+            FROM reservation_copies existing
+            JOIN reservations reservation ON reservation.operation_id = existing.operation_id
+            WHERE existing.copy_uuid = NEW.copy_uuid
+              AND (
+                reservation.status IS NULL
+                OR reservation.status NOT IN ('RETURNED', 'ABORTED')
+                OR EXISTS (
+                  SELECT 1
+                  FROM reservation_copies expected
+                  LEFT JOIN escrow_items snapshot
+                    ON snapshot.operation_id = expected.operation_id
+                    AND snapshot.copy_uuid = expected.copy_uuid
+                  WHERE expected.operation_id = existing.operation_id
+                    AND snapshot.copy_uuid IS NULL
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM escrow_items snapshot
+                  LEFT JOIN reservation_copies expected
+                    ON expected.operation_id = snapshot.operation_id
+                    AND expected.copy_uuid = snapshot.copy_uuid
+                  WHERE snapshot.operation_id = existing.operation_id
+                    AND expected.copy_uuid IS NULL
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM reservation_copies expected
+                  LEFT JOIN reservation_restored restored
+                    ON restored.operation_id = expected.operation_id
+                    AND restored.copy_uuid = expected.copy_uuid
+                  WHERE expected.operation_id = existing.operation_id
+                    AND restored.copy_uuid IS NULL
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM reservation_restored restored
+                  LEFT JOIN reservation_copies expected
+                    ON expected.operation_id = restored.operation_id
+                    AND expected.copy_uuid = restored.copy_uuid
+                  WHERE restored.operation_id = existing.operation_id
+                    AND expected.copy_uuid IS NULL
+                )
+              )
+          )
+          BEGIN
+            SELECT RAISE(ABORT, 'copy is not proven reusable');
+          END
+          """);
+    }
   }
 }

@@ -5,6 +5,7 @@ import java.security.GeneralSecurityException;
 import java.util.HexFormat;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.Optional;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import net.kyori.adventure.text.Component;
@@ -176,6 +177,19 @@ public final class CardItemCodec {
         || keys.contains(integrityKey)
         || keys.contains(ownerKindKey)
         || keys.contains(ownerIdKey);
+  }
+  /**
+   * Extracts only the canonical physical copy UUID, without asserting that the full card is valid.
+   */
+  public Optional<CardCopyId> identityCopyId(ItemStack item) {
+    if (item == null || item.getItemMeta() == null) return Optional.empty();
+    try {
+      String raw = item.getItemMeta().getPersistentDataContainer().get(copyIdKey,
+          PersistentDataType.STRING);
+      return raw == null ? Optional.empty() : Optional.of(new CardCopyId(parseCanonicalUuid(raw)));
+    } catch (RuntimeException exception) {
+      return Optional.empty();
+    }
   }
 
   private String marker(int schema, int catalogId, String copyUuid, String ownerKind, String ownerUuid) {

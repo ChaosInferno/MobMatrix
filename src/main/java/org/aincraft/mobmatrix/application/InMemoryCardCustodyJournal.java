@@ -40,6 +40,14 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
       }
       return;
     }
+    for (MutableEntry other : entries.values()) {
+      if ((other.status == CardCustodyPort.OperationStatus.PREPARED
+          || other.status == CardCustodyPort.OperationStatus.ESCROWED
+          || other.status == CardCustodyPort.OperationStatus.RETURN_PENDING)
+          && other.copyIds.stream().anyMatch(copies::contains)) {
+        throw new IllegalStateException("copy is already reserved");
+      }
+    }
     entries.put(operationId, new MutableEntry(operationId, owner, copies,
         exactSnapshots, CardCustodyPort.OperationStatus.PREPARED, matchId));
   }

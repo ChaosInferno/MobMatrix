@@ -206,6 +206,124 @@ final class SqliteCustodyTest {
             List.of(new SerializedItemSnapshot(first, new byte[] {1}),
                 new SerializedItemSnapshot(new CardCopyId(UUID.randomUUID()), new byte[] {2}))));
   }
+  @Test
+  void inMemoryRejectsActiveCopyOverlapButAllowsProvenTerminalReuse() {
+    var journal = new org.aincraft.mobmatrix.application.InMemoryCardCustodyJournal();
+    UUID firstOperation = UUID.randomUUID();
+    UUID secondOperation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {5});
+    journal.prepare(firstOperation, owner, List.of(copy), List.of(snapshot));
+    assertThrows(IllegalStateException.class,
+        () -> journal.prepare(secondOperation, owner, List.of(copy), List.of(snapshot)));
+    journal.transition(firstOperation, OperationStatus.RETURN_PENDING);
+    journal.markRestored(firstOperation, copy);
+    journal.transition(firstOperation, OperationStatus.RETURNED);
+    journal.prepare(secondOperation, owner, List.of(copy), List.of(snapshot));
+    assertEquals(OperationStatus.PREPARED,
+        journal.find(secondOperation).orElseThrow().status());
+  }
+  @Test
+  void malformedTerminalRowsAreEnumeratedForStartupValidation() throws Exception {
+    var path = Files.createTempFile("mobmatrix-malformed-terminal-enumeration", ".sqlite");
+    UUID operation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(operation, owner, List.of(copy),
+          List.of(new SerializedItemSnapshot(copy, new byte[] {1})));
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA ignore_check_constraints = ON");
+      }
+      try (var update = database.connection().prepareStatement(
+          "UPDATE reservations SET status = 'RETURNED' WHERE operation_id = ?")) {
+        update.setString(1, operation.toString());
+        update.executeUpdate();
+      }
+      try (var delete = database.connection().prepareStatement(
+          "DELETE FROM escrow_items WHERE operation_id = ?")) {
+        delete.setString(1, operation.toString());
+        delete.executeUpdate();
+      }
+      assertTrue(repository.openOperationIds().contains(operation));
+      var failure = assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+          () -> repository.findReservation(operation));
+      assertEquals(operation, failure.operationId());
+      assertEquals(List.of(copy), failure.expectedCopyIds());
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void unknownOrUnprovenTerminalCopyCannotBeReused() throws Exception {
+    var path = Files.createTempFile("mobmatrix-copy-guard", ".sqlite");
+    UUID firstOperation = UUID.randomUUID();
+    UUID secondOperation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {2});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(firstOperation, owner, List.of(copy), List.of(snapshot));
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA ignore_check_constraints = ON");
+      }
+      try (var update = database.connection().prepareStatement(
+          "UPDATE reservations SET status = 'UNKNOWN' WHERE operation_id = ?")) {
+        update.setString(1, firstOperation.toString());
+        update.executeUpdate();
+      }
+      assertThrows(RuntimeException.class,
+          () -> repository.prepare(secondOperation, owner, List.of(copy), List.of(snapshot)));
+    }
+    Files.deleteIfExists(path);
+  }
+  @Test
+  void migrationRecreatesCopyGuardWithTerminalProof() throws Exception {
+    var path = Files.createTempFile("mobmatrix-copy-guard-migration", ".sqlite");
+    UUID firstOperation = UUID.randomUUID();
+    UUID secondOperation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {3});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(firstOperation, owner, List.of(copy), List.of(snapshot));
+      repository.transition(firstOperation, OperationStatus.ESCROWED);
+      repository.transition(firstOperation, OperationStatus.RETURN_PENDING);
+      repository.markRestored(firstOperation, copy);
+      repository.transition(firstOperation, OperationStatus.RETURNED);
+      try (var delete = database.connection().prepareStatement(
+          "DELETE FROM escrow_items WHERE operation_id = ?")) {
+        delete.setString(1, firstOperation.toString());
+        delete.executeUpdate();
+      }
+      try (var statement = database.connection().createStatement()) {
+        statement.execute("DROP TRIGGER active_copy_reservation_guard");
+        statement.execute("""
+            CREATE TRIGGER active_copy_reservation_guard
+            BEFORE INSERT ON reservation_copies
+            WHEN EXISTS (
+              SELECT 1 FROM reservation_copies existing
+              JOIN reservations reservation ON reservation.operation_id = existing.operation_id
+              WHERE existing.copy_uuid = NEW.copy_uuid
+                AND reservation.status IN ('PREPARED', 'ESCROWED', 'RETURN_PENDING')
+            )
+            BEGIN SELECT RAISE(ABORT, 'old guard'); END
+            """);
+        statement.execute("DELETE FROM schema_migrations WHERE version = 6");
+        SchemaMigrator.migrate(database.connection());
+      }
+      assertThrows(RuntimeException.class,
+          () -> repository.prepare(secondOperation, owner, List.of(copy), List.of(snapshot)));
+    }
+    Files.deleteIfExists(path);
+  }
 
   @Test
   void abortedTransitionRequiresExactEscrowSnapshotsBeforeIdempotence() throws Exception {
