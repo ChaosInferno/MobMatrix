@@ -44,7 +44,11 @@ public final class MatchState {
     if (revision < 0) throw new IllegalArgumentException("revision must not be negative");
     this.revision = revision;
     this.result = result;
-    this.bankMillis = Map.copyOf(new EnumMap<>(bankMillis));
+    EnumMap<PlayerSeat, Long> bankCopy = new EnumMap<>(PlayerSeat.class);
+    for (PlayerSeat seat : PlayerSeat.values()) {
+      bankCopy.put(seat, result == null ? Objects.requireNonNull(bankMillis.get(seat)) : 0L);
+    }
+    this.bankMillis = Map.copyOf(bankCopy);
     this.turnStartedAt = Objects.requireNonNull(turnStartedAt);
     this.graceDeadline = Objects.requireNonNull(graceDeadline);
     this.turnDeadline = Objects.requireNonNull(turnDeadline);
@@ -74,26 +78,37 @@ public final class MatchState {
   public boolean isFinished() { return result != null; }
   public Map<PlayerSeat, Long> bankMillis() { return bankMillis; }
   public long remainingBankMillis(PlayerSeat seat, Instant now) {
+    Objects.requireNonNull(seat, "seat is required");
     Objects.requireNonNull(now, "time is required");
-    long stored = remainingBankMillis(seat);
+    if (isFinished()) return 0L;
+    long stored = bankMillis.get(seat);
     if (seat != currentSeat) return stored;
     long charge = Math.max(0L, elapsedMillis(turnStartedAt, now) - GRACE_MILLIS);
     return Math.max(0L, stored - charge);
   }
-  public long remainingBankMillis(PlayerSeat seat) { return bankMillis.get(Objects.requireNonNull(seat)); }
+  public long remainingBankMillis(PlayerSeat seat) {
+    Objects.requireNonNull(seat, "seat is required");
+    return isFinished() ? 0L : bankMillis.get(seat);
+  }
   public long remainingGraceMillis(PlayerSeat seat, Instant now) {
-    Objects.requireNonNull(seat);
-    if (seat != currentSeat || now.compareTo(graceDeadline) >= 0) return 0;
+    Objects.requireNonNull(seat, "seat is required");
+    Objects.requireNonNull(now, "time is required");
+    if (isFinished() || seat != currentSeat || now.compareTo(graceDeadline) >= 0) return 0;
     return Duration.between(now, graceDeadline).toMillis();
   }
   public long remainingTurnMillis(PlayerSeat seat, Instant now) {
-    Objects.requireNonNull(seat);
-    if (seat != currentSeat || now.compareTo(turnDeadline) >= 0) return 0;
+    Objects.requireNonNull(seat, "seat is required");
+    Objects.requireNonNull(now, "time is required");
+    if (isFinished() || seat != currentSeat || now.compareTo(turnDeadline) >= 0) return 0;
     return Duration.between(now, turnDeadline).toMillis();
   }
   public Instant turnStartedAt() { return turnStartedAt; }
   public Instant graceDeadline() { return graceDeadline; }
   public Instant turnDeadline() { return turnDeadline; }
+  boolean isTurnExpired(Instant now) {
+    Objects.requireNonNull(now, "time is required");
+    return !isFinished() && !now.isBefore(turnDeadline);
+  }
   private static long elapsedMillis(Instant start, Instant end) {
     return Math.max(0L, Duration.between(start, end).toMillis());
   }

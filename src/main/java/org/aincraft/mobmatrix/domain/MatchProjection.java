@@ -39,9 +39,10 @@ public record MatchProjection(
     Objects.requireNonNull(state, "state is required");
     Objects.requireNonNull(viewer, "viewer is required");
     Objects.requireNonNull(now, "time is required");
-    List<CardCopyId> legalCopies = state.currentSeat() == viewer && !state.isFinished()
+    boolean canAct = state.currentSeat() == viewer && !state.isFinished() && !state.isTurnExpired(now);
+    List<CardCopyId> legalCopies = canAct
         ? state.hand(viewer).stream().map(HandCard::copyId).toList() : List.of();
-    List<Square> legalSquares = state.currentSeat() == viewer && !state.isFinished()
+    List<Square> legalSquares = canAct
         ? state.board().emptySquares() : List.of();
     return new MatchProjection(state.board().cells(), state.hand(viewer),
         state.hand(viewer.opponent()).stream().map(card -> HandSlot.masked()).toList(),

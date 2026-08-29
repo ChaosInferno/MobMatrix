@@ -109,6 +109,11 @@ final class MatchEngineStandardTest {
     assertEquals(5, state.result().score(PlayerSeat.ONE));
     assertEquals(5, state.result().score(PlayerSeat.TWO));
     assertFalse(state.board().emptySquares().iterator().hasNext());
+    assertEquals(0L, state.remainingBankMillis(PlayerSeat.ONE));
+    assertEquals(0L, state.remainingBankMillis(PlayerSeat.TWO));
+    assertEquals(0L, state.remainingBankMillis(PlayerSeat.ONE, START.plusSeconds(100)));
+    assertEquals(0L, state.remainingGraceMillis(PlayerSeat.ONE, START.plusSeconds(100)));
+    assertEquals(0L, state.remainingTurnMillis(PlayerSeat.ONE, START.plusSeconds(100)));
   }
 
   @Test

@@ -49,4 +49,57 @@ final class MatchClockTest {
     assertEquals(actor.opponent(), transition.state().currentSeat());
     assertEquals(0L, transition.state().remainingBankMillis(actor));
   }
+ 
+  @Test
+  void placementAtTurnDeadlineIsRejectedButDueTimeoutAdvancesTurn() {
+    MatchState state = MatchEngine.start(MatchEngineStandardTest.fixtureStart(14L)).state();
+    PlayerSeat actor = state.currentSeat();
+    Instant deadline = state.turnDeadline();
+    CardCopyId copy = state.hand(actor).getFirst().copyId();
+
+    MatchEngine.MatchTransition expiredPlacement = MatchEngine.apply(state,
+        new MatchCommand.PlaceCard(actor, copy, Square.CENTER, state.revision(), UUID.randomUUID(), deadline));
+
+    assertEquals(MatchErrorCode.CLOCK_EXPIRED, expiredPlacement.rejection().code());
+    MatchEngine.MatchTransition timeout = MatchEngine.apply(state,
+        new MatchCommand.Timeout(actor, state.revision(), UUID.randomUUID(), deadline));
+    assertTrue(timeout.accepted());
+    assertEquals(1, timeout.state().revision());
+  }
+
+  @Test
+  void projectionHidesLegalActionsAtTurnDeadline() {
+    MatchState state = MatchEngine.start(MatchEngineStandardTest.fixtureStart(15L)).state();
+
+    MatchProjection projection = MatchProjection.forViewer(state, state.currentSeat(), state.turnDeadline());
+
+    assertTrue(projection.legalCopyIds().isEmpty());
+    assertTrue(projection.legalSquares().isEmpty());
+  }
+
+  @Test
+  void stalePlacementAndTimeoutTimestampsCannotRewindNextTurnClock() {
+    MatchState state = MatchEngine.start(MatchEngineStandardTest.fixtureStart(16L)).state();
+    PlayerSeat actor = state.currentSeat();
+    CardCopyId copy = state.hand(actor).getFirst().copyId();
+
+    MatchEngine.MatchTransition stalePlacement = MatchEngine.apply(state,
+        new MatchCommand.PlaceCard(actor, copy, Square.CENTER, state.revision(), UUID.randomUUID(), START.minusSeconds(1)));
+    MatchEngine.MatchTransition staleTimeout = MatchEngine.apply(state,
+        new MatchCommand.Timeout(actor, state.revision(), UUID.randomUUID(), START.minusSeconds(1)));
+
+    assertEquals(MatchErrorCode.INVALID_COMMAND, stalePlacement.rejection().code());
+    assertEquals(MatchErrorCode.INVALID_COMMAND, staleTimeout.rejection().code());
+
+    MatchEngine.MatchTransition placement = MatchEngine.apply(state,
+        new MatchCommand.PlaceCard(actor, copy, Square.CENTER, state.revision(), UUID.randomUUID(), START.plusSeconds(1)));
+    MatchState next = placement.state();
+    Instant nextTurnStartedAt = next.turnStartedAt();
+    MatchEngine.MatchTransition staleNextTurn = MatchEngine.apply(next,
+        new MatchCommand.Timeout(next.currentSeat(), next.revision(), UUID.randomUUID(), START));
+
+    assertEquals(START.plusSeconds(1), nextTurnStartedAt);
+    assertEquals(MatchErrorCode.INVALID_COMMAND, staleNextTurn.rejection().code());
+    assertEquals(nextTurnStartedAt, staleNextTurn.state().turnStartedAt());
+  }
 }

@@ -57,11 +57,17 @@ public final class MatchEngine {
     if (state.isFinished()) return rejected(state, MatchErrorCode.MATCH_FINISHED);
     if (command.expectedRevision() != state.revision()) return rejected(state, MatchErrorCode.STALE_REVISION);
     if (command.actor() != state.currentSeat()) return rejected(state, MatchErrorCode.WRONG_ACTOR);
+    if (command.commandTime().isBefore(state.turnStartedAt())) {
+      return rejected(state, MatchErrorCode.INVALID_COMMAND);
+    }
     if (command instanceof MatchCommand.PlaceCard place) return applyPlacement(state, place);
     return applyTimeout(state, (MatchCommand.Timeout) command);
   }
 
   private static MatchTransition applyPlacement(MatchState state, MatchCommand.PlaceCard command) {
+    if (state.isTurnExpired(command.commandTime())) {
+      return rejected(state, MatchErrorCode.CLOCK_EXPIRED);
+    }
     if (!state.board().isEmpty(command.square())) return rejected(state, MatchErrorCode.OCCUPIED_SQUARE);
     HandCard played = null;
     for (HandCard card : state.hand(command.actor())) {
@@ -79,9 +85,9 @@ public final class MatchEngine {
   }
 
   private static MatchTransition applyTimeout(MatchState state, MatchCommand.Timeout command) {
-    long elapsed = elapsedMillis(state.turnStartedAt(), command.commandTime());
-    long dueAfter = MatchState.GRACE_MILLIS + state.remainingBankMillis(command.actor());
-    if (elapsed < dueAfter) return rejected(state, MatchErrorCode.TIMEOUT_NOT_DUE);
+    if (!state.isTurnExpired(command.commandTime())) {
+      return rejected(state, MatchErrorCode.TIMEOUT_NOT_DUE);
+    }
     List<HandCard> hand = state.hand(command.actor());
     List<Square> empty = state.board().emptySquares();
     if (hand.isEmpty() || empty.isEmpty()) return rejected(state, MatchErrorCode.INVALID_COMMAND);
