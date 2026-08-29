@@ -1735,3 +1735,56 @@ BUILD SUCCESSFUL in 2s
 
 SQLite emitted the existing JVM restricted-native-access warning. No formatter, linter,
 project-wide build, or project-wide test suite was run.
+
+## Task 6 malformed reservation reuse hardening
+
+### Status
+
+Implemented the final malformed-custody corrections from `task-6-fix27-brief.md`.
+
+### Corrective coverage
+
+- SQLite startup enumeration now includes terminal reservation rows, allowing hydration and startup recovery to validate malformed terminal rows instead of filtering them out.
+- Schema migration version 6 explicitly drops and recreates the active-copy trigger. A copy is reusable only for `RETURNED` or `ABORTED` rows with exact escrow snapshot coverage and complete restored-ledger coverage; unknown status and incomplete terminal proof remain blocked.
+- In-memory custody rejects overlap with every active reservation and permits reuse only after a proven terminal transition.
+- Card item reservation checks extract the copy UUID independently of full item validation and retain fail-closed protection for malformed identity-bearing items while reserved custody exists.
+
+### TDD and focused verification
+
+Focused red command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.malformedTerminalRowsAreEnumeratedForStartupValidation --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.unknownOrUnprovenTerminalCopyCannotBeReused --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.migrationRecreatesCopyGuardWithTerminalProof --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.inMemoryRejectsActiveCopyOverlapButAllowsProvenTerminalReuse --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest.malformedReservedIdentityCannotMove
+```
+
+Exact red result:
+
+```text
+SqliteCustodyTest > inMemoryRejectsActiveCopyOverlapButAllowsProvenTerminalReuse() FAILED
+SqliteCustodyTest > migrationRecreatesCopyGuardWithTerminalProof() FAILED
+SqliteCustodyTest > malformedTerminalRowsAreEnumeratedForStartupValidation() FAILED
+SqliteCustodyTest > unknownOrUnprovenTerminalCopyCannotBeReused() FAILED
+5 tests completed, 4 failed, 1 skipped
+```
+
+Focused green command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.malformedTerminalRowsAreEnumeratedForStartupValidation --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.unknownOrUnprovenTerminalCopyCannotBeReused --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.migrationRecreatesCopyGuardWithTerminalProof --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.inMemoryRejectsActiveCopyOverlapButAllowsProvenTerminalReuse --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest.malformedReservedIdentityCannotMove
+```
+
+```text
+BUILD SUCCESSFUL in 2s
+5 tests completed, 1 skipped
+```
+
+The affected storage and inventory suites were also run together and passed:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest
+> Task :test
+BUILD SUCCESSFUL in 2s
+```
+
+The Paper item regression remains assumption-skipped because this environment has no running Paper
+item registry. No formatter, linter, or project-wide test suite was run.
