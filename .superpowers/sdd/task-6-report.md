@@ -1677,3 +1677,61 @@ BUILD SUCCESSFUL in 2s
 The final focused run selected application, SQLite custody, and inventory custody tests and
 completed successfully. SQLite emitted the existing JVM restricted-native-access warning. No
 formatter, linter, project-wide build, or project-wide test suite was run.
+
+## Task 6 final malformed custody/movement fixes
+
+### Status
+
+Implemented and committed as `ac1bdb9` (`fix: fail closed malformed custody`).
+
+### Corrective coverage
+
+- `CardInventoryService.hydrate` now retains parsed operation/copy identities from structured
+  custody integrity failures in a fail-closed reserved set. Movement guards continue protecting
+  those copies until the journal proves `RETURNED` or `ABORTED`; typed recovery/cleanup failures
+  remain unchanged.
+- SQLite owner decoding now accepts `HOUSE` only with a null UUID and `PLAYER` only with a valid
+  UUID. Reservation, recovery, card-copy preparation, and match-start binding readers reject
+  malformed owner fields; reservation/binding failures retain operation and copy identity.
+- Player death handling checks both mutable drops and the authoritative dying-player inventory,
+  retaining inventory whenever either contains a reserved copy while ordinary deaths remain
+  unchanged.
+- `InMemoryCardCustodyJournal.prepare` now validates exact one-to-one copy/snapshot escrow parity
+  before creating `PREPARED` state. Direct malformed-entry coverage uses explicit constructor
+  validation or prepare rejection.
+
+### TDD and focused verification
+
+Focused red command for the new regressions:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.malformedHouseOwnerUuidIsRejectedWithReservationIdentity --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.inMemoryPrepareRejectsIncompleteOrMismatchedSnapshots --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest.malformedOpenCustodyRemainsReservedUntilTerminalProof
+```
+
+Exact red result:
+
+```text
+> Task :test FAILED
+SqliteCustodyTest > malformedHouseOwnerUuidIsRejectedWithReservationIdentity() FAILED
+SqliteCustodyTest > inMemoryPrepareRejectsIncompleteOrMismatchedSnapshots() FAILED
+CardInventoryServiceTest > malformedOpenCustodyRemainsReservedUntilTerminalProof() FAILED
+3 tests completed, 3 failed
+FAILURE: Build failed with an exception.
+```
+
+Focused green command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+SQLite emitted the existing JVM restricted-native-access warning. No formatter, linter,
+project-wide build, or project-wide test suite was run.
