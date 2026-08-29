@@ -53,3 +53,65 @@ No formatter, linter, or project-wide suite was run.
 
 - The upstream API acceptable-use terms are non-commercial; `source.txt` records that restriction and attribution links.
 - The importer intentionally validates the current endpoint's exact 475-row public-number set; an upstream catalog change must be reviewed through a refreshed snapshot rather than silently accepted.
+
+## Review-fix verification
+
+### Gap test RED
+
+Command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.domain.CardCatalogTest --tests org.aincraft.mobmatrix.domain.DeckValidationTest
+```
+
+Output:
+
+```text
+CardCatalogTest > rejectsGapsInInternalIdsWithinSuppliedCollection() FAILED
+    org.opentest4j.AssertionFailedError at CardCatalogTest.java:27
+
+8 tests completed, 1 failed
+BUILD FAILED in 1s
+```
+
+The failure was the expected assertion failure before the contiguous-ID implementation.
+
+### Review-fix GREEN
+
+Command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.domain.CardCatalogTest --tests org.aincraft.mobmatrix.domain.DeckValidationTest
+```
+
+Output:
+
+```text
+> Task :compileJava
+> Task :processResources
+> Task :classes
+> Task :compileTestJava
+> Task :processTestResources NO-SOURCE
+> Task :testClasses
+> Task :test
+
+BUILD SUCCESSFUL in 1s
+4 actionable tasks: 4 executed
+```
+
+### Importer syntax
+
+Command:
+
+```text
+node --check tools/refresh-cards.js
+```
+
+Output: no output; command exited successfully.
+
+## Review fixes
+
+- `CardCatalog` now rejects the first missing internal ID in the sorted supplied collection while retaining the valid single-definition ID 7 fixture.
+- `currentSnapshotContainsAllPublicNumbers` now asserts exact set equality for `No. 1` through `No. 460` and `Ex. 1` through `Ex. 15`.
+- FFXIV Collect acceptable-use references now use `https://ffxivcollect.com/api/docs` in both provenance and importer output.
+- Code/data commit: `486aac7` (`fix: validate catalog completeness`).
