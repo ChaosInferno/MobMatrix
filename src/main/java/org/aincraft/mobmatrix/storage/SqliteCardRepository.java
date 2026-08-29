@@ -150,6 +150,28 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       cardInsert.executeBatch();
     }
   }
+  static void persistCatalogSnapshotForMatch(Connection connection, String snapshotId,
+      java.util.Collection<CardDefinition> definitions) throws SQLException {
+    Objects.requireNonNull(snapshotId, "snapshot id is required");
+    List<CardDefinition> expected = Objects.requireNonNull(definitions, "definitions are required")
+        .stream().sorted(java.util.Comparator.comparingInt(definition -> definition.id().value())).toList();
+    boolean exists;
+    try (var query = connection.prepareStatement(
+        "SELECT 1 FROM catalog_snapshots WHERE snapshot_id = ?")) {
+      query.setString(1, snapshotId);
+      try (var rows = query.executeQuery()) {
+        exists = rows.next();
+      }
+    }
+    if (exists) {
+      if (!readDefinitions(connection, snapshotId).equals(expected)) {
+        throw new IllegalArgumentException("catalog definitions already exist with different values");
+      }
+      return;
+    }
+    persistCatalogSnapshot(connection,
+        new CatalogSnapshot(snapshotId, "match-state", "catalog-" + snapshotId, "{}"), expected);
+  }
 
   private static List<CardDefinition> readDefinitions(Connection connection, String snapshotId)
       throws SQLException {

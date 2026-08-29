@@ -197,9 +197,7 @@ public final class SqliteMatchRepository implements MatchRepository {
   }
   private static void persistCatalogSnapshot(Connection connection, CardCatalog catalog)
       throws SQLException {
-    SqliteCardRepository.persistCatalogSnapshot(connection,
-        new SqliteCardRepository.CatalogSnapshot(catalog.snapshotId(), "match-state",
-            "catalog-" + catalog.snapshotId(), "{}"), catalog.all());
+    SqliteCardRepository.persistCatalogSnapshotForMatch(connection, catalog.snapshotId(), catalog.all());
   }
   private void requirePersistedCatalogMatch(String snapshotId, CardCatalog catalog) {
     try {

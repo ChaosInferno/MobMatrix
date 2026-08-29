@@ -38,6 +38,7 @@ import org.aincraft.mobmatrix.domain.Deck;
 public final class MatchStateSnapshotCodec {
   private static final int MAGIC = 0x4D4D5332;
   public static final int VERSION = 2;
+  private static final int MAX_COLLECTION_COUNT = 10_000;
 
   private MatchStateSnapshotCodec() {}
   public static String catalogSnapshotId(byte[] bytes) {
@@ -170,8 +171,14 @@ public final class MatchStateSnapshotCodec {
       if (!catalog.snapshotId().equals(catalogSnapshotId)) {
         throw new IllegalArgumentException("catalog snapshot does not match match state");
       }
+
       Set<Rule> rules = new HashSet<>();
-      for (int i = in.readInt(); i > 0; i--) rules.add(Rule.valueOf(in.readUTF()));
+      int ruleCount = readCount(in, "rules");
+      for (int i = 0; i < ruleCount; i++) {
+        if (!rules.add(Rule.valueOf(in.readUTF()))) {
+          throw new IllegalArgumentException("duplicate rule");
+        }
+      }
       PlayerSeat currentSeat = PlayerSeat.valueOf(in.readUTF());
       Instant turnStartedAt = readInstant(in);
       Instant graceDeadline = readInstant(in);
@@ -191,7 +198,8 @@ public final class MatchStateSnapshotCodec {
       boolean replay = in.readBoolean();
       int cursor = in.readInt();
       List<RandomTranscript.Decision> decisions = new ArrayList<>();
-      for (int i = in.readInt(); i > 0; i--) {
+      int decisionCount = readCount(in, "transcript decisions");
+      for (int i = 0; i < decisionCount; i++) {
         decisions.add(new RandomTranscript.Decision(in.readUTF(), in.readInt(), in.readInt()));
       }
       RandomTranscript transcript = RandomTranscript.restore(transcriptSeed, decisions, replay, cursor);
@@ -199,7 +207,8 @@ public final class MatchStateSnapshotCodec {
       Map<PlayerSeat, List<HandCard>> hands = new EnumMap<>(PlayerSeat.class);
       for (PlayerSeat seat : PlayerSeat.values()) {
         List<HandCard> hand = new ArrayList<>();
-        for (int i = in.readInt(); i > 0; i--) {
+        int handCount = readCount(in, "hand");
+        for (int i = 0; i < handCount; i++) {
           CardCopy copy = readCopy(in);
           requireUniqueActiveCopy(activeCopies, copy);
           hand.add(new HandCard(copy, catalog.require(copy.cardId())));
@@ -222,7 +231,8 @@ public final class MatchStateSnapshotCodec {
       Map<PlayerSeat, Set<CardCopyId>> revealed = new EnumMap<>(PlayerSeat.class);
       for (PlayerSeat seat : PlayerSeat.values()) revealed.put(seat, readCopyIds(in));
       Map<CardCopyId, PlayerSeat> originalOwners = new HashMap<>();
-      for (int i = in.readInt(); i > 0; i--) {
+      int originalOwnerCount = readCount(in, "original owners");
+      for (int i = 0; i < originalOwnerCount; i++) {
         CardCopyId copyId = new CardCopyId(readUuid(in));
         PlayerSeat owner = PlayerSeat.valueOf(in.readUTF());
         if (originalOwners.putIfAbsent(copyId, owner) != null) {
@@ -262,17 +272,20 @@ public final class MatchStateSnapshotCodec {
       Map<PlayerSeat, DraftOfferings.SeatOffers> offerings = new EnumMap<>(PlayerSeat.class);
       Set<UUID> offeringIds = new HashSet<>();
       Map<CardCopyId, CardCopy> offeringCopies = new HashMap<>();
-      for (int i = in.readInt(); i > 0; i--) {
+      int offeringSeatCount = readCount(in, "draft offering seats");
+      for (int i = 0; i < offeringSeatCount; i++) {
         PlayerSeat seat = PlayerSeat.valueOf(in.readUTF());
         if (offerings.containsKey(seat)) throw new IllegalArgumentException("duplicate draft offering seat");
         List<DraftOfferings.Offering> seatOfferings = new ArrayList<>();
-        for (int j = in.readInt(); j > 0; j--) {
+        int offeringCount = readCount(in, "draft offerings");
+        for (int j = 0; j < offeringCount; j++) {
           UUID offeringId = readUuid(in);
           if (!offeringIds.add(offeringId)) {
             throw new IllegalArgumentException("duplicate draft offering UUID");
           }
           List<CardCopy> cards = new ArrayList<>();
-          for (int k = in.readInt(); k > 0; k--) {
+          int cardCount = readCount(in, "draft offering cards");
+          for (int k = 0; k < cardCount; k++) {
             CardCopy copy = readCopy(in);
             if (!copy.owner().equals(CopyOwner.house())) {
               throw new IllegalArgumentException("draft offering copy must be house-owned");
@@ -294,25 +307,30 @@ public final class MatchStateSnapshotCodec {
         }
       }
       Map<PlayerSeat, DraftOfferings.Selection> selections = new EnumMap<>(PlayerSeat.class);
-      for (int i = in.readInt(); i > 0; i--) {
+      int selectionCount = readCount(in, "draft selections");
+      for (int i = 0; i < selectionCount; i++) {
         PlayerSeat seat = PlayerSeat.valueOf(in.readUTF());
         if (selections.containsKey(seat)) throw new IllegalArgumentException("duplicate draft selection seat");
         DraftOfferings.SeatOffers seatOffers = offerings.get(seat);
         if (seatOffers == null) throw new IllegalArgumentException("selection has no offerings");
         List<Integer> choices = new ArrayList<>();
-        for (int j = in.readInt(); j > 0; j--) choices.add(in.readInt());
+        int choiceCount = readCount(in, "draft choices");
+        for (int j = 0; j < choiceCount; j++) choices.add(in.readInt());
         List<CardCopy> selected = new ArrayList<>();
-        for (int j = in.readInt(); j > 0; j--) {
+        int selectedCount = readCount(in, "draft selected cards");
+        for (int j = 0; j < selectedCount; j++) {
           CardCopy copy = readCopy(in);
           selected.add(requireOfferingReference(copy, offeringCopies));
         }
         List<CardCopy> deckCards = new ArrayList<>();
-        for (int j = in.readInt(); j > 0; j--) {
+        int deckCount = readCount(in, "draft deck cards");
+        for (int j = 0; j < deckCount; j++) {
           CardCopy copy = readCopy(in);
           deckCards.add(requireOfferingReference(copy, offeringCopies));
         }
         Map<CardCopyId, UUID> provenance = new HashMap<>();
-        for (int j = in.readInt(); j > 0; j--) {
+        int provenanceCount = readCount(in, "draft provenance");
+        for (int j = 0; j < provenanceCount; j++) {
           CardCopyId copyId = new CardCopyId(readUuid(in));
           UUID offeringId = readUuid(in);
           if (provenance.putIfAbsent(copyId, offeringId) != null) {
@@ -333,7 +351,8 @@ public final class MatchStateSnapshotCodec {
       }
       Set<CardCopyId> persistedHouseCopies = readCopyIdSet(in);
       Map<PlayerSeat, CardCopyId> chaos = new EnumMap<>(PlayerSeat.class);
-      for (int i = in.readInt(); i > 0; i--) {
+      int chaosCount = readCount(in, "chaos choices");
+      for (int i = 0; i < chaosCount; i++) {
         PlayerSeat seat = PlayerSeat.valueOf(in.readUTF());
         CardCopyId choice = new CardCopyId(readUuid(in));
         if (chaos.putIfAbsent(seat, choice) != null) {
@@ -449,14 +468,14 @@ public final class MatchStateSnapshotCodec {
     }
   }
 
-
   private static void writeCopyIds(DataOutputStream out, Set<CardCopyId> copies) throws IOException {
     writeCopyIdSet(out, copies);
   }
 
   private static void writeCopyIdSet(DataOutputStream out, Set<CardCopyId> copies) throws IOException {
     out.writeInt(copies.size());
-    for (CardCopyId copy : copies.stream().sorted(Comparator.comparing(value -> value.value().toString())).toList()) {
+    for (CardCopyId copy : copies.stream()
+        .sorted(Comparator.comparing(value -> value.value().toString())).toList()) {
       writeUuid(out, copy.value());
     }
   }
@@ -464,10 +483,13 @@ public final class MatchStateSnapshotCodec {
   private static Set<CardCopyId> readCopyIds(DataInputStream in) throws IOException {
     return readCopyIdSet(in);
   }
-
   private static Set<CardCopyId> readCopyIdSet(DataInputStream in) throws IOException {
     Set<CardCopyId> result = new HashSet<>();
-    for (int i = in.readInt(); i > 0; i--) result.add(new CardCopyId(readUuid(in)));
+    int count = readCount(in, "copy UUID set");
+    for (int i = 0; i < count; i++) {
+      CardCopyId copy = new CardCopyId(readUuid(in));
+      if (!result.add(copy)) throw new IllegalArgumentException("duplicate copy UUID set entry");
+    }
     return Set.copyOf(result);
   }
 
@@ -478,8 +500,21 @@ public final class MatchStateSnapshotCodec {
 
   private static Set<UUID> readUuids(DataInputStream in) throws IOException {
     Set<UUID> result = new HashSet<>();
-    for (int i = in.readInt(); i > 0; i--) result.add(readUuid(in));
+    int count = readCount(in, "UUID set");
+    for (int i = 0; i < count; i++) {
+      UUID value = readUuid(in);
+      if (!result.add(value)) throw new IllegalArgumentException("duplicate UUID set entry");
+    }
     return Set.copyOf(result);
+  }
+
+
+  private static int readCount(DataInputStream in, String field) throws IOException {
+    int count = in.readInt();
+    if (count < 0 || count > MAX_COLLECTION_COUNT) {
+      throw new IllegalArgumentException("invalid " + field + " count: " + count);
+    }
+    return count;
   }
 
   private static void writeUuid(DataOutputStream out, UUID value) throws IOException {

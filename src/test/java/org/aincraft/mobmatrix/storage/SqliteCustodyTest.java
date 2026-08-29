@@ -7,6 +7,9 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
+import java.io.ByteArrayInputStream;
+import java.io.DataInputStream;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.time.Instant;
@@ -449,6 +452,44 @@ final class SqliteCustodyTest {
   }
 
   @Test
+  void matchSaveReusesMetadataFromPreImportedCatalogSnapshot() throws Exception {
+    var path = Files.createTempFile("mobmatrix-catalog-preimport", ".sqlite");
+    MatchState original = snapshotState("catalog-preimport");
+    SqliteCardRepository.CatalogSnapshot imported = new SqliteCardRepository.CatalogSnapshot(
+        original.catalog().snapshotId(), "official-source", "official-digest",
+        "{\"release\":\"2026.08\"}");
+    try (Database database = new Database(path)) {
+      SqliteCardRepository cards = new SqliteCardRepository(database);
+      cards.saveCatalogSnapshot(imported, original.catalog().all());
+      SqliteMatchRepository matches = new SqliteMatchRepository(database);
+
+      assertTrue(matches.save(0L, original).accepted());
+      assertEquals(imported, cards.findCatalogSnapshot(imported.snapshotId()).orElseThrow());
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void snapshotRejectsNegativeOriginalOwnerCount() {
+    MatchState original = snapshotState("negative-owner-count");
+    byte[] encoded = MatchStateSnapshotCodec.encode(original);
+    putInt(encoded, originalOwnerCountOffset(encoded), -1);
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(encoded, original.catalog()));
+  }
+
+  @Test
+  void snapshotRejectsNegativeNestedHandCount() {
+    MatchState original = snapshotState("negative-hand-count");
+    byte[] encoded = MatchStateSnapshotCodec.encode(original);
+    putInt(encoded, firstHandCountOffset(encoded), -1);
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(encoded, original.catalog()));
+  }
+
+  @Test
   void nonSwapSuddenDeathCapturedCardRehydratesAfterRestart() {
     MatchState started = snapshotState("sudden-death-captured");
     CardCopy captured = started.hand(PlayerSeat.ONE).getFirst().copy();
@@ -676,6 +717,7 @@ final class SqliteCustodyTest {
     List<CardCopy> one = new ArrayList<>();
     List<CardCopy> two = new ArrayList<>();
     CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+
     CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
     for (int index = 1; index <= 5; index++) {
       definitions.add(new CardDefinition(new CardId(index), "No. " + index, "Card " + index,
@@ -717,6 +759,82 @@ final class SqliteCustodyTest {
         Instant.parse("2026-01-01T00:00:00Z"))).state();
   }
 
+  private static int firstHandCountOffset(byte[] encoded) {
+    try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(encoded))) {
+      readSnapshotPrelude(in);
+      return encoded.length - in.available();
+    } catch (IOException exception) {
+      throw new AssertionError(exception);
+    }
+  }
+
+  private static int originalOwnerCountOffset(byte[] encoded) {
+    try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(encoded))) {
+      readSnapshotPrelude(in);
+      for (int seat = 0; seat < 2; seat++) {
+        int count = in.readInt();
+        for (int index = 0; index < count; index++) skipCopy(in);
+      }
+      for (int index = 0; index < 9; index++) {
+        if (in.readBoolean()) {
+          skipCopy(in);
+          in.skipNBytes(4);
+          in.readUTF();
+          for (int side = 0; side < 4; side++) {
+            if (in.readBoolean()) in.skipNBytes(4);
+          }
+        }
+      }
+      for (int seat = 0; seat < 2; seat++) skipUuidSet(in);
+      return encoded.length - in.available();
+    } catch (IOException exception) {
+      throw new AssertionError(exception);
+    }
+  }
+
+  private static void readSnapshotPrelude(DataInputStream in) throws IOException {
+    in.readInt();
+    in.readInt();
+    in.readUTF();
+    in.readLong();
+    in.readUTF();
+    int rules = in.readInt();
+    for (int index = 0; index < rules; index++) in.readUTF();
+    in.readUTF();
+    in.skipNBytes(36);
+    in.skipNBytes(16);
+    if (in.readBoolean()) {
+      in.skipNBytes(8);
+      in.skipNBytes(8);
+      in.readUTF();
+    }
+    in.skipNBytes(8);
+    skipUuidSet(in);
+    in.skipNBytes(8);
+    in.readBoolean();
+    in.skipNBytes(4);
+    int decisions = in.readInt();
+    for (int index = 0; index < decisions; index++) {
+      in.readUTF();
+      in.skipNBytes(8);
+    }
+  }
+
+  private static void skipCopy(DataInputStream in) throws IOException {
+    in.skipNBytes(16);
+    in.skipNBytes(4);
+    in.readUTF();
+    if (in.readBoolean()) in.skipNBytes(16);
+  }
+
+  private static void skipUuidSet(DataInputStream in) throws IOException {
+    int count = in.readInt();
+    in.skipNBytes(16L * count);
+  }
+
+  private static void putInt(byte[] encoded, int offset, int value) {
+    ByteBuffer.wrap(encoded, offset, Integer.BYTES).putInt(value);
+  }
   private static byte[] replaceUuid(byte[] source, UUID from, UUID to) {
     byte[] result = source.clone();
     byte[] fromBytes = ByteBuffer.allocate(16).putLong(from.getMostSignificantBits())
