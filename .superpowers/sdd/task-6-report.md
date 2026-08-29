@@ -218,4 +218,15 @@ BUILD SUCCESSFUL in 2s
 The selected Paper codec tests remain assumption-skipped in this environment because Paper's item
 registry requires a running server; the other selected adapter, storage, application, domain, and
 bot tests executed successfully. SQLite emitted only the JVM restricted-native-access warning.
+
+The final focused rerun after adding the automated `InventoryPickupItemEvent` guard also passed:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 3 executed, 1 up-to-date
+```
+
+Latest implementation guard commit: `1d16dd3` (`fix: preserve active custody on startup`).
+Latest report history commit before this note: `4e4b087`; this note is committed separately.
 No formatter, linter, project-wide build, or project-wide test suite was run.
