@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.nio.file.Files;
+import java.nio.ByteBuffer;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
@@ -25,11 +26,14 @@ import org.aincraft.mobmatrix.domain.CardDefinition;
 import org.aincraft.mobmatrix.domain.CardId;
 import org.aincraft.mobmatrix.domain.CardType;
 import org.aincraft.mobmatrix.domain.Deck;
+import org.aincraft.mobmatrix.domain.MatchState;
 import org.aincraft.mobmatrix.domain.MatchEngine;
+import org.aincraft.mobmatrix.domain.MatchCommand;
 import org.aincraft.mobmatrix.domain.MatchId;
 import org.aincraft.mobmatrix.domain.MatchRules;
 import org.aincraft.mobmatrix.domain.PlayerSeat;
 import org.aincraft.mobmatrix.domain.CopyOwner;
+import org.aincraft.mobmatrix.domain.Square;
 import org.junit.jupiter.api.Test;
 
 final class SqliteCustodyTest {
@@ -220,6 +224,55 @@ final class SqliteCustodyTest {
     }
     Files.deleteIfExists(path);
   }
+  @Test
+  void saveInitialRollsBackMatchWhenBindingInsertFails() throws Exception {
+    var path = Files.createTempFile("mobmatrix-atomic-initial", ".sqlite");
+    MatchState state = snapshotState("atomic-initial");
+    CopyOwner oneOwner = state.hand(PlayerSeat.ONE).getFirst().copy().owner();
+    CopyOwner twoOwner = state.hand(PlayerSeat.TWO).getFirst().copy().owner();
+    List<CardCopyId> oneCopies = state.hand(PlayerSeat.ONE).stream().map(card -> card.copyId()).toList();
+    List<CardCopyId> twoCopies = state.hand(PlayerSeat.TWO).stream().map(card -> card.copyId()).toList();
+    MatchRepository.StartBinding binding = new MatchRepository.StartBinding(state.matchId(), 1,
+        "atomic-initial-identity", oneOwner, oneCopies, UUID.randomUUID(), twoOwner, twoCopies,
+        UUID.randomUUID());
+    try (Database database = new Database(path)) {
+      try (var statement = database.connection().createStatement()) {
+        statement.execute("""
+            CREATE TRIGGER reject_initial_binding
+            BEFORE INSERT ON match_start_bindings
+            BEGIN SELECT RAISE(ABORT, 'injected binding failure'); END
+            """);
+      }
+      SqliteMatchRepository repository = new SqliteMatchRepository(database);
+      assertThrows(IllegalStateException.class, () -> repository.saveInitial(state, binding));
+      try (var query = database.connection().prepareStatement(
+          "SELECT COUNT(*) FROM matches WHERE match_id = ?")) {
+        query.setString(1, state.matchId().value());
+        try (var rows = query.executeQuery()) {
+          assertTrue(rows.next());
+          assertEquals(0, rows.getInt(1));
+        }
+      }
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void snapshotRejectsDuplicateHandAndBoardCopyUuid() {
+    MatchState initial = snapshotState("duplicate-snapshot");
+    PlayerSeat actor = initial.currentSeat();
+    CardCopyId placedCopy = initial.hand(actor).getFirst().copyId();
+    MatchState placed = MatchEngine.apply(initial, new MatchCommand.PlaceCard(actor, placedCopy,
+        Square.CENTER, initial.revision(), UUID.randomUUID(), Instant.parse("2026-01-01T00:00:01Z")))
+        .state();
+    CardCopyId handCopy = placed.hand(actor).getFirst().copyId();
+    UUID boardUuid = placed.board().copyAt(Square.CENTER).copyId().value();
+    byte[] tampered = replaceUuid(MatchStateSnapshotCodec.encode(placed), boardUuid, handCopy.value());
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(tampered, placed.catalog()));
+  }
+
 
   @Test
   void saveRejectsRevisionJumpsForNewAndExistingRows() throws Exception {
@@ -250,6 +303,45 @@ final class SqliteCustodyTest {
     }
     Files.deleteIfExists(path);
   }
+  private static MatchState snapshotState(String id) {
+    List<CardDefinition> definitions = new ArrayList<>();
+    List<CardCopy> one = new ArrayList<>();
+    List<CardCopy> two = new ArrayList<>();
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    for (int index = 1; index <= 5; index++) {
+      definitions.add(new CardDefinition(new CardId(index), "No. " + index, "Card " + index,
+          1, CardType.NORMAL, index, index, index, index, 0));
+      one.add(new CardCopy(new CardCopyId(UUID.randomUUID()), new CardId(index), oneOwner));
+      two.add(new CardCopy(new CardCopyId(UUID.randomUUID()), new CardId(index), twoOwner));
+    }
+    return MatchEngine.start(new MatchEngine.StartMatch(new MatchId(id), new Deck(one), new Deck(two),
+        new CardCatalog(definitions, id + "-catalog"), new MatchRules(), 7L,
+        Instant.parse("2026-01-01T00:00:00Z"))).state();
+  }
+
+  private static byte[] replaceUuid(byte[] source, UUID from, UUID to) {
+    byte[] result = source.clone();
+    byte[] fromBytes = ByteBuffer.allocate(16).putLong(from.getMostSignificantBits())
+        .putLong(from.getLeastSignificantBits()).array();
+    byte[] toBytes = ByteBuffer.allocate(16).putLong(to.getMostSignificantBits())
+        .putLong(to.getLeastSignificantBits()).array();
+    for (int offset = 0; offset <= result.length - fromBytes.length; offset++) {
+      boolean matches = true;
+      for (int index = 0; index < fromBytes.length; index++) {
+        if (result[offset + index] != fromBytes[index]) {
+          matches = false;
+          break;
+        }
+      }
+      if (matches) {
+        System.arraycopy(toBytes, 0, result, offset, toBytes.length);
+        return result;
+      }
+    }
+    throw new AssertionError("UUID not present in encoded snapshot");
+  }
+
 
   private static final class MatchStateTestSupport {
     private static org.aincraft.mobmatrix.domain.MatchState withRevision(

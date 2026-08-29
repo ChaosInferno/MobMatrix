@@ -165,6 +165,45 @@ final class MatchApplicationServiceTest {
     assertTrue(result.missingCopyIds().isEmpty());
   }
   @Test
+  void defaultInitialSaveRejectsWithoutWritingEitherRow() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = copies();
+    MatchState state = MatchEngine.start(
+        match("atomic-default", oneOwner, oneCopies, twoOwner, twoCopies)).state();
+    MatchRepository.StartBinding binding = new MatchRepository.StartBinding(state.matchId(), 1,
+        "atomic-default-identity", oneOwner, oneCopies, UUID.randomUUID(), twoOwner, twoCopies,
+        UUID.randomUUID());
+    boolean[] wroteMatch = {false};
+    boolean[] wroteBinding = {false};
+    MatchRepository repository = new MatchRepository() {
+      @Override
+      public SaveResult save(long expectedRevision, MatchState state) {
+        wroteMatch[0] = true;
+        return SaveResult.success(state.revision());
+      }
+
+      @Override
+      public void saveStartBinding(MatchRepository.StartBinding binding) {
+        wroteBinding[0] = true;
+      }
+
+      @Override
+      public java.util.Optional<MatchSnapshot> find(MatchId matchId) {
+        return java.util.Optional.empty();
+      }
+    };
+
+    MatchRepository.SaveResult result = repository.saveInitial(state, binding);
+
+    assertFalse(result.accepted());
+    assertEquals(MatchRepository.Failure.INVALID_STATE, result.failure());
+    assertFalse(wroteMatch[0]);
+    assertFalse(wroteBinding[0]);
+  }
+
+  @Test
   void startupPreservesActiveEscrowAndContinuesAfterOneRecoveryFailure() {
     UUID activeOperation = UUID.randomUUID();
     UUID orphanOperation = UUID.randomUUID();
@@ -464,6 +503,15 @@ final class MatchApplicationServiceTest {
     private MatchState state;
     private MatchRepository.StartBinding binding;
     private int saves;
+    @Override
+    public SaveResult saveInitial(MatchState state, MatchRepository.StartBinding binding) {
+      saves++;
+      if (this.state != null) return SaveResult.stale(this.state.revision());
+      this.state = state;
+      this.binding = binding;
+      return SaveResult.success(0L);
+    }
+
 
     @Override
     public SaveResult save(long expectedRevision, MatchState state) {

@@ -195,11 +195,13 @@ public final class MatchStateSnapshotCodec {
         decisions.add(new RandomTranscript.Decision(in.readUTF(), in.readInt(), in.readInt()));
       }
       RandomTranscript transcript = RandomTranscript.restore(transcriptSeed, decisions, replay, cursor);
+      Set<CardCopyId> activeCopies = new HashSet<>();
       Map<PlayerSeat, List<HandCard>> hands = new EnumMap<>(PlayerSeat.class);
       for (PlayerSeat seat : PlayerSeat.values()) {
         List<HandCard> hand = new ArrayList<>();
         for (int i = in.readInt(); i > 0; i--) {
           CardCopy copy = readCopy(in);
+          requireUniqueActiveCopy(activeCopies, copy.copyId());
           hand.add(new HandCard(copy, catalog.require(copy.cardId())));
         }
         hands.put(seat, List.copyOf(hand));
@@ -208,6 +210,7 @@ public final class MatchStateSnapshotCodec {
       for (int index = 0; index < 9; index++) {
         if (!in.readBoolean()) continue;
         CardCopy copy = readCopy(in);
+        requireUniqueActiveCopy(activeCopies, copy.copyId());
         catalog.require(copy.cardId());
         CardId cardId = new CardId(in.readInt());
         if (!copy.cardId().equals(cardId)) throw new IllegalArgumentException("board card identity mismatch");
@@ -298,6 +301,12 @@ public final class MatchStateSnapshotCodec {
     else throw new IllegalArgumentException("invalid copy owner");
     return new CardCopy(copyId, cardId, owner);
   }
+  private static void requireUniqueActiveCopy(Set<CardCopyId> activeCopies, CardCopyId copyId) {
+    if (!activeCopies.add(copyId)) {
+      throw new IllegalArgumentException("duplicate active card copy UUID");
+    }
+  }
+
 
   private static void writeCopyIds(DataOutputStream out, Set<CardCopyId> copies) throws IOException {
     writeCopyIdSet(out, copies);

@@ -14,18 +14,16 @@ import org.aincraft.mobmatrix.domain.CopyOwner;
 public interface MatchRepository {
   SaveResult save(long expectedRevision, MatchState state);
   /**
-   * Persists a revision-0 active match and its durable start binding.
+   * Persists a revision-0 active match and its durable start binding atomically.
    *
-   * <p>Durable implementations must commit both rows atomically. The default keeps compatibility
-   * with simple test repositories; production startup uses the SQLite override.
+   * <p>Repositories that cannot commit both records as one operation must reject the request
+   * without writing either record. Implementations backed by durable storage should override this
+   * method with a transaction.
    */
   default SaveResult saveInitial(MatchState state, StartBinding binding) {
     Objects.requireNonNull(state, "state is required");
     Objects.requireNonNull(binding, "start binding is required");
-    SaveResult saved = save(0L, state);
-    if (!saved.accepted()) return saved;
-    saveStartBinding(binding);
-    return saved;
+    return new SaveResult(false, -1L, Failure.INVALID_STATE);
   }
 
   Optional<MatchSnapshot> find(MatchId matchId);
