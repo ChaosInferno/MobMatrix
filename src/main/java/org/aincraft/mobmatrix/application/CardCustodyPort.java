@@ -199,9 +199,18 @@ public interface CardCustodyPort {
       return new RecoveryResult(operationId, OperationStatus.RETURNED, List.of(), List.of(), List.of(), Failure.NONE);
     }
 
-    public static RecoveryResult complete(UUID operationId, List<CardCopyId> expectedCopyIds) {
-      return new RecoveryResult(operationId, OperationStatus.RETURNED, expectedCopyIds, expectedCopyIds,
+    public static RecoveryResult complete(UUID operationId, OperationStatus status,
+        List<CardCopyId> expectedCopyIds) {
+      Objects.requireNonNull(status, "status is required");
+      if (status != OperationStatus.RETURNED && status != OperationStatus.ABORTED) {
+        throw new IllegalArgumentException("complete recovery requires a terminal status");
+      }
+      return new RecoveryResult(operationId, status, expectedCopyIds, expectedCopyIds,
           List.of(), Failure.NONE);
+    }
+
+    public static RecoveryResult complete(UUID operationId, List<CardCopyId> expectedCopyIds) {
+      return complete(operationId, OperationStatus.RETURNED, expectedCopyIds);
     }
 
     public boolean complete() { return pendingCopyIds.isEmpty() && failure == Failure.NONE; }

@@ -351,11 +351,7 @@ final class SqliteCustodyTest {
   void findStateRejectsSameIdAlteredPersistedCatalogDefinition() throws Exception {
     var path = Files.createTempFile("mobmatrix-catalog-identity", ".sqlite");
     MatchState original = snapshotState("catalog-identity");
-    SqliteCardRepository.CatalogSnapshot snapshot = new SqliteCardRepository.CatalogSnapshot(
-        original.catalog().snapshotId(), "test", "digest", "{}");
     try (Database database = new Database(path)) {
-      SqliteCardRepository cards = new SqliteCardRepository(database);
-      cards.saveCatalogSnapshot(snapshot, original.catalog().all());
       SqliteMatchRepository repository = new SqliteMatchRepository(database);
       assertTrue(repository.save(0L, original).accepted());
       List<CardDefinition> alteredDefinitions = new ArrayList<>(original.catalog().all());
@@ -423,6 +419,31 @@ final class SqliteCustodyTest {
           first.salePrice()));
       assertThrows(IllegalArgumentException.class,
           () -> cards.saveCatalogSnapshot(snapshot, alteredDefinitions));
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void catalogSnapshotMetadataCannotBeOverwritten() throws Exception {
+    var path = Files.createTempFile("mobmatrix-catalog-metadata", ".sqlite");
+    MatchState original = snapshotState("catalog-metadata");
+    SqliteCardRepository.CatalogSnapshot snapshot = new SqliteCardRepository.CatalogSnapshot(
+        original.catalog().snapshotId(), "source", "digest", "{\"version\":1}");
+    try (Database database = new Database(path)) {
+      SqliteCardRepository cards = new SqliteCardRepository(database);
+      cards.saveCatalogSnapshot(snapshot, original.catalog().all());
+      List<SqliteCardRepository.CatalogSnapshot> altered = List.of(
+          new SqliteCardRepository.CatalogSnapshot(snapshot.snapshotId(), "altered-source",
+              snapshot.digest(), snapshot.metadataJson()),
+          new SqliteCardRepository.CatalogSnapshot(snapshot.snapshotId(), snapshot.source(),
+              "altered-digest", snapshot.metadataJson()),
+          new SqliteCardRepository.CatalogSnapshot(snapshot.snapshotId(), snapshot.source(),
+              snapshot.digest(), "{\"version\":2}"));
+      for (SqliteCardRepository.CatalogSnapshot candidate : altered) {
+        assertThrows(IllegalArgumentException.class,
+            () -> cards.saveCatalogSnapshot(candidate, original.catalog().all()));
+        assertEquals(snapshot, cards.findCatalogSnapshot(snapshot.snapshotId()).orElseThrow());
+      }
     }
     Files.deleteIfExists(path);
   }

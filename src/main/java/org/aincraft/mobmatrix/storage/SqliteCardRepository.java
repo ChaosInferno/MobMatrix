@@ -91,14 +91,27 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         .stream().sorted(java.util.Comparator.comparingInt(definition -> definition.id().value())).toList();
     Objects.requireNonNull(snapshot, "snapshot is required");
     boolean exists;
+    String persistedSource = null;
+    String persistedDigest = null;
+    String persistedMetadataJson = null;
     try (var query = connection.prepareStatement(
-        "SELECT 1 FROM catalog_snapshots WHERE snapshot_id = ?")) {
+        "SELECT source, digest, metadata_json FROM catalog_snapshots WHERE snapshot_id = ?")) {
       query.setString(1, snapshot.snapshotId());
       try (var rows = query.executeQuery()) {
         exists = rows.next();
+        if (exists) {
+          persistedSource = rows.getString(1);
+          persistedDigest = rows.getString(2);
+          persistedMetadataJson = rows.getString(3);
+        }
       }
     }
     if (exists) {
+      if (!snapshot.source().equals(persistedSource)
+          || !snapshot.digest().equals(persistedDigest)
+          || !snapshot.metadataJson().equals(persistedMetadataJson)) {
+        throw new IllegalArgumentException("catalog snapshot metadata already exists with different values");
+      }
       List<CardDefinition> persisted = readDefinitions(connection, snapshot.snapshotId());
       if (!persisted.equals(expected)) {
         throw new IllegalArgumentException("catalog definitions already exist with different values");

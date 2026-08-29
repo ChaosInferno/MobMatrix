@@ -254,7 +254,7 @@ public final class CardInventoryService implements CardCustodyPort {
     PreparedOperation operation = operation(operationId);
     if (operation == null) return RecoveryResult.none(operationId);
     if (operation.status == OperationStatus.RETURNED || operation.status == OperationStatus.ABORTED) {
-      return RecoveryResult.complete(operationId, operation.copyIds);
+      return RecoveryResult.complete(operationId, operation.status, operation.copyIds);
     }
     if (operation.status == OperationStatus.PREPARED) {
       // PREPARED may represent a crash after physical removal but before ESCROWED was durable.
@@ -268,7 +268,9 @@ public final class CardInventoryService implements CardCustodyPort {
       }
     }
     ReturnResult result = returnCopies(operationId);
-    if (result.complete()) return RecoveryResult.complete(operationId, operation.copyIds);
+    if (result.complete()) {
+      return RecoveryResult.complete(operationId, result.status(), operation.copyIds);
+    }
     return new RecoveryResult(operationId, operation.status, operation.copyIds, result.returnedCopyIds(),
         result.recoveryCopyIds(), result.failure());
   }

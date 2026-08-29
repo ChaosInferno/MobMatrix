@@ -2,6 +2,7 @@ package org.aincraft.mobmatrix.inventory;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.nio.file.Files;
 import java.util.List;
@@ -45,6 +46,30 @@ final class CardInventoryServiceTest {
       assertArrayEquals(snapshots.get(0).bytes(), journal.pendingRecovery().get(0).snapshot().bytes());
       assertArrayEquals(snapshots.get(1).bytes(), journal.pendingRecovery().get(1).snapshot().bytes());
       assertEquals(List.of(), journal.findReservation(operation).orElseThrow().restoredCopyIds());
+    }
+    Files.deleteIfExists(path);
+  }
+  @Test
+  void recoverPreservesAbortedTerminalStatus() throws Exception {
+    var path = Files.createTempFile("mobmatrix-aborted-recovery", ".sqlite");
+    UUID operation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {7, 8, 9});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository journal = new SqliteCardRepository(database);
+      journal.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      journal.prepare(operation, owner, List.of(copy), List.of(snapshot));
+      journal.transition(operation, CardCustodyPort.OperationStatus.ABORTED);
+
+      CardInventoryService service = new CardInventoryService(
+          new CardItemCodec("test", "0123456789abcdef"), id -> null, journal);
+      CardCustodyPort.RecoveryResult result = service.recover(operation);
+
+      assertEquals(CardCustodyPort.OperationStatus.ABORTED, result.status());
+      assertTrue(result.complete());
+      assertEquals(List.of(copy), result.expectedCopyIds());
+      assertEquals(List.of(copy), result.recoveredCopyIds());
     }
     Files.deleteIfExists(path);
   }
