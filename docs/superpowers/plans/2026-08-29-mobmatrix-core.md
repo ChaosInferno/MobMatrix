@@ -198,7 +198,7 @@ git commit -m "feat: add current card catalog and deck validation"
 ### Task 3: Implement standard match state, commands, clocks, and scoring
 
 **Files:**
-- Create: `src/main/java/org/aincraft/mobmatrix/domain/PlayerSeat.java`
+- Create: `src/main/java/org/aincraft/mobmatrix/domain/Rule.java`
 - Create: `src/main/java/org/aincraft/mobmatrix/domain/Square.java`
 - Create: `src/main/java/org/aincraft/mobmatrix/domain/Board.java`
 - Create: `src/main/java/org/aincraft/mobmatrix/domain/HandCard.java`
@@ -269,7 +269,7 @@ git commit -m "feat: add standard Triple Triad match engine"
 ### Task 4: Add every board-level advanced rule and deterministic RNG
 
 **Files:**
-- Create: `src/main/java/org/aincraft/mobmatrix/domain/Rule.java`
+- Modify: `src/main/java/org/aincraft/mobmatrix/domain/Rule.java`
 - Create: `src/main/java/org/aincraft/mobmatrix/domain/RuleSet.java`
 - Create: `src/main/java/org/aincraft/mobmatrix/domain/RandomTranscript.java`
 - Create: `src/main/java/org/aincraft/mobmatrix/domain/PlacementResolver.java`
