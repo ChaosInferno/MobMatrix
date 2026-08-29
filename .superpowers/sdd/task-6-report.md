@@ -1612,3 +1612,68 @@ BUILD SUCCESSFUL in 2s
 
 The focused run emitted only the existing SQLite JDBC restricted-native-access warning. No
 formatter, linter, project-wide build, or project-wide test suite was run.
+
+## Task 6 identity-protection correction
+
+### Status
+
+Implemented and committed as `63e1007` (`fix: preserve recovery identities`).
+
+### Corrective coverage
+
+- Active-bound custody is now fail-closed during startup. `PREPARED`, `ESCROWED`, and
+  `RETURN_PENDING` operations stay untouched while their match binding is active; only a proven
+  terminal status may be reconciled. Missing status and durable binding metadata failures produce
+  `DATABASE_ERROR` recovery results with the operation's exact expected copy UUIDs. A durable
+  operation binding is also used when the legacy match-ID lookup is unavailable, and active match
+  IDs are collected before per-match rehydration.
+- `CardCustodyJournal.Entry` and `InMemoryCardCustodyJournal.transition` require exact one-to-one
+  escrow snapshot coverage for `RETURNED` before checking complete-restored idempotence. Existing
+  exact-snapshot and complete-restored `ABORTED` invariants remain enforced.
+- SQLite reservation hydration decodes authoritative copy UUIDs before owner/status/snapshot
+  fields and wraps invalid owner, status, UUID, null, missing, duplicate, and unresolved
+  reservation data in `CustodyIntegrityException`. The exception implements a package-neutral
+  custody integrity contract carrying the operation UUID and all copy UUIDs parsed so far.
+- SQLite open-operation enumeration now returns raw nonterminal/unknown-status identities without
+  hydrating rows first; inventory hydration leaves malformed entries out of its cache so startup
+  recovery can report their structured identity instead of treating them as absent.
+
+### TDD and focused verification
+
+Focused red command after adding active-status, unknown-status, structured-identity, exact-RETURNED,
+and malformed-reservation regressions:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest
+```
+
+Exact red result:
+
+```text
+> Task :test FAILED
+MatchApplicationServiceTest > startupReportsUnknownActiveBoundStatusWithDurableCopyIds() FAILED
+MatchApplicationServiceTest > inMemoryReturnedRequiresExactEscrowSnapshotsBeforeIdempotence() FAILED
+MatchApplicationServiceTest > startupPreservesEveryActiveBoundNonterminalStatus() FAILED
+MatchApplicationServiceTest > returnedEntryRequiresExactEscrowSnapshots() FAILED
+MatchApplicationServiceTest > startupPropagatesStructuredReservationIdentityFailure() FAILED
+99 tests completed, 5 failed
+FAILURE: Build failed with an exception.
+```
+
+Focused green command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 1 executed, 3 up-to-date
+```
+
+The final focused run selected application, SQLite custody, and inventory custody tests and
+completed successfully. SQLite emitted the existing JVM restricted-native-access warning. No
+formatter, linter, project-wide build, or project-wide test suite was run.
