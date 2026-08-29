@@ -235,3 +235,49 @@ adjustment is `26c5c53` (`fix: preserve active custody on startup`); the precedi
 adjustment is `1d16dd3` with the same required subject.
 The preceding report commit is `6f8894a`; this update is report-only.
 No formatter, linter, project-wide build, or project-wide test suite was run.
+## Task 6 durable identity and custody correction
+
+Implementation commit: `341bc4f` (`fix: enforce durable start identity`).
+
+### Corrective coverage
+
+- Startup escrow reconciliation keeps an `ESCROWED` operation bound to an active durable match,
+  while orphaned `PREPARED`, `ESCROWED`, and `RETURN_PENDING` operations are recovered independently.
+- Start retries now require a versioned durable `match_start_bindings` row containing the request
+  identity, seat owners, ordered custody copy UUIDs, and both operation UUIDs. SQLite and
+  reconstructed application services compare this binding before returning the existing revision-0
+  state; swapped operation IDs and changed DRAFT empty-custody plans are rejected.
+- Custody operation binding metadata is read from the durable journal rather than a process-local
+  operation cache, and explicit inventory restoration is package-private and verifies the owner's
+  live inventory identity.
+- Cross-seat physical UUID overlap is rejected before reservation and by `MatchEngine.start`.
+
+### TDD and focused verification
+
+The focused red command was:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact red result after adding the overlap regression and before its implementation:
+
+```text
+> Task :test FAILED
+MatchApplicationServiceTest > overlappingSeatCopiesAreRejectedBeforeReservation() FAILED
+68 tests completed, 1 failed, 4 skipped
+FAILURE: Build failed with an exception.
+```
+
+The same focused command passed after implementation:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 3 executed, 2 up-to-date
+```
+
+The final focused result selected 69 tests: 65 executed successfully and 4
+`CardItemCodecTest` tests were assumption-skipped because Paper's item registry requires a running
+Paper server. SQLite emitted only the JVM restricted-native-access warning. No formatter, linter,
+project-wide build, or project-wide test suite was run.
