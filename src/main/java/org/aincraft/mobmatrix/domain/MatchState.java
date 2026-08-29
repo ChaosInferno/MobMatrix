@@ -37,6 +37,7 @@ public final class MatchState {
   private final RandomTranscript transcript;
   private final Map<PlayerSeat, DraftOfferings.SeatOffers> draftOfferings;
   private final Map<PlayerSeat, DraftOfferings.Selection> draftSelections;
+  private final Set<CardCopyId> houseOwnedCopies;
   private final Map<PlayerSeat, CardCopyId> chaosChoices;
 
   MatchState(MatchId matchId, CardCatalog catalog, MatchRules rules, Board board,
@@ -84,6 +85,13 @@ public final class MatchState {
     this.consecutiveDraws = consecutiveDraws;
     this.draftOfferings = Map.copyOf(Objects.requireNonNull(draftOfferings));
     this.draftSelections = Map.copyOf(Objects.requireNonNull(draftSelections));
+    Set<CardCopyId> houseCopies = new HashSet<>();
+    for (DraftOfferings.SeatOffers seatOffers : this.draftOfferings.values()) {
+      for (DraftOfferings.Offering offering : seatOffers.offerings()) {
+        for (CardCopy copy : offering.cards()) houseCopies.add(copy.copyId());
+      }
+    }
+    this.houseOwnedCopies = Set.copyOf(houseCopies);
     this.chaosChoices = Map.copyOf(Objects.requireNonNull(chaosChoices));
   }
 
@@ -148,6 +156,7 @@ public final class MatchState {
   public DraftOfferings.Selection draftSelection(PlayerSeat seat) {
     return draftSelections.get(Objects.requireNonNull(seat));
   }
+  public Set<CardCopyId> houseOwnedCopies() { return houseOwnedCopies; }
   public Map<PlayerSeat, CardCopyId> chaosChoices() { return chaosChoices; }
   public CardCopyId chaosChoice(PlayerSeat seat) { return chaosChoices.get(Objects.requireNonNull(seat)); }
   Map<PlayerSeat, Set<CardCopyId>> revealedCardsMap() { return revealedCards; }
@@ -157,10 +166,12 @@ public final class MatchState {
     for (PlayerSeat seat : PlayerSeat.values()) result.put(seat, new ArrayList<>());
     for (PlayerSeat seat : PlayerSeat.values()) {
       for (HandCard card : hand(seat)) {
-        result.get(temporarySwapOwners.getOrDefault(card.copyId(), seat)).add(card.copy());
+        if (!houseOwnedCopies.contains(card.copyId())) {
+          result.get(temporarySwapOwners.getOrDefault(card.copyId(), seat)).add(card.copy());
+        }
       }
     }
-    for (Board.Cell cell : board.cells()) if (cell != null) {
+    for (Board.Cell cell : board.cells()) if (cell != null && !houseOwnedCopies.contains(cell.copy().copyId())) {
       result.get(temporarySwapOwners.getOrDefault(cell.copy().copyId(), cell.owner())).add(cell.copy());
     }
     EnumMap<PlayerSeat, List<CardCopy>> immutable = new EnumMap<>(PlayerSeat.class);

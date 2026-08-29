@@ -69,10 +69,6 @@ public final class DraftOfferings {
       }
     }
 
-    /** Source-compatible constructor; use select(SeatOffers, ...) to establish provenance. */
-    public Selection(PlayerSeat seat, List<Integer> offeringChoices, Deck deck) {
-      this(seat, offeringChoices, deck.copies().subList(0, 3), deck, Map.of());
-    }
 
     public PlayerSeat seat() { return seat; }
     public List<Integer> offeringChoices() { return offeringChoices; }

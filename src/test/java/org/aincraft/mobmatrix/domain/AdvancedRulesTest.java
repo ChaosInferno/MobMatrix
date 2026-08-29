@@ -90,6 +90,65 @@ final class AdvancedRulesTest {
         () -> DraftOfferings.select(offers, List.of(playerCard, offers.offerings().get(1).cards().getFirst(),
             offers.offerings().get(2).cards().getFirst())));
   }
+  @Test
+  void draftSelectionHasNoPublicDeckCompatibilityConstructor() {
+    assertTrue(java.util.Arrays.stream(DraftOfferings.Selection.class.getConstructors())
+        .noneMatch(constructor -> java.util.Arrays.equals(constructor.getParameterTypes(),
+            new Class<?>[] {PlayerSeat.class, List.class, Deck.class})));
+  }
+
+  @Test
+  void randomSamplingIgnoresUnknownCopiesButRejectsInsufficientValidCopies() {
+    List<CardCopy> onePool = new ArrayList<>(deck(1).copies());
+    onePool.add(new CardCopy(new CardCopyId(new UUID(0, 999)), new CardId(999)));
+    MatchEngine.StartMatch unknownExtra = new MatchEngine.StartMatch(new MatchId("unknown-extra"),
+        deck(1), deck(6), catalog(), new RuleSet(Rule.RANDOM), 31L,
+        java.time.Instant.parse("2026-01-01T00:00:00Z"), onePool, deck(6).copies());
+    MatchEngine.MatchTransition accepted = MatchEngine.start(unknownExtra);
+    assertTrue(accepted.accepted());
+    assertTrue(accepted.state().hand(PlayerSeat.ONE).stream()
+        .allMatch(card -> card.cardId().value() <= 10));
+
+    List<CardCopy> fourValidOneUnknown = new ArrayList<>(deck(1).copies().subList(0, 4));
+    fourValidOneUnknown.add(new CardCopy(new CardCopyId(new UUID(0, 1000)), new CardId(999)));
+    MatchEngine.StartMatch insufficientValid = new MatchEngine.StartMatch(new MatchId("insufficient-valid"),
+        deck(1), deck(6), catalog(), new RuleSet(Rule.RANDOM), 32L,
+        java.time.Instant.parse("2026-01-01T00:00:00Z"), fourValidOneUnknown, deck(6).copies());
+    assertEquals(MatchErrorCode.RANDOM_INSUFFICIENT_POOL,
+        MatchEngine.start(insufficientValid).rejection().code());
+  }
+
+  @Test
+  void draftChoicesAreRecordedAndGeneratedCardsRemainHouseOwnedAtSettlement() {
+    MatchEngine.StartMatch start = new MatchEngine.StartMatch(new MatchId("draft-transcript"),
+        deck(1), deck(6), catalog(), new RuleSet(Rule.DRAFT), 33L,
+        java.time.Instant.parse("2026-01-01T00:00:00Z"), deck(1).copies(), deck(6).copies(),
+        List.of(0, 1, 2), List.of(2, 3, 4));
+    MatchState state = MatchEngine.start(start).state();
+    assertEquals(List.of(0, 1, 2), state.randomDecisions().stream()
+        .filter(decision -> decision.label().startsWith("draft-choice-ONE-"))
+        .map(RandomTranscript.Decision::selected).toList());
+    assertTrue(state.houseOwnedCopies().containsAll(state.hand(PlayerSeat.ONE).stream()
+        .map(HandCard::copyId).toList()));
+    assertTrue(state.settlementCopies().values().stream().flatMap(List::stream)
+        .noneMatch(copy -> state.houseOwnedCopies().contains(copy.copyId())));
+  }
+
+  @Test
+  void comboCaptureEventsAreRowMajorWhileSourcesRemainCombo() {
+    Board board = Board.empty()
+        .place(Square.NORTH_WEST, copy(4), PlayerSeat.TWO)
+        .place(Square.NORTH_EAST, copy(4), PlayerSeat.TWO)
+        .place(Square.WEST, copy(5), PlayerSeat.TWO)
+        .place(Square.EAST, copy(5), PlayerSeat.TWO);
+    PlacementResolver.Resolution result = PlacementResolver.resolve(board, catalog(),
+        new RuleSet(Rule.SAME, Rule.COMBO), copy(5), PlayerSeat.ONE, Square.CENTER);
+    assertEquals(List.of(0, 2, 3, 5), result.captures().stream()
+        .map(capture -> capture.square().index()).toList());
+    assertEquals(List.of(PlacementResolver.CaptureSource.COMBO, PlacementResolver.CaptureSource.COMBO,
+        PlacementResolver.CaptureSource.SAME, PlacementResolver.CaptureSource.SAME),
+        result.captures().stream().map(PlacementResolver.Capture::source).toList());
+  }
 
   @Test
   void randomStartRejectsInsufficientAndDuplicatePhysicalPools() {

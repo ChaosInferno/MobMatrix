@@ -114,14 +114,16 @@ public final class MatchEngine {
         draftOffers.put(PlayerSeat.TWO, twoOffers);
         DraftOfferings.Selection oneSelection = DraftOfferings.select(oneOffers, start.oneDraftChoices());
         DraftOfferings.Selection twoSelection = DraftOfferings.select(twoOffers, start.twoDraftChoices());
+        recordDraftChoices(transcript, PlayerSeat.ONE, oneSelection.offeringChoices());
+        recordDraftChoices(transcript, PlayerSeat.TWO, twoSelection.offeringChoices());
         draftSelections.put(PlayerSeat.ONE, oneSelection);
         draftSelections.put(PlayerSeat.TWO, twoSelection);
         oneDeck = oneSelection.deck();
         twoDeck = twoSelection.deck();
       }
       if (activeRules.has(Rule.RANDOM)) {
-        oneDeck = randomDeck(start.oneInventory(), transcript, "random-one");
-        twoDeck = randomDeck(start.twoInventory(), transcript, "random-two");
+        oneDeck = randomDeck(start.oneInventory(), start.catalog(), transcript, "random-one");
+        twoDeck = randomDeck(start.twoInventory(), start.catalog(), transcript, "random-two");
       }
     } catch (IllegalArgumentException exception) {
       return startRejected(activeRules.has(Rule.DRAFT) ? MatchErrorCode.DRAFT_INVALID_SELECTION
@@ -185,13 +187,29 @@ public final class MatchEngine {
     return usable < 5 ? MatchErrorCode.RANDOM_INSUFFICIENT_POOL : null;
   }
 
-  private static Deck randomDeck(List<CardCopy> inventory, RandomTranscript transcript, String label) {
-    List<CardCopy> available = new ArrayList<>(inventory);
+  private static Deck randomDeck(List<CardCopy> inventory, CardCatalog catalog,
+      RandomTranscript transcript, String label) {
+    List<CardCopy> available = new ArrayList<>();
+    for (CardCopy copy : inventory) {
+      try {
+        catalog.require(copy.cardId());
+        available.add(copy);
+      } catch (IllegalArgumentException ignored) {
+        // Setup validation permits unknown inventory entries but RANDOM cannot play them.
+      }
+    }
     List<CardCopy> selected = new ArrayList<>();
     for (int index = 0; index < 5; index++) {
       selected.add(available.remove(transcript.nextInt(label + "-" + index, available.size())));
     }
     return new Deck(selected);
+  }
+ 
+  private static void recordDraftChoices(RandomTranscript transcript, PlayerSeat seat,
+      List<Integer> choices) {
+    for (int index = 0; index < choices.size(); index++) {
+      transcript.record("draft-choice-" + seat + "-" + index, 5, choices.get(index));
+    }
   }
 
   private static Set<CardCopyId> selectRevealed(List<HandCard> hand, PlayerSeat seat,

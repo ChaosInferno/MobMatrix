@@ -130,6 +130,9 @@ public final class PlacementResolver {
         }
       }
     }
+    captures.sort(Comparator.comparingInt(capture -> capture.square().index()));
+    events.clear();
+    captures.forEach(capture -> events.add(capture.source().name()));
     return new Resolution(resultBoard, captures, events, values);
   }
 
