@@ -879,3 +879,75 @@ BUILD SUCCESSFUL in 4s
 SQLite emitted the JVM restricted-native-access warning; it did not fail the focused
 selection. No formatter, linter, project-wide build, or project-wide test suite was
 run.
+
+## Task 6 final persistence-integrity fixes
+
+### Status
+
+Implemented and committed as `5750a93` (`fix: close persistence integrity gaps`).
+Initial-save rejection and exception paths now re-read durable match state, start binding, and
+exact ESCROWED custody bindings before cleanup. A matching concurrent winner is returned as the
+active state; unavailable or ambiguous durable reads report `DATABASE_ERROR` and leave custody
+for startup recovery. Apply persistence failures retain their `STALE_REVISION`,
+`DATABASE_ERROR`, or `INVALID_STATE` classification. Snapshot decoding rejects active HOUSE
+copies outside authoritative Draft offerings, enforces current-seat-only CHAOS choices (with
+the empty-current-hand exception), and SQLite rehydration rejects embedded/row match-ID
+mismatches.
+
+### TDD and focused verification
+
+The focused adapter/domain/bot command was run red after adding the initial regressions:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact initial red output:
+
+```text
+> Task :test FAILED
+
+MatchApplicationServiceTest > applyPreservesDatabaseAndInvalidStateSaveFailures() FAILED
+    org.opentest4j.AssertionFailedError at MatchApplicationServiceTest.java:111
+
+MatchApplicationServiceTest > rejectedInitialSaveKeepsConcurrentMatchingWinnerCustody() FAILED
+    org.opentest4j.AssertionFailedError at MatchApplicationServiceTest.java:130
+
+104 tests completed, 2 failed, 4 skipped
+```
+
+After the thrown-save race regression was added, the focused command was red before its
+production catch-path correction:
+
+```text
+> Task :test FAILED
+
+MatchApplicationServiceTest > thrownInitialSaveKeepsConcurrentMatchingWinnerCustody() FAILED
+    org.opentest4j.AssertionFailedError at MatchApplicationServiceTest.java:149
+
+110 tests completed, 1 failed, 4 skipped
+```
+
+Exact final green output:
+
+```text
+> Task :test
+
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+The focused selection's four Paper-registry codec tests remain assumption-skipped because no
+running Paper server is available. SQLite emitted only the JVM restricted-native-access warning.
+No formatter, linter, project-wide build, or project-wide test suite was run.
+
+### Corrective coverage
+
+- Initial-save rejection and thrown-save race regressions verify matching durable winners are
+  returned without `returnCopies`; ambiguous reads preserve custody and report database failure.
+- Apply regressions verify database and invalid-state save failures are not collapsed into stale.
+- Snapshot regressions cover non-Draft HOUSE hand copies, opponent and missing current-seat CHAOS
+  choices, valid empty-current-hand CHAOS snapshots, and embedded/row match-ID mismatch through
+  both `findState` and direct `rehydrate`.
+- Legitimate Draft offering references remain accepted, while non-authoritative active HOUSE
+  copies are rejected before executable state exposure.
