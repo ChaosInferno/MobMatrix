@@ -1554,3 +1554,61 @@ BUILD SUCCESSFUL in 2s
 The focused runs emitted only the existing SQLite JVM restricted-native-access warning. Paper
 codec tests that require a running Paper item registry remain assumption-skipped in this
 environment. No formatter, linter, project-wide build, or project-wide test suite was run.
+
+# Task 6 final startup/journal custody integrity fixes
+
+## Status
+
+Implemented and committed as `785e7a6` (`fix: harden startup custody recovery`).
+
+### Corrective coverage
+
+- `recoverStartup` now records a `MatchFailure(matchId, failure)` for every empty or throwing
+  match rehydration. Active match IDs are collected before rehydration, so an ESCROWED operation
+  bound to a match whose snapshot is malformed remains protected while other matches continue.
+- Overdue timeout application failures are recorded with the match ID and typed custody failure;
+  the unadvanced state is not returned in the successful recovered-match list. Accepted timeout
+  successors remain the only exposed state.
+- SQLite reservation hydration requires exact one-to-one escrow snapshots for every
+  PREPARED, ESCROWED, RETURN_PENDING, RETURNED, and ABORTED row. Malformed rows throw the typed
+  `CustodyIntegrityException`, retaining the operation UUID and expected copy UUIDs.
+- SQLite and in-memory ABORTED transitions validate exact escrow snapshot coverage before status
+  idempotence, including RETURNED-to-ABORTED and same-status requests. Shared journal entry
+  validation also rejects duplicate or incomplete ABORTED snapshot coverage.
+
+## TDD and focused verification
+
+Focused red command, before the startup/journal implementation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest
+```
+
+Exact red result:
+
+```text
+> Task :compileTestJava FAILED
+MatchApplicationServiceTest.java:222: error: cannot find symbol
+  symbol:   method assertThrows(...)
+SqliteCustodyTest.java:113: error: cannot find symbol
+  symbol:   class CustodyIntegrityException
+3 errors
+FAILURE: Build failed with an exception.
+```
+
+Focused green command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 3 executed, 1 up-to-date
+```
+
+The focused run emitted only the existing SQLite JDBC restricted-native-access warning. No
+formatter, linter, project-wide build, or project-wide test suite was run.
