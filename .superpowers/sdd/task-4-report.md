@@ -2,7 +2,7 @@
 
 Status: COMPLETE
 
-Commit: `feat: implement Triple Triad advanced rules`
+Commit: `80ed178` (`feat: implement Triple Triad advanced rules`)
 
 ## Focused TDD verification
 
