@@ -1475,3 +1475,82 @@ warning. No formatter, linter, project-wide build, or project-wide suite was run
 ### Implementation commit
 
 `fix: authenticate CAS predecessor`
+
+# Task 6 final custody completion and movement fixes
+
+## Status
+
+Implemented and committed as `2e907c6` (`fix: enforce custody completion`).
+
+### Corrective coverage
+
+- Cleanup now preserves every planned operation copy UUID as both pending and missing when
+  `returnCopies` (including an uncertain enumeration/return path) throws after prepare or escrow
+  may have accepted. Cleanup returns empty lists only when a successful durable
+  `MISMATCHED_OPERATION` result has an empty expected set. The existing concurrent-winner
+  no-cleanup path remains unchanged.
+- `RETURNED` transitions in the in-memory and SQLite journals require the durable restored-copy
+  ledger to contain every reserved UUID before checking same-status idempotence. Shared journal
+  entry validation and SQLite hydration also reject malformed terminal rows.
+- Inventory restoration now re-scans every reserved UUID, including UUIDs already recorded in the
+  restored ledger, and requires exact serialized bytes and original owner. Missing or changed
+  cards are reinserted/replaced from the validated escrow snapshot or remain `RETURN_PENDING` with
+  durable recovery. Ambiguous duplicate/counterfeit scans keep all snapshots pending until a clean
+  scan can verify them.
+- `CardInventoryService.handlePlayerInteractEntity` is a primary-thread adapter handler that
+  cancels interactions targeting `ItemFrame` (including item-frame subtypes) when either hand
+  contains a reserved card. Ordinary entity interactions are not cancelled. No Paper listener
+  existed in this module, so the adapter method remains exposed for Task 7 wiring.
+
+## TDD and focused verification
+
+Focused red command after adding the cleanup, terminal-transition, restoration identity, and
+ItemFrame guard regressions:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest
+```
+
+Exact red result before production changes:
+
+```text
+> Task :compileTestJava FAILED
+CardInventoryServiceTest.java:161: error: cannot find symbol
+    method exactItemMatchesSnapshot(ReadResult,CardCopyId,CopyOwner,byte[],byte[])
+CardInventoryServiceTest.java:173: error: cannot find symbol
+    method shouldCancelItemFrameInteraction(boolean,boolean,boolean)
+8 errors
+FAILURE: Build failed with an exception.
+```
+
+Focused green command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+Required focused adapter/domain/bot regression command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 1 executed, 3 up-to-date
+```
+
+The focused runs emitted only the existing SQLite JVM restricted-native-access warning. Paper
+codec tests that require a running Paper item registry remain assumption-skipped in this
+environment. No formatter, linter, project-wide build, or project-wide test suite was run.
