@@ -1773,9 +1773,7 @@ Focused green command:
 cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.malformedTerminalRowsAreEnumeratedForStartupValidation --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.unknownOrUnprovenTerminalCopyCannotBeReused --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.migrationRecreatesCopyGuardWithTerminalProof --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.inMemoryRejectsActiveCopyOverlapButAllowsProvenTerminalReuse --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest.malformedReservedIdentityCannotMove
 ```
 
-```text
-BUILD SUCCESSFUL in 2s
-5 tests completed, 1 skipped
+BUILD SUCCESSFUL in 1s
 ```
 
 The affected storage and inventory suites were also run together and passed:
@@ -1788,3 +1786,14 @@ BUILD SUCCESSFUL in 2s
 
 The Paper item regression remains assumption-skipped because this environment has no running Paper
 item registry. No formatter, linter, or project-wide test suite was run.
+
+Required focused verification set (including application, domain, and bot suites):
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+> Task :test
+BUILD SUCCESSFUL in 5s
+```
+
+Implementation commit: `69625e4` (`fix: reject malformed reservation reuse`).
+Prior report commit: `c482db5` (`docs: record malformed reservation reuse verification`).
