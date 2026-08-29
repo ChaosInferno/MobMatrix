@@ -208,6 +208,7 @@ public final class MatchStateSnapshotCodec {
       for (int index = 0; index < 9; index++) {
         if (!in.readBoolean()) continue;
         CardCopy copy = readCopy(in);
+        catalog.require(copy.cardId());
         CardId cardId = new CardId(in.readInt());
         if (!copy.cardId().equals(cardId)) throw new IllegalArgumentException("board card identity mismatch");
         PlayerSeat owner = PlayerSeat.valueOf(in.readUTF());
@@ -229,7 +230,11 @@ public final class MatchStateSnapshotCodec {
         for (int j = in.readInt(); j > 0; j--) {
           UUID offeringId = readUuid(in);
           List<CardCopy> cards = new ArrayList<>();
-          for (int k = in.readInt(); k > 0; k--) cards.add(readCopy(in));
+          for (int k = in.readInt(); k > 0; k--) {
+            CardCopy copy = readCopy(in);
+            catalog.require(copy.cardId());
+            cards.add(copy);
+          }
           seatOfferings.add(new DraftOfferings.Offering(offeringId, cards));
         }
         offerings.put(seat, new DraftOfferings.SeatOffers(seat, seatOfferings));
@@ -240,9 +245,17 @@ public final class MatchStateSnapshotCodec {
         List<Integer> choices = new ArrayList<>();
         for (int j = in.readInt(); j > 0; j--) choices.add(in.readInt());
         List<CardCopy> selected = new ArrayList<>();
-        for (int j = in.readInt(); j > 0; j--) selected.add(readCopy(in));
+        for (int j = in.readInt(); j > 0; j--) {
+          CardCopy copy = readCopy(in);
+          catalog.require(copy.cardId());
+          selected.add(copy);
+        }
         List<CardCopy> deckCards = new ArrayList<>();
-        for (int j = in.readInt(); j > 0; j--) deckCards.add(readCopy(in));
+        for (int j = in.readInt(); j > 0; j--) {
+          CardCopy copy = readCopy(in);
+          catalog.require(copy.cardId());
+          deckCards.add(copy);
+        }
         Map<CardCopyId, UUID> provenance = new HashMap<>();
         for (int j = in.readInt(); j > 0; j--) provenance.put(new CardCopyId(readUuid(in)), readUuid(in));
         selections.put(seat, DraftOfferings.Selection.restore(seat, choices, selected,
