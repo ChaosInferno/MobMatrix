@@ -96,10 +96,8 @@ public final class MatchEngine {
     }
 
     if (activeRules.has(Rule.RANDOM)) {
-      MatchErrorCode oneError = validateRandomPool(start.oneInventory(), start.catalog());
-      if (oneError != null) return startRejected(oneError, oneError.name());
-      MatchErrorCode twoError = validateRandomPool(start.twoInventory(), start.catalog());
-      if (twoError != null) return startRejected(twoError, twoError.name());
+      MatchErrorCode randomError = validateRandomPools(start.oneInventory(), start.twoInventory(), start.catalog());
+      if (randomError != null) return startRejected(randomError, randomError.name());
     }
 
     Map<PlayerSeat, DraftOfferings.SeatOffers> draftOffers = new EnumMap<>(PlayerSeat.class);
@@ -172,11 +170,24 @@ public final class MatchEngine {
     return start(configured);
   }
 
-  private static MatchErrorCode validateRandomPool(List<CardCopy> inventory, CardCatalog catalog) {
+  private static MatchErrorCode validateRandomPools(List<CardCopy> oneInventory,
+      List<CardCopy> twoInventory, CardCatalog catalog) {
     Set<CardCopyId> ids = new HashSet<>();
+    try {
+      int oneUsable = countUsableRandomCopies(oneInventory, catalog, ids);
+      int twoUsable = countUsableRandomCopies(twoInventory, catalog, ids);
+      if (oneUsable < 5 || twoUsable < 5) return MatchErrorCode.RANDOM_INSUFFICIENT_POOL;
+      return null;
+    } catch (DuplicateRandomCopyException duplicate) {
+      return MatchErrorCode.RANDOM_DUPLICATE_COPY;
+    }
+  }
+
+  private static int countUsableRandomCopies(List<CardCopy> inventory, CardCatalog catalog,
+      Set<CardCopyId> ids) {
     int usable = 0;
     for (CardCopy copy : inventory) {
-      if (copy == null || !ids.add(copy.copyId())) return MatchErrorCode.RANDOM_DUPLICATE_COPY;
+      if (copy == null || !ids.add(copy.copyId())) throw new DuplicateRandomCopyException();
       try {
         catalog.require(copy.cardId());
         usable++;
@@ -184,8 +195,10 @@ public final class MatchEngine {
         // An unknown definition is not a usable physical copy.
       }
     }
-    return usable < 5 ? MatchErrorCode.RANDOM_INSUFFICIENT_POOL : null;
+    return usable;
   }
+
+  private static final class DuplicateRandomCopyException extends RuntimeException {}
 
   private static Deck randomDeck(List<CardCopy> inventory, CardCatalog catalog,
       RandomTranscript transcript, String label) {

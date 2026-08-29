@@ -165,6 +165,27 @@ final class AdvancedRulesTest {
     assertEquals(MatchErrorCode.RANDOM_DUPLICATE_COPY, MatchEngine.start(duplicateStart).rejection().code());
   }
 
+  @Test
+  void randomStartRejectsPhysicalCopySharedAcrossSeatInventories() {
+    CardCopy shared = deck(1).copies().getFirst();
+    List<CardCopy> onePool = new ArrayList<>(deck(1).copies());
+    List<CardCopy> twoPool = new ArrayList<>(deck(6).copies());
+    twoPool.set(0, shared);
+    List<CardCopy> oneBefore = List.copyOf(onePool);
+    List<CardCopy> twoBefore = List.copyOf(twoPool);
+
+    MatchEngine.StartMatch start = new MatchEngine.StartMatch(new MatchId("cross-seat-duplicate"),
+        deck(1), deck(6), catalog(), new RuleSet(Rule.RANDOM), 34L,
+        java.time.Instant.parse("2026-01-01T00:00:00Z"), onePool, twoPool);
+
+    MatchEngine.MatchTransition transition = MatchEngine.start(start);
+
+    assertTrue(transition.rejected());
+    assertEquals(MatchErrorCode.RANDOM_DUPLICATE_COPY, transition.rejection().code());
+    assertEquals(oneBefore, onePool);
+    assertEquals(twoBefore, twoPool);
+  }
+
  
   @Test
   void orderAndChaosProjectionExposeExactlyThePlayableCopy() {
