@@ -164,9 +164,9 @@ No formatter, linter, project-wide build, or project-wide test suite was run. SQ
 
 ## Task 6 final startup/retry corrections
 
-Latest implementation commit: `c2458e1` (`fix: preserve active custody on startup`).
-This report correction supersedes the earlier third-review report sections; the report itself is
-committed separately after this implementation commit.
+Implementation commits for this correction: `c2458e1` (`fix: preserve active custody on startup`) and
+`61e14c3` (`fix: preserve active custody on startup`, final DRAFT owner/copy validation repair).
+The preceding report/source combined commit is `aff8144`; this report-only correction follows it.
 
 ### Corrective coverage
 
