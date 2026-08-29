@@ -235,7 +235,7 @@ adjustment is `26c5c53` (`fix: preserve active custody on startup`); the precedi
 adjustment is `1d16dd3` with the same required subject.
 The preceding report commit is `6f8894a`; this update is report-only.
 No formatter, linter, project-wide build, or project-wide test suite was run.
-## Task 6 durable identity and custody correction
+## Task 6 durable identity and custody correction (implementation `341bc4f`, report `920a4da`)
 
 Implementation commit: `341bc4f` (`fix: enforce durable start identity`).
 
