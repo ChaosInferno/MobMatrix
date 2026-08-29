@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.Set;
@@ -147,5 +148,31 @@ final class CardInventoryServiceTest {
         CardItemCodec.ReadResult.invalid(CardItemCodec.InvalidReason.INVALID_SCHEMA), true));
     assertTrue(!CardInventoryService.isCounterfeit(
         CardItemCodec.ReadResult.invalid(CardItemCodec.InvalidReason.INVALID_SCHEMA), false));
+  }
+
+  @Test
+  void restoreRequiresExactOwnerAndSerializedBytes() {
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardItemData data = new CardItemData(new CardId(1), copy, owner, 1, "marker", "Card");
+    CardItemCodec.ReadResult valid = CardItemCodec.ReadResult.valid(data);
+    byte[] exact = {1, 2, 3};
+
+    assertTrue(CardInventoryService.exactItemMatchesSnapshot(valid, copy, owner, exact, exact));
+    assertFalse(CardInventoryService.exactItemMatchesSnapshot(valid, copy, owner,
+        new byte[] {1, 2, 4}, exact));
+    assertFalse(CardInventoryService.exactItemMatchesSnapshot(valid, copy,
+        CopyOwner.house(), exact, exact));
+    assertFalse(CardInventoryService.exactItemMatchesSnapshot(
+        CardItemCodec.ReadResult.invalid(CardItemCodec.InvalidReason.INVALID_INTEGRITY),
+        copy, owner, exact, exact));
+  }
+
+  @Test
+  void itemFrameGuardOnlyCancelsReservedCards() {
+    assertTrue(CardInventoryService.shouldCancelItemFrameInteraction(true, true, false));
+    assertTrue(CardInventoryService.shouldCancelItemFrameInteraction(true, false, true));
+    assertFalse(CardInventoryService.shouldCancelItemFrameInteraction(true, false, false));
+    assertFalse(CardInventoryService.shouldCancelItemFrameInteraction(false, true, true));
   }
 }

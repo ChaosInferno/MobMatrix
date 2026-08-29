@@ -370,6 +370,63 @@ final class SqliteCustodyTest {
   }
 
   @Test
+  void custodyJournalsRejectReturnedUntilEveryCopyIsRestored() throws Exception {
+    CardCopyId first = new CardCopyId(UUID.randomUUID());
+    CardCopyId second = new CardCopyId(UUID.randomUUID());
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> copies = List.of(first, second);
+    List<SerializedItemSnapshot> snapshots = List.of(
+        new SerializedItemSnapshot(first, new byte[] {1}),
+        new SerializedItemSnapshot(second, new byte[] {2}));
+
+    var memory = new org.aincraft.mobmatrix.application.InMemoryCardCustodyJournal();
+    UUID memoryOperation = UUID.randomUUID();
+    memory.prepare(memoryOperation, owner, copies, snapshots);
+    memory.transition(memoryOperation, OperationStatus.RETURN_PENDING);
+    assertThrows(IllegalStateException.class,
+        () -> memory.transition(memoryOperation, OperationStatus.RETURNED));
+    memory.markRestored(memoryOperation, first);
+    assertThrows(IllegalStateException.class,
+        () -> memory.transition(memoryOperation, OperationStatus.RETURNED));
+    memory.markRestored(memoryOperation, second);
+    memory.transition(memoryOperation, OperationStatus.RETURNED);
+    memory.transition(memoryOperation, OperationStatus.RETURNED);
+    assertThrows(IllegalArgumentException.class,
+        () -> new org.aincraft.mobmatrix.application.CardCustodyJournal.Entry(memoryOperation,
+            owner, copies, snapshots, OperationStatus.RETURNED, java.util.Set.of()));
+
+    var path = Files.createTempFile("mobmatrix-returned-invariant", ".sqlite");
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(first, new CardId(1), owner));
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(second, new CardId(2), owner));
+      UUID operation = UUID.randomUUID();
+      repository.prepare(operation, owner, copies, snapshots);
+      repository.transition(operation, OperationStatus.RETURN_PENDING);
+      assertThrows(IllegalStateException.class,
+          () -> repository.transition(operation, OperationStatus.RETURNED));
+      repository.markRestored(operation, first);
+      assertThrows(IllegalStateException.class,
+          () -> repository.transition(operation, OperationStatus.RETURNED));
+      repository.markRestored(operation, second);
+      repository.transition(operation, OperationStatus.RETURNED);
+      repository.transition(operation, OperationStatus.RETURNED);
+      assertEquals(OperationStatus.RETURNED,
+          repository.findReservation(operation).orElseThrow().status());
+      try (var delete = database.connection().prepareStatement(
+          "DELETE FROM reservation_restored WHERE operation_id = ? AND copy_uuid = ?")) {
+        delete.setString(1, operation.toString());
+        delete.setString(2, second.value().toString());
+        delete.executeUpdate();
+      }
+      assertThrows(IllegalStateException.class,
+          () -> repository.transition(operation, OperationStatus.RETURNED));
+      assertThrows(IllegalStateException.class, () -> repository.findReservation(operation));
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
   void legacyAbortedRowWithMissingSnapshotsIsNotHydratedAsComplete() throws Exception {
     var path = Files.createTempFile("mobmatrix-legacy-aborted", ".sqlite");
     UUID operation = UUID.randomUUID();

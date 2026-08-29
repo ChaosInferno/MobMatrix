@@ -61,6 +61,10 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
   @Override
   public synchronized void transition(UUID operationId, CardCustodyPort.OperationStatus status) {
     MutableEntry entry = require(operationId);
+    if (status == CardCustodyPort.OperationStatus.RETURNED
+        && !entry.restored.containsAll(entry.copyIds)) {
+      throw new IllegalStateException("cannot return custody with unresolved copies");
+    }
     if (status == CardCustodyPort.OperationStatus.ABORTED
         && !entry.restored.containsAll(entry.copyIds)) {
       throw new IllegalStateException("cannot abort custody with unresolved copies");

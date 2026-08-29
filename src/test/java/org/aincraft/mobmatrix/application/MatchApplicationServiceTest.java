@@ -1410,5 +1410,57 @@ final class MatchApplicationServiceTest {
     assertEquals(CardCustodyPort.Failure.INVALID_OWNER, result.failure());
     assertTrue(custody.calls.isEmpty());
   }
+  @Test
+  void cleanupRetainsExpectedCopiesWhenEnumerationAndReturnFail() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = copies();
+    CleanupThrowsAfterAcceptedCustody custody = new CleanupThrowsAfterAcceptedCustody();
+
+    MatchApplicationService.MatchStartResult result = new MatchApplicationService(custody,
+        new FailingInitialRepository()).start(new MatchApplicationService.StartMatchRequest(
+            match("cleanup-outage", oneOwner, oneCopies, twoOwner, twoCopies),
+            oneOwner, oneCopies, UUID.randomUUID(), twoOwner, twoCopies, UUID.randomUUID()));
+
+    assertFalse(result.accepted());
+    assertTrue(result.pendingRecoveryCopyIds().containsAll(oneCopies));
+    assertTrue(result.pendingRecoveryCopyIds().containsAll(twoCopies));
+    assertTrue(result.missingCopyIds().containsAll(oneCopies));
+    assertTrue(result.missingCopyIds().containsAll(twoCopies));
+  }
+
+  private static final class CleanupThrowsAfterAcceptedCustody implements CardCustodyPort {
+    @Override
+    public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
+      return PrepareResult.success(operationId, owner, copyIds, List.of());
+    }
+
+    @Override
+    public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId,
+        MatchId matchId) {
+      return PrepareResult.success(operationId, owner, copyIds, List.of());
+    }
+
+    @Override
+    public CustodyResult escrow(UUID operationId) {
+      return CustodyResult.success(operationId, OperationStatus.ESCROWED);
+    }
+
+    @Override
+    public ReturnResult returnCopies(UUID operationId) {
+      throw new IllegalStateException("custody enumeration and return unavailable");
+    }
+
+    @Override
+    public RecoveryResult recover(UUID operationId) {
+      return RecoveryResult.none(operationId);
+    }
+
+    @Override
+    public List<UUID> openOperationIds() {
+      throw new IllegalStateException("custody enumeration unavailable");
+    }
+  }
 }
 

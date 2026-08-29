@@ -447,24 +447,28 @@ public final class MatchApplicationService {
 
   private CleanupSummary cleanup(UUID operationId, List<CardCopyId> expected) {
     if (expected.isEmpty()) return new CleanupSummary(List.of(), List.of());
-    boolean known = false;
-    try {
-      known = custody.openOperationIds().contains(operationId);
-    } catch (RuntimeException ignored) {
-      // A lookup failure must not turn an unaccepted operation into phantom recovery.
-    }
     ReturnResult returned = null;
     try {
       returned = custody.returnCopies(operationId);
-      if (returned.failure() == Failure.MISMATCHED_OPERATION && returned.expectedCopyIds().isEmpty()) {
+      if (returned.failure() == Failure.MISMATCHED_OPERATION
+          && returned.expectedCopyIds().isEmpty()) {
+        // A successful durable mismatch with no expected copies proves this operation was never
+        // accepted, so reporting the planned UUIDs would manufacture phantom recovery.
         return new CleanupSummary(List.of(), List.of());
       }
       List<CardCopyId> pending = new ArrayList<>(returned.recoveryCopyIds());
       List<CardCopyId> missing = new ArrayList<>(returned.missingCopyIds());
+      if (returned.expectedCopyIds().isEmpty()) {
+        // A non-mismatch result with no durable identity cannot prove the operation was absent.
+        // Preserve every planned UUID rather than hiding accepted custody.
+        pending.addAll(expected);
+        missing.addAll(expected);
+      }
       if (returned.complete() || returned.status() == OperationStatus.PREPARED) {
         CustodyResult aborted = custody.abort(operationId);
         if (!aborted.accepted() || aborted.status() != OperationStatus.ABORTED) {
-          for (CardCopyId copyId : returned.expectedCopyIds()) {
+          for (CardCopyId copyId : returned.expectedCopyIds().isEmpty()
+              ? expected : returned.expectedCopyIds()) {
             if (!pending.contains(copyId)) pending.add(copyId);
           }
         }
@@ -472,10 +476,15 @@ public final class MatchApplicationService {
       return new CleanupSummary(pending, missing);
     } catch (RuntimeException exception) {
       if (returned != null) {
-        return new CleanupSummary(returned.expectedCopyIds(), returned.missingCopyIds());
+        List<CardCopyId> pending = new ArrayList<>(returned.expectedCopyIds());
+        List<CardCopyId> missing = new ArrayList<>(returned.missingCopyIds());
+        if (pending.isEmpty()) pending.addAll(expected);
+        if (missing.isEmpty()) missing.addAll(expected);
+        return new CleanupSummary(pending, missing);
       }
-      return known ? new CleanupSummary(expected, expected)
-          : new CleanupSummary(List.of(), List.of());
+      // prepare/escrow may already have accepted durable custody even when either enumeration or
+      // return failed; report the planned UUIDs for startup recovery.
+      return new CleanupSummary(expected, expected);
     }
   }
 

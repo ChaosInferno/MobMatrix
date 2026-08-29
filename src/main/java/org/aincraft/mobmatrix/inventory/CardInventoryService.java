@@ -452,6 +452,20 @@ public final class CardInventoryService implements CardCustodyPort {
     return reserved;
   }
 
+  /** Cancels rotation or placement interactions with item frames while holding reserved cards. */
+  public boolean handlePlayerInteractEntity(
+      org.bukkit.event.player.PlayerInteractEntityEvent event) {
+    requirePrimaryThread();
+    Objects.requireNonNull(event, "event is required");
+    boolean targetIsItemFrame = event.getRightClicked() instanceof org.bukkit.entity.ItemFrame;
+    boolean reservedMainHand = isReserved(event.getPlayer().getInventory().getItemInMainHand());
+    boolean reservedOffHand = isReserved(event.getPlayer().getInventory().getItemInOffHand());
+    boolean reserved = shouldCancelItemFrameInteraction(targetIsItemFrame, reservedMainHand,
+        reservedOffHand);
+    if (reserved) event.setCancelled(true);
+    return reserved;
+  }
+
   private boolean containsReserved(Inventory inventory) {
     Objects.requireNonNull(inventory, "inventory is required");
     for (ItemStack item : inventory.getContents()) {
@@ -494,54 +508,58 @@ public final class CardInventoryService implements CardCustodyPort {
     return ReturnResult.pending(operationId, copyIds, returned, pending, pending);
   }
   private ReturnResult restore(UUID operationId, PreparedOperation operation, Inventory inventory) {
-    List<CardCopyId> returned = new ArrayList<>(restored(operation));
+    // A restored ledger row records a prior successful insertion, not permanent proof that the
+    // item remains in the owner's inventory. Reconcile every reserved UUID against a fresh scan.
+    List<CardCopyId> returned = new ArrayList<>();
     Scan scan = scan(inventory);
     // Never acknowledge any copy while the scan is ambiguous. A duplicate UUID or invalid
     // identity-bearing item means there are multiple or untrusted physical candidates; leave
-    // every unresolved snapshot durable and pending until a later scan reconciles the inventory.
+    // every snapshot durable and pending until a later scan reconciles the inventory.
     if (scan.duplicate || scan.counterfeit) {
       return restoreAmbiguous(operationId, operation.owner, operation.copyIds, operation.snapshots,
-          operation.restored, journal);
+          Set.of(), journal);
     }
     List<CardCopyId> missing = new ArrayList<>();
     for (SerializedItemSnapshot snapshot : operation.snapshots) {
       CardCopyId copy = snapshot.copyId();
-      if (operation.restored.contains(copy)) continue;
       Located alreadyPresent = scan.cards.get(copy);
       if (alreadyPresent != null) {
+        byte[] currentBytes = serialize(alreadyPresent.item.clone());
+        if (exactItemMatchesSnapshot(CardItemCodec.ReadResult.valid(alreadyPresent.data), copy,
+            operation.owner, currentBytes, snapshot.bytes())) {
+          journal.markRestored(operationId, copy);
+          operation.restored.add(copy);
+          returned.add(copy);
+          continue;
+        }
         if (!alreadyPresent.data.owner().equals(operation.owner)) {
           journal.addRecovery(operationId, operation.owner, snapshot);
           missing.add(copy);
           continue;
         }
-        byte[] currentBytes = serialize(alreadyPresent.item.clone());
-        if (Arrays.equals(currentBytes, snapshot.bytes())) {
+        // Same UUID with changed metadata is not the escrowed physical card. Replace it
+        // with the durable bytes; never mark a modified item as restored.
+        ItemStack exact = validatedSnapshot(snapshot, operation.owner);
+        if (exact == null) {
+          journal.addRecovery(operationId, operation.owner, snapshot);
+          missing.add(copy);
+          continue;
+        }
+        inventory.setItem(alreadyPresent.slot, null);
+        Map<Integer, ItemStack> leftovers = inventory.addItem(exact);
+        if (leftovers.isEmpty()) {
           journal.markRestored(operationId, copy);
           operation.restored.add(copy);
           returned.add(copy);
         } else {
-          // Same UUID with changed metadata is not the escrowed physical card. Replace it
-          // with the durable bytes; never mark a modified item as restored.
-          ItemStack exact = validatedSnapshot(snapshot, operation.owner);
-          if (exact == null) {
-            journal.addRecovery(operationId, operation.owner, snapshot);
-            missing.add(copy);
-            continue;
-          }
-          inventory.setItem(alreadyPresent.slot, null);
-          Map<Integer, ItemStack> leftovers = inventory.addItem(exact);
-          if (leftovers.isEmpty()) {
-            journal.markRestored(operationId, copy);
-            operation.restored.add(copy);
-            returned.add(copy);
-          } else {
-            inventory.setItem(alreadyPresent.slot, alreadyPresent.item);
-            journal.addRecovery(operationId, operation.owner, snapshot);
-            missing.add(copy);
-          }
+          inventory.setItem(alreadyPresent.slot, alreadyPresent.item);
+          journal.addRecovery(operationId, operation.owner, snapshot);
+          missing.add(copy);
         }
         continue;
       }
+      // The UUID may already be in the durable restored ledger but absent after downtime. Try
+      // reinserting its exact snapshot rather than trusting that stale ledger row.
       ItemStack item = validatedSnapshot(snapshot, operation.owner);
       if (item == null) {
         journal.addRecovery(operationId, operation.owner, snapshot);
@@ -550,8 +568,6 @@ public final class CardInventoryService implements CardCustodyPort {
       }
       Map<Integer, ItemStack> leftovers = inventory.addItem(item);
       if (leftovers.isEmpty()) {
-        // Mark only after Paper accepts the exact serialized item. A restart then sees this UUID
-        // in the durable restored set and cannot insert a duplicate.
         journal.markRestored(operationId, copy);
         operation.restored.add(copy);
         returned.add(copy);
@@ -624,6 +640,19 @@ public final class CardInventoryService implements CardCustodyPort {
   }
   static boolean isCounterfeit(CardItemCodec.ReadResult result, boolean hasIdentity) {
     return !Objects.requireNonNull(result, "read result is required").isValid() && hasIdentity;
+  }
+  static boolean exactItemMatchesSnapshot(CardItemCodec.ReadResult result, CardCopyId copyId,
+      CopyOwner owner, byte[] actualBytes, byte[] snapshotBytes) {
+    return result != null && result.isValid() && copyId != null && owner != null
+        && actualBytes != null && snapshotBytes != null
+        && result.data().copyId().equals(copyId)
+        && result.data().owner().equals(owner)
+        && Arrays.equals(actualBytes, snapshotBytes);
+  }
+
+  static boolean shouldCancelItemFrameInteraction(boolean targetIsItemFrame,
+      boolean reservedMainHand, boolean reservedOffHand) {
+    return targetIsItemFrame && (reservedMainHand || reservedOffHand);
   }
 
   private static List<CardCopyId> exactCopies(List<CardCopyId> copies) {

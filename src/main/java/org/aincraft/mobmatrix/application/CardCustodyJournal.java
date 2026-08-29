@@ -54,6 +54,10 @@ public interface CardCustodyJournal {
       if (!copyIds.containsAll(restoredCopyIds)) {
         throw new IllegalArgumentException("restored copy is not reserved");
       }
+      if (status == CardCustodyPort.OperationStatus.RETURNED
+          && !restoredCopyIds.containsAll(copyIds)) {
+        throw new IllegalArgumentException("returned custody has unresolved copies");
+      }
       if (status == CardCustodyPort.OperationStatus.ABORTED) {
         Set<CardCopyId> snapshotIds = new java.util.HashSet<>();
         for (SerializedItemSnapshot snapshot : snapshots) {

@@ -300,7 +300,15 @@ public final class SqliteCardRepository implements CardCustodyJournal {
           && !hasExactSnapshots(reservation)) {
         throw new IllegalStateException("aborted custody is missing exact snapshots");
       }
+      if (reservation.status() == OperationStatus.RETURNED
+          && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
+        throw new IllegalStateException("cannot return custody with unresolved copies");
+      }
       if (reservation.status() == target) return;
+      if (target == OperationStatus.RETURNED
+          && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
+        throw new IllegalStateException("cannot return custody with unresolved copies");
+      }
       if (target == OperationStatus.ABORTED
           && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
         throw new IllegalStateException("cannot abort custody with unresolved copies");
@@ -453,6 +461,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
           try (var restoredRows = restoredQuery.executeQuery()) {
             while (restoredRows.next()) restored.add(new CardCopyId(UUID.fromString(restoredRows.getString(1))));
           }
+        }
+        if (status == OperationStatus.RETURNED
+            && !new HashSet<>(restored).containsAll(copies)) {
+          throw new IllegalStateException("cannot hydrate returned custody with unresolved copies");
         }
         if (status == OperationStatus.ABORTED
             && !new HashSet<>(restored).containsAll(copies)) {
