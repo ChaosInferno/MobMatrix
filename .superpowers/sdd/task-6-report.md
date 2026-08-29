@@ -77,3 +77,34 @@ The selected codec test class contains 4 tests and all 4 were skipped by its exp
 1. Paper `ItemStack` construction requires a running Paper registry implementation; this environment has no Paper server/MockBukkit registry, so all four codec tests were explicitly skipped rather than reported as executed.
 2. The SQLite JDBC dependency emits Java's restricted native-access warning under this JVM. The required focused tests still completed successfully.
 3. Startup rehydration requires the host lifecycle to provide a catalog resolver keyed by the persisted catalog snapshot ID; this is intentional so stale or incompatible definitions cannot be silently synthesized.
+
+## Task 6 second-review corrections
+
+Implementation commit: `b307ad7` (`fix: close custody recovery windows`)
+
+The required focused red command was run after adding the recovery and RANDOM regression tests:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact red result:
+
+```text
+> Task :test FAILED
+SqliteCustodyTest > markingRestoredClearsRecoveryInSameTransaction() FAILED
+53 tests completed, 1 failed, 4 skipped
+BUILD FAILED in 1s
+```
+
+Exact green result after implementation:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 3 executed, 1 up-to-date
+```
+
+Corrections cover byte-for-byte same-UUID restoration and replacement, one-transaction restored-ledger/recovery-row completion, PREPARED-to-RETURN_PENDING recovery after removal, explicit SWAP_OFFHAND protection, structured first-seat/start cleanup, pure-transition RANDOM selected UUID reservation, and omission of generated house-owned Draft copies from player custody. Recovery owner/FK validation and strict custody transitions remain transactional and idempotent.
+
+The final focused run still skipped the four Paper-registry codec tests because no running Paper registry is available; they are not executed proof. No formatter, linter, project-wide build, or project-wide suite was run.
