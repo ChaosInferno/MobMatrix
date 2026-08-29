@@ -27,6 +27,8 @@ java {
 dependencies {
     compileOnly(libs.paper.api)
     compileOnly(libs.mapgui.api)
+    testCompileOnly(libs.paper.api)
+    testRuntimeOnly(libs.paper.api)
     testImplementation(platform(libs.junit.bom))
     testImplementation(libs.junit.jupiter)
     testRuntimeOnly(libs.junit.launcher)

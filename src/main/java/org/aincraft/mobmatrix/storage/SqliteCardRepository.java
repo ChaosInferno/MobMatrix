@@ -1,0 +1,411 @@
+package org.aincraft.mobmatrix.storage;
+
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import org.aincraft.mobmatrix.application.CardCustodyPort;
+import org.aincraft.mobmatrix.application.CardCustodyPort.OperationStatus;
+import org.aincraft.mobmatrix.application.SerializedItemSnapshot;
+import org.aincraft.mobmatrix.domain.CardCopyId;
+import org.aincraft.mobmatrix.domain.CardId;
+import org.aincraft.mobmatrix.domain.CopyOwner;
+
+/** JDBC repository for card ledger, reservations, exact escrow bytes, and recovery rows. */
+public final class SqliteCardRepository {
+  private final Connection connection;
+
+  public SqliteCardRepository(Database database) {
+    this(Objects.requireNonNull(database, "database is required").connection());
+  }
+
+  public SqliteCardRepository(Connection connection) {
+    this.connection = Objects.requireNonNull(connection, "connection is required");
+  }
+
+  public void saveCopy(StoredCardCopy copy) {
+    Objects.requireNonNull(copy, "copy is required");
+    inTransaction(() -> {
+      try (var existing = connection.prepareStatement(
+          "SELECT catalog_id, owner_kind, owner_uuid FROM card_copies WHERE copy_uuid = ?")) {
+        existing.setString(1, copy.copyId().value().toString());
+        try (var rows = existing.executeQuery()) {
+          if (rows.next()) {
+            CopyOwner owner = readOwner(rows.getString(2), rows.getString(3));
+            if (rows.getInt(1) != copy.catalogId().value() || !owner.equals(copy.owner())) {
+              throw new IllegalStateException("copy UUID already belongs to another card or owner");
+            }
+            return;
+          }
+        }
+      }
+      try (var insert = connection.prepareStatement(
+          "INSERT INTO card_copies(copy_uuid, catalog_id, owner_kind, owner_uuid, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)")) {
+        insert.setString(1, copy.copyId().value().toString());
+        insert.setInt(2, copy.catalogId().value());
+        writeOwner(insert, 3, 4, copy.owner());
+        insert.executeUpdate();
+      }
+    });
+  }
+  public void saveCatalogSnapshot(CatalogSnapshot snapshot,
+      java.util.Collection<org.aincraft.mobmatrix.domain.CardDefinition> definitions) {
+    Objects.requireNonNull(snapshot, "snapshot is required");
+    Objects.requireNonNull(definitions, "definitions are required");
+    inTransaction(() -> {
+      try (var insert = connection.prepareStatement("""
+          INSERT INTO catalog_snapshots(snapshot_id, source, digest, created_at, metadata_json)
+          VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
+          ON CONFLICT(snapshot_id) DO UPDATE SET source = excluded.source, digest = excluded.digest,
+            metadata_json = excluded.metadata_json
+          """)) {
+        insert.setString(1, snapshot.snapshotId());
+        insert.setString(2, snapshot.source());
+        insert.setString(3, snapshot.digest());
+        insert.setString(4, snapshot.metadataJson());
+        insert.executeUpdate();
+      }
+      try (var cardInsert = connection.prepareStatement("""
+          INSERT INTO card_definitions(snapshot_id, catalog_id, public_number, name, stars, type,
+            top_value, right_value, bottom_value, left_value, sale_price)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(snapshot_id, catalog_id) DO UPDATE SET public_number = excluded.public_number,
+            name = excluded.name, stars = excluded.stars, type = excluded.type,
+            top_value = excluded.top_value, right_value = excluded.right_value,
+            bottom_value = excluded.bottom_value, left_value = excluded.left_value,
+            sale_price = excluded.sale_price
+          """)) {
+        for (var definition : definitions) {
+          cardInsert.setString(1, snapshot.snapshotId());
+          cardInsert.setInt(2, definition.id().value());
+          cardInsert.setString(3, definition.publicNumber());
+          cardInsert.setString(4, definition.name());
+          cardInsert.setInt(5, definition.stars());
+          cardInsert.setString(6, definition.type().name());
+          cardInsert.setInt(7, definition.top());
+          cardInsert.setInt(8, definition.right());
+          cardInsert.setInt(9, definition.bottom());
+          cardInsert.setInt(10, definition.left());
+          cardInsert.setInt(11, definition.salePrice());
+          cardInsert.addBatch();
+        }
+        cardInsert.executeBatch();
+      }
+    });
+  }
+
+  public Optional<CatalogSnapshot> findCatalogSnapshot(String snapshotId) {
+    try (var query = connection.prepareStatement(
+        "SELECT source, digest, metadata_json FROM catalog_snapshots WHERE snapshot_id = ?")) {
+      query.setString(1, Objects.requireNonNull(snapshotId));
+      try (var rows = query.executeQuery()) {
+        if (!rows.next()) return Optional.empty();
+        return Optional.of(new CatalogSnapshot(snapshotId, rows.getString(1), rows.getString(2), rows.getString(3)));
+      }
+    } catch (SQLException exception) {
+      throw failure(exception);
+    }
+  }
+
+
+  public Optional<StoredCardCopy> findCopy(CardCopyId copyId) {
+    Objects.requireNonNull(copyId, "copy id is required");
+    try (var query = connection.prepareStatement(
+        "SELECT catalog_id, owner_kind, owner_uuid FROM card_copies WHERE copy_uuid = ?")) {
+      query.setString(1, copyId.value().toString());
+      try (var rows = query.executeQuery()) {
+        if (!rows.next()) return Optional.empty();
+        return Optional.of(new StoredCardCopy(copyId, new CardId(rows.getInt(1)),
+            readOwner(rows.getString(2), rows.getString(3))));
+      }
+    } catch (SQLException exception) {
+      throw failure(exception);
+    }
+  }
+
+  public void prepare(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
+      List<SerializedItemSnapshot> snapshots) {
+    Objects.requireNonNull(operationId, "operation id is required");
+    Objects.requireNonNull(owner, "owner is required");
+    List<CardCopyId> copies = copyList(copyIds);
+    List<SerializedItemSnapshot> exactSnapshots = List.copyOf(Objects.requireNonNull(snapshots));
+    if (exactSnapshots.size() != copies.size()) {
+      throw new IllegalArgumentException("every reserved copy requires an exact item snapshot");
+    }
+    Set<CardCopyId> snapshotIds = new HashSet<>();
+    for (SerializedItemSnapshot snapshot : exactSnapshots) {
+      if (!snapshotIds.add(snapshot.copyId()) || !copies.contains(snapshot.copyId())) {
+        throw new IllegalArgumentException("snapshot copy does not match reservation");
+      }
+    }
+    inTransaction(() -> {
+      Reservation existing = findReservationInternal(operationId);
+      if (existing != null) {
+        if (!existing.owner().equals(owner) || !existing.copyIds().equals(copies)) {
+          throw new IllegalStateException("operation does not match existing reservation");
+        }
+        return;
+      }
+      for (CardCopyId copy : copies) {
+        StoredCardCopy ledger = findCopyInternal(copy);
+        if (ledger == null) throw new IllegalStateException("unknown card copy: " + copy);
+        if (!ledger.owner().equals(owner)) throw new IllegalStateException("copy owner mismatch");
+      }
+      try (var insert = connection.prepareStatement(
+          "INSERT INTO reservations(operation_id, owner_kind, owner_uuid, status, created_at, updated_at) VALUES (?, ?, ?, 'PREPARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")) {
+        insert.setString(1, operationId.toString());
+        writeOwner(insert, 2, 3, owner);
+        insert.executeUpdate();
+      }
+      try (var insert = connection.prepareStatement(
+          "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES (?, ?)")) {
+        for (CardCopyId copy : copies) {
+          insert.setString(1, operationId.toString());
+          insert.setString(2, copy.value().toString());
+          insert.addBatch();
+        }
+        insert.executeBatch();
+      }
+      saveSnapshotsInternal(operationId, exactSnapshots);
+    });
+  }
+
+  public void saveSnapshots(UUID operationId, List<SerializedItemSnapshot> snapshots) {
+    Objects.requireNonNull(operationId, "operation id is required");
+    inTransaction(() -> saveSnapshotsInternal(operationId, List.copyOf(Objects.requireNonNull(snapshots))));
+  }
+
+  public void transition(UUID operationId, OperationStatus target) {
+    Objects.requireNonNull(operationId, "operation id is required");
+    Objects.requireNonNull(target, "target status is required");
+    inTransaction(() -> {
+      Reservation reservation = findReservationInternal(operationId);
+      if (reservation == null) throw new IllegalStateException("unknown operation: " + operationId);
+      if (reservation.status() == target) return;
+      if (!allowed(reservation.status(), target)) {
+        throw new IllegalStateException("invalid custody transition " + reservation.status() + " -> " + target);
+      }
+      try (var update = connection.prepareStatement(
+          "UPDATE reservations SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE operation_id = ?")) {
+        update.setString(1, target.name());
+        update.setString(2, operationId.toString());
+        update.executeUpdate();
+      }
+    });
+  }
+
+  public Optional<Reservation> findReservation(UUID operationId) {
+    Objects.requireNonNull(operationId, "operation id is required");
+    try {
+      return Optional.ofNullable(findReservationInternal(operationId));
+    } catch (SQLException exception) {
+      throw failure(exception);
+    }
+  }
+
+  public List<Reservation> findOpenReservations() {
+    try (var query = connection.prepareStatement(
+        "SELECT operation_id FROM reservations WHERE status IN ('PREPARED', 'ESCROWED', 'RETURN_PENDING') ORDER BY created_at")) {
+      List<Reservation> result = new ArrayList<>();
+      try (var rows = query.executeQuery()) {
+        while (rows.next()) result.add(findReservationInternal(UUID.fromString(rows.getString(1))));
+      }
+      return List.copyOf(result);
+    } catch (SQLException exception) {
+      throw failure(exception);
+    }
+  }
+
+  public void addRecovery(UUID operationId, CopyOwner owner, SerializedItemSnapshot snapshot) {
+    Objects.requireNonNull(operationId, "operation id is required");
+    Objects.requireNonNull(owner, "owner is required");
+    Objects.requireNonNull(snapshot, "snapshot is required");
+    try (var insert = connection.prepareStatement("""
+        INSERT INTO recovery_rows(operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status)
+        VALUES (?, ?, ?, ?, ?, 'PENDING')
+        ON CONFLICT(operation_id, copy_uuid) DO UPDATE SET item_bytes = excluded.item_bytes, status = 'PENDING'
+        """)) {
+      insert.setString(1, operationId.toString());
+      insert.setString(2, snapshot.copyId().value().toString());
+      writeOwner(insert, 3, 4, owner);
+      insert.setBytes(5, snapshot.bytes());
+      insert.executeUpdate();
+    } catch (SQLException exception) {
+      throw failure(exception);
+    }
+  }
+
+  public List<RecoveryRow> pendingRecovery() {
+    try (var query = connection.prepareStatement("""
+        SELECT operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes
+        FROM recovery_rows WHERE status = 'PENDING' ORDER BY recovery_id
+        """)) {
+      List<RecoveryRow> result = new ArrayList<>();
+      try (var rows = query.executeQuery()) {
+        while (rows.next()) result.add(new RecoveryRow(UUID.fromString(rows.getString(1)),
+            new CardCopyId(UUID.fromString(rows.getString(2))), readOwner(rows.getString(3), rows.getString(4)),
+            new SerializedItemSnapshot(new CardCopyId(UUID.fromString(rows.getString(2))), rows.getBytes(5))));
+      }
+      return List.copyOf(result);
+    } catch (SQLException exception) {
+      throw failure(exception);
+    }
+  }
+
+  public void markRecoveryRestored(UUID operationId, CardCopyId copyId) {
+    try (var update = connection.prepareStatement(
+        "UPDATE recovery_rows SET status = 'RESTORED' WHERE operation_id = ? AND copy_uuid = ?")) {
+      update.setString(1, Objects.requireNonNull(operationId).toString());
+      update.setString(2, Objects.requireNonNull(copyId).value().toString());
+      update.executeUpdate();
+    } catch (SQLException exception) {
+      throw failure(exception);
+    }
+  }
+
+  private Reservation findReservationInternal(UUID operationId) throws SQLException {
+    try (var query = connection.prepareStatement(
+        "SELECT owner_kind, owner_uuid, status FROM reservations WHERE operation_id = ?")) {
+      query.setString(1, operationId.toString());
+      try (var rows = query.executeQuery()) {
+        if (!rows.next()) return null;
+        CopyOwner owner = readOwner(rows.getString(1), rows.getString(2));
+        OperationStatus status = OperationStatus.valueOf(rows.getString(3));
+        List<CardCopyId> copies = new ArrayList<>();
+        try (var copyQuery = connection.prepareStatement(
+            "SELECT copy_uuid FROM reservation_copies WHERE operation_id = ? ORDER BY rowid")) {
+          copyQuery.setString(1, operationId.toString());
+          try (var copyRows = copyQuery.executeQuery()) {
+            while (copyRows.next()) copies.add(new CardCopyId(UUID.fromString(copyRows.getString(1))));
+          }
+        }
+        List<SerializedItemSnapshot> snapshots = new ArrayList<>();
+        try (var snapshotQuery = connection.prepareStatement(
+            "SELECT copy_uuid, item_bytes FROM escrow_items WHERE operation_id = ? ORDER BY rowid")) {
+          snapshotQuery.setString(1, operationId.toString());
+          try (var snapshotRows = snapshotQuery.executeQuery()) {
+            while (snapshotRows.next()) {
+              CardCopyId copy = new CardCopyId(UUID.fromString(snapshotRows.getString(1)));
+              snapshots.add(new SerializedItemSnapshot(copy, snapshotRows.getBytes(2)));
+            }
+          }
+        }
+        return new Reservation(operationId, owner, copies, snapshots, status);
+      }
+    }
+  }
+
+  private StoredCardCopy findCopyInternal(CardCopyId copyId) throws SQLException {
+    try (var query = connection.prepareStatement(
+        "SELECT catalog_id, owner_kind, owner_uuid FROM card_copies WHERE copy_uuid = ?")) {
+      query.setString(1, copyId.value().toString());
+      try (var rows = query.executeQuery()) {
+        if (!rows.next()) return null;
+        return new StoredCardCopy(copyId, new CardId(rows.getInt(1)), readOwner(rows.getString(2), rows.getString(3)));
+      }
+    }
+  }
+
+  private void saveSnapshotsInternal(UUID operationId, List<SerializedItemSnapshot> snapshots) throws SQLException {
+    try (var insert = connection.prepareStatement(
+        "INSERT INTO escrow_items(operation_id, copy_uuid, item_bytes) VALUES (?, ?, ?) ON CONFLICT(operation_id, copy_uuid) DO UPDATE SET item_bytes = excluded.item_bytes")) {
+      for (SerializedItemSnapshot snapshot : snapshots) {
+        insert.setString(1, operationId.toString());
+        insert.setString(2, snapshot.copyId().value().toString());
+        insert.setBytes(3, snapshot.bytes());
+        insert.addBatch();
+      }
+      insert.executeBatch();
+    }
+  }
+
+  private void inTransaction(SqlAction action) {
+    try {
+      boolean autoCommit = connection.getAutoCommit();
+      connection.setAutoCommit(false);
+      try {
+        action.run();
+        connection.commit();
+      } catch (Exception exception) {
+        try { connection.rollback(); } catch (SQLException ignored) { }
+        if (exception instanceof RuntimeException runtime) throw runtime;
+        throw new IllegalStateException(exception);
+      } finally {
+        connection.setAutoCommit(autoCommit);
+      }
+    } catch (SQLException exception) {
+      throw failure(exception);
+    }
+  }
+
+  private static List<CardCopyId> copyList(List<CardCopyId> copies) {
+    Objects.requireNonNull(copies, "copy ids are required");
+    Set<CardCopyId> unique = new HashSet<>();
+    for (CardCopyId copy : copies) if (copy == null || !unique.add(copy)) throw new IllegalArgumentException("duplicate copy id");
+    return List.copyOf(copies);
+  }
+
+  private static boolean allowed(OperationStatus from, OperationStatus to) {
+    return to == OperationStatus.ABORTED && (from == OperationStatus.PREPARED || from == OperationStatus.ESCROWED)
+        || from == OperationStatus.PREPARED && to == OperationStatus.ESCROWED
+        || from == OperationStatus.ESCROWED && to == OperationStatus.RETURN_PENDING
+        || from == OperationStatus.RETURN_PENDING && to == OperationStatus.RETURNED;
+  }
+
+  private static CopyOwner readOwner(String kind, String id) {
+    if ("HOUSE".equals(kind)) return CopyOwner.house();
+    if ("PLAYER".equals(kind) && id != null) return CopyOwner.player(UUID.fromString(id));
+    throw new IllegalStateException("invalid owner in database");
+  }
+
+  private static void writeOwner(java.sql.PreparedStatement statement, int kindIndex, int idIndex,
+      CopyOwner owner) throws SQLException {
+    statement.setString(kindIndex, owner.kind().name());
+    if (owner.playerId() == null) statement.setNull(idIndex, java.sql.Types.VARCHAR);
+    else statement.setString(idIndex, owner.playerId().toString());
+  }
+
+  private static IllegalStateException failure(SQLException exception) {
+    return new IllegalStateException("SQLite custody operation failed", exception);
+  }
+
+  @FunctionalInterface
+  private interface SqlAction { void run() throws Exception; }
+
+  public record StoredCardCopy(CardCopyId copyId, CardId catalogId, CopyOwner owner) {
+    public StoredCardCopy {
+      Objects.requireNonNull(copyId); Objects.requireNonNull(catalogId); Objects.requireNonNull(owner);
+    }
+  }
+
+  public record Reservation(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
+      List<SerializedItemSnapshot> snapshots, OperationStatus status) {
+    public Reservation {
+      Objects.requireNonNull(operationId); Objects.requireNonNull(owner);
+      copyIds = List.copyOf(copyIds); snapshots = List.copyOf(snapshots); Objects.requireNonNull(status);
+    }
+
+    public List<CardCopyId> expectedCopyIds() { return copyIds; }
+  }
+
+  public record RecoveryRow(UUID operationId, CardCopyId copyId, CopyOwner owner,
+      SerializedItemSnapshot snapshot) {
+    public RecoveryRow {
+      Objects.requireNonNull(operationId); Objects.requireNonNull(copyId);
+      Objects.requireNonNull(owner); Objects.requireNonNull(snapshot);
+    }
+  }
+  public record CatalogSnapshot(String snapshotId, String source, String digest, String metadataJson) {
+    public CatalogSnapshot {
+      if (snapshotId == null || snapshotId.isBlank()) throw new IllegalArgumentException("snapshot id is required");
+      if (source == null || source.isBlank()) throw new IllegalArgumentException("source is required");
+      if (digest == null || digest.isBlank()) throw new IllegalArgumentException("digest is required");
+      Objects.requireNonNull(metadataJson, "metadata is required");
+    }
+  }
+}
