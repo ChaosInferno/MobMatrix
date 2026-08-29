@@ -681,13 +681,72 @@ test suite was run.
 - CHAOS metadata now rejects all entries in non-CHAOS snapshots, rejects duplicate seat keys,
   and requires every CHAOS choice to be a copy currently in that seat's authoritative hand.
   Invalid choices therefore cannot reach timeout or recovery handling.
-- SQLite `findState` and catalog-resolver rehydration compare a supplied catalog's complete
-  persisted definition records when the snapshot ID has persisted catalog data. Same-ID altered
-  definitions are rejected; legacy fixtures without persisted catalog-definition rows retain
-  their existing snapshot-ID-only behavior.
+- SQLite `findState` and catalog-resolver rehydration now require a persisted complete
+  definition set and compare every CardDefinition field against the supplied catalog.
+  Revision-0 `save` and atomic `saveInitial` persist the complete set in the same transaction;
+  existing snapshot IDs are never overwritten with altered definitions.
 
 ### Thread-boundary notes and concerns
 
 The changes remain inside pure snapshot/storage rehydration. No Bukkit/Paper objects cross into
 application or storage. Paper codec tests remain assumption-skipped without a running Paper
 registry, and SQLite emits the JVM restricted-native-access warning.
+
+## Task 6 final catalog/settlement rehydration fixes
+
+### Status
+
+Implemented fail-closed SQLite catalog persistence/rehydration and corrected original-owner
+decoding for captured cards and plain legacy snapshots.
+
+Implementation commit: `3a2b2e2` (`fix: fail closed catalog rehydration`).
+
+### TDD and focused verification
+
+Focused command used for both red and green runs:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.domain.AdvancedRulesTest --tests org.aincraft.mobmatrix.domain.RandomTranscriptTest --tests org.aincraft.mobmatrix.domain.MatchEngineStandardTest --tests org.aincraft.mobmatrix.domain.MatchClockTest --tests org.aincraft.mobmatrix.bot.HeuristicBotTest
+```
+
+Exact red result after adding the regressions and before implementation:
+
+```text
+> Task :test FAILED
+
+SqliteCustodyTest > findStateRejectsAbsentPersistedCatalogDefinitions() FAILED
+SqliteCustodyTest > plainInitialSnapshotWithEmptyOriginalOwnersRehydrates() FAILED
+SqliteCustodyTest > catalogSnapshotCannotBeOverwrittenWithAlteredDefinitions() FAILED
+SqliteCustodyTest > nonSwapSuddenDeathCapturedCardRehydratesAfterRestart() FAILED
+SqliteCustodyTest > directRevisionZeroSavePersistsCompleteCatalogDefinitions() FAILED
+
+96 tests completed, 5 failed, 4 skipped
+
+FAILURE: Build failed with an exception.
+```
+
+Exact green result after implementation:
+
+```text
+> Task :test
+
+BUILD SUCCESSFUL in 3s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+The focused selection passed with the four Paper-registry codec tests assumption-skipped because
+no Paper server was available. SQLite emitted only the JVM restricted-native-access warning.
+No formatter, linter, project-wide build, or project-wide test suite was run.
+
+### Corrective coverage
+
+- Revision-0 direct saves and atomic `saveInitial` persist complete catalog definitions in the
+  same transaction as match state (and start binding for `saveInitial`).
+- Catalog snapshot rows are immutable by snapshot ID: incomplete, altered, or absent persisted
+  definitions reject both save and rehydration; matching existing definitions remain idempotent.
+- Non-SWAP sudden-death snapshots may restore captured cards in the opposing seat's hand while
+  retaining the original settlement owner.
+- RANDOM and SWAP snapshots require exact original-owner key coverage for all active non-house
+  copies; missing, extra, duplicate, and inconsistent metadata remains rejected.
+- Empty original-owner metadata is accepted only for explicit non-RANDOM/non-SWAP legacy/plain
+  snapshots, where ownership is inferred from each card's current hand/board seat.
