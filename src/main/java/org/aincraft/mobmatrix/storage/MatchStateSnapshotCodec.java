@@ -195,13 +195,13 @@ public final class MatchStateSnapshotCodec {
         decisions.add(new RandomTranscript.Decision(in.readUTF(), in.readInt(), in.readInt()));
       }
       RandomTranscript transcript = RandomTranscript.restore(transcriptSeed, decisions, replay, cursor);
-      Set<CardCopyId> activeCopies = new HashSet<>();
+      Map<CardCopyId, CardCopy> activeCopies = new HashMap<>();
       Map<PlayerSeat, List<HandCard>> hands = new EnumMap<>(PlayerSeat.class);
       for (PlayerSeat seat : PlayerSeat.values()) {
         List<HandCard> hand = new ArrayList<>();
         for (int i = in.readInt(); i > 0; i--) {
           CardCopy copy = readCopy(in);
-          requireUniqueActiveCopy(activeCopies, copy.copyId());
+          requireUniqueActiveCopy(activeCopies, copy);
           hand.add(new HandCard(copy, catalog.require(copy.cardId())));
         }
         hands.put(seat, List.copyOf(hand));
@@ -210,7 +210,7 @@ public final class MatchStateSnapshotCodec {
       for (int index = 0; index < 9; index++) {
         if (!in.readBoolean()) continue;
         CardCopy copy = readCopy(in);
-        requireUniqueActiveCopy(activeCopies, copy.copyId());
+        requireUniqueActiveCopy(activeCopies, copy);
         catalog.require(copy.cardId());
         CardId cardId = new CardId(in.readInt());
         if (!copy.cardId().equals(cardId)) throw new IllegalArgumentException("board card identity mismatch");
@@ -223,46 +223,84 @@ public final class MatchStateSnapshotCodec {
       for (PlayerSeat seat : PlayerSeat.values()) revealed.put(seat, readCopyIds(in));
       Map<CardCopyId, PlayerSeat> originalOwners = new HashMap<>();
       for (int i = in.readInt(); i > 0; i--) {
-        originalOwners.put(new CardCopyId(readUuid(in)), PlayerSeat.valueOf(in.readUTF()));
+        CardCopyId copyId = new CardCopyId(readUuid(in));
+        PlayerSeat owner = PlayerSeat.valueOf(in.readUTF());
+        if (originalOwners.putIfAbsent(copyId, owner) != null) {
+          throw new IllegalArgumentException("duplicate original-owner copy UUID");
+        }
       }
       int consecutiveDraws = in.readInt();
       Map<PlayerSeat, DraftOfferings.SeatOffers> offerings = new EnumMap<>(PlayerSeat.class);
+      Set<UUID> offeringIds = new HashSet<>();
+      Map<CardCopyId, CardCopy> offeringCopies = new HashMap<>();
       for (int i = in.readInt(); i > 0; i--) {
         PlayerSeat seat = PlayerSeat.valueOf(in.readUTF());
+        if (offerings.containsKey(seat)) throw new IllegalArgumentException("duplicate draft offering seat");
         List<DraftOfferings.Offering> seatOfferings = new ArrayList<>();
         for (int j = in.readInt(); j > 0; j--) {
           UUID offeringId = readUuid(in);
+          if (!offeringIds.add(offeringId)) {
+            throw new IllegalArgumentException("duplicate draft offering UUID");
+          }
           List<CardCopy> cards = new ArrayList<>();
           for (int k = in.readInt(); k > 0; k--) {
             CardCopy copy = readCopy(in);
+            if (!copy.owner().equals(CopyOwner.house())) {
+              throw new IllegalArgumentException("draft offering copy must be house-owned");
+            }
             catalog.require(copy.cardId());
+            CardCopy active = activeCopies.get(copy.copyId());
+            if (active != null && !active.equals(copy)) {
+              throw new IllegalArgumentException("draft offering copy conflicts with active copy");
+            }
+            if (offeringCopies.putIfAbsent(copy.copyId(), copy) != null) {
+              throw new IllegalArgumentException("duplicate draft offering copy UUID");
+            }
             cards.add(copy);
           }
           seatOfferings.add(new DraftOfferings.Offering(offeringId, cards));
         }
-        offerings.put(seat, new DraftOfferings.SeatOffers(seat, seatOfferings));
+        if (offerings.putIfAbsent(seat, new DraftOfferings.SeatOffers(seat, seatOfferings)) != null) {
+          throw new IllegalArgumentException("duplicate draft offering seat");
+        }
       }
       Map<PlayerSeat, DraftOfferings.Selection> selections = new EnumMap<>(PlayerSeat.class);
       for (int i = in.readInt(); i > 0; i--) {
         PlayerSeat seat = PlayerSeat.valueOf(in.readUTF());
+        if (selections.containsKey(seat)) throw new IllegalArgumentException("duplicate draft selection seat");
+        DraftOfferings.SeatOffers seatOffers = offerings.get(seat);
+        if (seatOffers == null) throw new IllegalArgumentException("selection has no offerings");
         List<Integer> choices = new ArrayList<>();
         for (int j = in.readInt(); j > 0; j--) choices.add(in.readInt());
         List<CardCopy> selected = new ArrayList<>();
         for (int j = in.readInt(); j > 0; j--) {
           CardCopy copy = readCopy(in);
-          catalog.require(copy.cardId());
-          selected.add(copy);
+          selected.add(requireOfferingReference(copy, offeringCopies));
         }
         List<CardCopy> deckCards = new ArrayList<>();
         for (int j = in.readInt(); j > 0; j--) {
           CardCopy copy = readCopy(in);
-          catalog.require(copy.cardId());
-          deckCards.add(copy);
+          deckCards.add(requireOfferingReference(copy, offeringCopies));
         }
         Map<CardCopyId, UUID> provenance = new HashMap<>();
-        for (int j = in.readInt(); j > 0; j--) provenance.put(new CardCopyId(readUuid(in)), readUuid(in));
+        for (int j = in.readInt(); j > 0; j--) {
+          CardCopyId copyId = new CardCopyId(readUuid(in));
+          UUID offeringId = readUuid(in);
+          if (provenance.putIfAbsent(copyId, offeringId) != null) {
+            throw new IllegalArgumentException("duplicate draft provenance copy UUID");
+          }
+        }
+        validateSelection(seatOffers, choices, selected, deckCards, provenance, offeringCopies);
         selections.put(seat, DraftOfferings.Selection.restore(seat, choices, selected,
             new Deck(deckCards), provenance));
+      }
+      boolean draft = rules.contains(Rule.DRAFT);
+      if (draft && (offerings.size() != PlayerSeat.values().length
+          || selections.size() != PlayerSeat.values().length)) {
+        throw new IllegalArgumentException("draft snapshot must contain both seat metadata records");
+      }
+      if (!draft && (!offerings.isEmpty() || !selections.isEmpty())) {
+        throw new IllegalArgumentException("non-draft snapshot contains draft metadata");
       }
       Set<CardCopyId> persistedHouseCopies = readCopyIdSet(in);
       Map<PlayerSeat, CardCopyId> chaos = new EnumMap<>(PlayerSeat.class);
@@ -301,9 +339,68 @@ public final class MatchStateSnapshotCodec {
     else throw new IllegalArgumentException("invalid copy owner");
     return new CardCopy(copyId, cardId, owner);
   }
-  private static void requireUniqueActiveCopy(Set<CardCopyId> activeCopies, CardCopyId copyId) {
-    if (!activeCopies.add(copyId)) {
+  private static void requireUniqueActiveCopy(Map<CardCopyId, CardCopy> activeCopies,
+      CardCopy copy) {
+    if (activeCopies.putIfAbsent(copy.copyId(), copy) != null) {
       throw new IllegalArgumentException("duplicate active card copy UUID");
+    }
+  }
+  private static CardCopy requireOfferingReference(CardCopy copy,
+      Map<CardCopyId, CardCopy> offeringCopies) {
+    if (!copy.owner().equals(CopyOwner.house())) {
+      throw new IllegalArgumentException("draft reference must be house-owned");
+    }
+    CardCopy authoritative = offeringCopies.get(copy.copyId());
+    if (!copy.equals(authoritative)) {
+      throw new IllegalArgumentException("draft reference is outside offerings");
+    }
+    return authoritative;
+  }
+
+  private static void validateSelection(DraftOfferings.SeatOffers offers,
+      List<Integer> choices, List<CardCopy> selected, List<CardCopy> deck,
+      Map<CardCopyId, UUID> provenance, Map<CardCopyId, CardCopy> offeringCopies) {
+    if (choices.size() != offers.offerings().size() || selected.size() != choices.size()) {
+      throw new IllegalArgumentException("draft selection shape mismatch");
+    }
+    Set<CardCopyId> selectedIds = new HashSet<>();
+    for (int index = 0; index < choices.size(); index++) {
+      int choice = choices.get(index);
+      if (choice < 0 || choice >= offers.offerings().get(index).cards().size()) {
+        throw new IllegalArgumentException("draft choice is outside offering");
+      }
+      CardCopy expected = offers.offerings().get(index).cards().get(choice);
+      if (!expected.equals(selected.get(index)) || !selectedIds.add(expected.copyId())) {
+        throw new IllegalArgumentException("draft selection does not match offering");
+      }
+    }
+    Set<CardCopyId> deckIds = new HashSet<>();
+    for (CardCopy copy : deck) {
+      requireOfferingReference(copy, offeringCopies);
+      if (!deckIds.add(copy.copyId())) {
+        throw new IllegalArgumentException("draft deck contains duplicate copy UUID");
+      }
+    }
+    if (provenance.size() != deck.size() || !provenance.keySet().equals(deckIds)) {
+      throw new IllegalArgumentException("draft provenance does not match deck");
+    }
+    for (var entry : provenance.entrySet()) {
+      CardCopy copy = offeringCopies.get(entry.getKey());
+      if (copy == null || !copy.owner().equals(CopyOwner.house())) {
+        throw new IllegalArgumentException("draft provenance copy is outside offerings");
+      }
+      DraftOfferings.Offering offering = offers.offerings().stream()
+          .filter(candidate -> candidate.offeringId().equals(entry.getValue()))
+          .findFirst().orElse(null);
+      if (offering == null || !offering.cards().contains(copy)) {
+        throw new IllegalArgumentException("draft provenance offering mismatch");
+      }
+    }
+    for (int index = 0; index < selected.size(); index++) {
+      UUID offeringId = provenance.get(selected.get(index).copyId());
+      if (!offers.offerings().get(index).offeringId().equals(offeringId)) {
+        throw new IllegalArgumentException("draft selected provenance mismatch");
+      }
     }
   }
 

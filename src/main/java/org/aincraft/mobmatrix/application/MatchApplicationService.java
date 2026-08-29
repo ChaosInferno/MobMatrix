@@ -22,6 +22,8 @@ import org.aincraft.mobmatrix.domain.CardCopyId;
 import org.aincraft.mobmatrix.domain.CopyOwner;
 import org.aincraft.mobmatrix.domain.MatchCommand;
 import org.aincraft.mobmatrix.domain.MatchEngine;
+import org.aincraft.mobmatrix.domain.MatchErrorCode;
+import org.aincraft.mobmatrix.domain.MatchRejection;
 import org.aincraft.mobmatrix.domain.MatchState;
 import org.aincraft.mobmatrix.domain.PlayerSeat;
 
@@ -205,13 +207,27 @@ public final class MatchApplicationService {
   public synchronized ReturnResult settle(String operationId) {
     return settle(UUID.fromString(Objects.requireNonNull(operationId)));
   }
-  /** Applies a pure domain command, persisting the accepted successor before rendering. */
+  /** Applies a pure domain command to the canonical persisted state before persisting the successor. */
   public synchronized ApplyResult apply(MatchState state, MatchCommand command) {
     Objects.requireNonNull(state, "state is required");
     Objects.requireNonNull(command, "command is required");
-    MatchEngine.MatchTransition transition = MatchEngine.apply(state, command);
-    if (!transition.accepted()) return ApplyResult.rejected(transition);
-    MatchRepository.SaveResult saved = matches.save(state.revision(), transition.state());
+    MatchState canonical;
+    try {
+      Optional<MatchState> loaded = matches.findState(state.matchId(), state.catalog());
+      if (loaded.isEmpty()) return ApplyResult.unavailable(state);
+      canonical = Objects.requireNonNull(loaded.get(), "persisted state is required");
+    } catch (RuntimeException exception) {
+      return ApplyResult.unavailable(state);
+    }
+    MatchEngine.MatchTransition transition = MatchEngine.apply(canonical, command);
+    if (!transition.accepted()) {
+      if (command.expectedRevision() != canonical.revision()
+          || transition.rejection().code() == MatchErrorCode.STALE_REVISION) {
+        return ApplyResult.stale(transition, canonical.revision());
+      }
+      return ApplyResult.rejected(transition);
+    }
+    MatchRepository.SaveResult saved = matches.save(canonical.revision(), transition.state());
     if (!saved.accepted()) return ApplyResult.stale(transition, saved.revision());
     return ApplyResult.accepted(transition);
   }
@@ -654,7 +670,8 @@ public final class MatchApplicationService {
       return new StartResult(operationId, owner, copies, true, Failure.NONE);
     }
 
-    public static StartResult rejected(UUID operationId, CopyOwner owner, List<CardCopyId> copies, Failure failure) {
+    public static StartResult rejected(UUID operationId, CopyOwner owner, List<CardCopyId> copies,
+        Failure failure) {
       return new StartResult(operationId, owner, copies, false, failure);
     }
     public boolean accepted() { return escrowed; }
@@ -670,7 +687,14 @@ public final class MatchApplicationService {
     }
 
     static ApplyResult rejected(MatchEngine.MatchTransition transition) {
-      return new ApplyResult(transition, Failure.INVALID_STATE, transition.state() == null ? -1 : transition.state().revision());
+      return new ApplyResult(transition, Failure.INVALID_STATE,
+          transition.state() == null ? -1 : transition.state().revision());
+    }
+
+    static ApplyResult unavailable(MatchState callerState) {
+      MatchEngine.MatchTransition transition = new MatchEngine.MatchTransition(callerState, List.of(),
+          new MatchRejection(MatchErrorCode.INVALID_COMMAND, "canonical match state unavailable"));
+      return new ApplyResult(transition, Failure.INVALID_STATE, callerState.revision());
     }
 
     static ApplyResult stale(MatchEngine.MatchTransition transition, long revision) {

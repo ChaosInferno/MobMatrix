@@ -7,11 +7,12 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
-import java.nio.file.Files;
 import java.nio.ByteBuffer;
+import java.nio.file.Files;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.EnumMap;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -26,6 +27,7 @@ import org.aincraft.mobmatrix.domain.CardDefinition;
 import org.aincraft.mobmatrix.domain.CardId;
 import org.aincraft.mobmatrix.domain.CardType;
 import org.aincraft.mobmatrix.domain.Deck;
+import org.aincraft.mobmatrix.domain.DraftOfferings;
 import org.aincraft.mobmatrix.domain.MatchState;
 import org.aincraft.mobmatrix.domain.MatchEngine;
 import org.aincraft.mobmatrix.domain.MatchCommand;
@@ -272,6 +274,122 @@ final class SqliteCustodyTest {
     assertThrows(IllegalArgumentException.class,
         () -> MatchStateSnapshotCodec.decode(tampered, placed.catalog()));
   }
+  @Test
+  void legitimateDraftSnapshotRehydratesRepeatedOfferingReferences() {
+    MatchState original = draftSnapshotState("draft-valid");
+
+    MatchState restored = MatchStateSnapshotCodec.decode(
+        MatchStateSnapshotCodec.encode(original), original.catalog());
+
+    assertEquals(original.draftOfferings(), restored.draftOfferings());
+    assertEquals(original.hand(PlayerSeat.ONE), restored.hand(PlayerSeat.ONE));
+    assertEquals(original.draftSelection(PlayerSeat.ONE).deck().copies(),
+        restored.draftSelection(PlayerSeat.ONE).deck().copies());
+  }
+
+  @Test
+  void draftSnapshotRejectsPlayerOwnedOfferingCopy() {
+    MatchState original = draftSnapshotState("draft-owner");
+    DraftOfferings.SeatOffers offers = original.draftOfferings(PlayerSeat.ONE);
+    DraftOfferings.Offering first = offers.offerings().getFirst();
+    List<CardCopy> cards = new ArrayList<>(first.cards());
+    CardCopy copy = cards.getFirst();
+    cards.set(0, new CardCopy(copy.copyId(), copy.cardId(), CopyOwner.player(UUID.randomUUID())));
+    List<DraftOfferings.Offering> changed = new ArrayList<>(offers.offerings());
+    changed.set(0, new DraftOfferings.Offering(first.offeringId(), cards));
+    Map<PlayerSeat, DraftOfferings.SeatOffers> offerings = new EnumMap<>(original.draftOfferings());
+    offerings.put(PlayerSeat.ONE, new DraftOfferings.SeatOffers(PlayerSeat.ONE, changed));
+
+    MatchState tampered = withDraftOfferings(original, offerings, original.draftSelections());
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(tampered),
+            original.catalog()));
+  }
+
+  @Test
+  void draftSnapshotRejectsOfferingIdsDuplicatedAcrossSeats() {
+    MatchState original = draftSnapshotState("draft-offering-id");
+    DraftOfferings.SeatOffers one = original.draftOfferings(PlayerSeat.ONE);
+    DraftOfferings.SeatOffers two = original.draftOfferings(PlayerSeat.TWO);
+    List<DraftOfferings.Offering> changed = new ArrayList<>(two.offerings());
+    DraftOfferings.Offering duplicate = changed.getFirst();
+    changed.set(0, new DraftOfferings.Offering(one.offerings().getFirst().offeringId(),
+        duplicate.cards()));
+    Map<PlayerSeat, DraftOfferings.SeatOffers> offerings = new EnumMap<>(original.draftOfferings());
+    offerings.put(PlayerSeat.TWO, new DraftOfferings.SeatOffers(PlayerSeat.TWO, changed));
+
+    MatchState tampered = withDraftOfferings(original, offerings, original.draftSelections());
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(tampered),
+            original.catalog()));
+  }
+
+  @Test
+  void draftSnapshotRejectsOfferingCopyDuplicatedByAuthoritativeHand() {
+    MatchState original = draftSnapshotState("draft-active-duplicate");
+    DraftOfferings.SeatOffers offers = original.draftOfferings(PlayerSeat.ONE);
+    DraftOfferings.Offering first = offers.offerings().getFirst();
+    List<CardCopy> cards = new ArrayList<>(first.cards());
+    CardCopy handCopy = original.hand(PlayerSeat.ONE).getFirst().copy();
+    CardId differentCard = handCopy.cardId().equals(new CardId(1)) ? new CardId(2) : new CardId(1);
+    cards.set(0, new CardCopy(handCopy.copyId(), differentCard, CopyOwner.house()));
+    List<DraftOfferings.Offering> changed = new ArrayList<>(offers.offerings());
+    changed.set(0, new DraftOfferings.Offering(first.offeringId(), cards));
+    Map<PlayerSeat, DraftOfferings.SeatOffers> offerings = new EnumMap<>(original.draftOfferings());
+    offerings.put(PlayerSeat.ONE, new DraftOfferings.SeatOffers(PlayerSeat.ONE, changed));
+
+    MatchState tampered = withDraftOfferings(original, offerings, original.draftSelections());
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(tampered),
+            original.catalog()));
+  }
+
+  @Test
+  void draftSnapshotRejectsSelectionReferenceOutsideOfferings() {
+    MatchState original = draftSnapshotState("draft-reference");
+    DraftOfferings.Selection selection = original.draftSelection(PlayerSeat.ONE);
+    CardCopy foreign = new CardCopy(new CardCopyId(UUID.randomUUID()), new CardId(1),
+        CopyOwner.player(UUID.randomUUID()));
+    List<CardCopy> selected = new ArrayList<>(selection.selectedCards());
+    selected.set(0, foreign);
+    List<CardCopy> deck = new ArrayList<>(selection.deck().copies());
+    deck.set(0, foreign);
+    Map<CardCopyId, UUID> provenance = new HashMap<>(selection.provenance());
+    provenance.remove(selection.selectedCards().getFirst().copyId());
+    provenance.put(foreign.copyId(), selection.provenance().values().iterator().next());
+    DraftOfferings.Selection changed = DraftOfferings.Selection.restore(PlayerSeat.ONE,
+        selection.offeringChoices(), selected, new Deck(deck), provenance);
+    Map<PlayerSeat, DraftOfferings.Selection> selections = new EnumMap<>(original.draftSelections());
+    selections.put(PlayerSeat.ONE, changed);
+
+    MatchState tampered = withDraftOfferings(original, original.draftOfferings(), selections);
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(tampered),
+            original.catalog()));
+  }
+
+  @Test
+  void draftSnapshotRejectsMalformedProvenanceReference() {
+    MatchState original = draftSnapshotState("draft-provenance");
+    DraftOfferings.Selection selection = original.draftSelection(PlayerSeat.ONE);
+    Map<CardCopyId, UUID> provenance = new HashMap<>(selection.provenance());
+    provenance.put(selection.selectedCards().getFirst().copyId(), UUID.randomUUID());
+    DraftOfferings.Selection changed = DraftOfferings.Selection.restore(PlayerSeat.ONE,
+        selection.offeringChoices(), selection.selectedCards(), selection.deck(), provenance);
+    Map<PlayerSeat, DraftOfferings.Selection> selections = new EnumMap<>(original.draftSelections());
+    selections.put(PlayerSeat.ONE, changed);
+
+    MatchState tampered = withDraftOfferings(original, original.draftOfferings(), selections);
+
+    assertThrows(IllegalArgumentException.class,
+        () -> MatchStateSnapshotCodec.decode(MatchStateSnapshotCodec.encode(tampered),
+            original.catalog()));
+  }
+
 
 
   @Test
@@ -303,6 +421,35 @@ final class SqliteCustodyTest {
     }
     Files.deleteIfExists(path);
   }
+  private static MatchState draftSnapshotState(String id) {
+    List<CardDefinition> definitions = new ArrayList<>();
+    List<CardCopy> one = new ArrayList<>();
+    List<CardCopy> two = new ArrayList<>();
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    for (int index = 1; index <= 5; index++) {
+      definitions.add(new CardDefinition(new CardId(index), "No. " + index, "Card " + index,
+          1, CardType.NORMAL, index, index, index, index, 0));
+      one.add(new CardCopy(new CardCopyId(UUID.randomUUID()), new CardId(index), oneOwner));
+      two.add(new CardCopy(new CardCopyId(UUID.randomUUID()), new CardId(index), twoOwner));
+    }
+    return MatchEngine.start(new MatchEngine.StartMatch(new MatchId(id), new Deck(one), new Deck(two),
+        new CardCatalog(definitions, id + "-catalog"), new MatchRules(
+            org.aincraft.mobmatrix.domain.Rule.DRAFT), 7L,
+        Instant.parse("2026-01-01T00:00:00Z"), List.of(), List.of(),
+        List.of(0, 1, 2), List.of(2, 3, 4))).state();
+  }
+
+  private static MatchState withDraftOfferings(MatchState state,
+      Map<PlayerSeat, DraftOfferings.SeatOffers> offerings,
+      Map<PlayerSeat, DraftOfferings.Selection> selections) {
+    return MatchState.rehydrate(state.matchId(), state.catalog(), state.rules(), state.board(),
+        state.hands(), state.currentSeat(), state.revision(), state.result(), state.bankMillis(),
+        state.turnStartedAt(), state.graceDeadline(), state.turnDeadline(), state.commandIds(),
+        state.seed(), state.transcript(), state.revealedCardsMap(), state.originalOwners(),
+        state.consecutiveDraws(), offerings, selections, state.chaosChoices());
+  }
+
   private static MatchState snapshotState(String id) {
     List<CardDefinition> definitions = new ArrayList<>();
     List<CardCopy> one = new ArrayList<>();

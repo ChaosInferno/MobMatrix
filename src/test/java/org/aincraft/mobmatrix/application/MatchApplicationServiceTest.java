@@ -70,6 +70,29 @@ final class MatchApplicationServiceTest {
     assertFalse(stale.accepted());
     assertEquals(CardCustodyPort.Failure.STALE_REVISION, stale.failure());
   }
+  @Test
+  void applyUsesPersistedCanonicalStateInsteadOfCallerSnapshot() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    MatchEngine.StartMatch canonicalStart = match("canonical-apply", oneOwner, copies(), twoOwner, copies());
+    MatchState canonical = MatchEngine.start(canonicalStart).state();
+    MatchEngine.StartMatch divergentStart = match("canonical-apply", oneOwner, copies(), twoOwner, copies());
+    MatchState divergent = MatchEngine.start(divergentStart).state();
+    CanonicalMatchRepository repository = new CanonicalMatchRepository(canonical);
+    MatchState divergentState = divergent;
+    MatchCommand.PlaceCard command = new MatchCommand.PlaceCard(divergentState.currentSeat(),
+        divergentState.hand(divergentState.currentSeat()).getFirst().copyId(), Square.CENTER,
+        divergentState.revision(), UUID.randomUUID(), divergentState.turnStartedAt());
+
+    MatchApplicationService.ApplyResult result = new MatchApplicationService(
+        new RecordingCustody(), repository).apply(divergentState, command);
+
+    assertFalse(result.accepted());
+    assertEquals(CardCustodyPort.Failure.INVALID_STATE, result.failure());
+    assertEquals(canonical, repository.state);
+    assertEquals(0, repository.saves);
+  }
+
 
   @Test
   void startRejectsCopySetThatDoesNotMatchPhysicalDeckBeforeEscrow() {
@@ -574,6 +597,33 @@ final class MatchApplicationServiceTest {
     return new MatchEngine.StartMatch(new MatchId(id), new Deck(one), new Deck(two),
         new CardCatalog(definitions, id + "-catalog"), new MatchRules(), 5L,
         Instant.parse("2026-01-01T00:00:00Z"));
+  }
+
+  private static final class CanonicalMatchRepository implements MatchRepository {
+    private MatchState state;
+    private int saves;
+
+    private CanonicalMatchRepository(MatchState state) {
+      this.state = state;
+    }
+
+    @Override
+    public SaveResult save(long expectedRevision, MatchState successor) {
+      saves++;
+      if (expectedRevision != state.revision()) return SaveResult.stale(state.revision());
+      state = successor;
+      return SaveResult.success(successor.revision());
+    }
+
+    @Override
+    public java.util.Optional<MatchSnapshot> find(MatchId matchId) {
+      return java.util.Optional.empty();
+    }
+
+    @Override
+    public java.util.Optional<MatchState> findState(MatchId matchId, CardCatalog catalog) {
+      return java.util.Optional.of(state);
+    }
   }
 
   private static final class RecordingMatchRepository implements MatchRepository {
