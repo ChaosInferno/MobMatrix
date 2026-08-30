@@ -58,7 +58,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         while (rows.next()) {
           String rawOperationId = rows.getString(1);
           try {
-            result.add(UUID.fromString(rawOperationId));
+            result.add(parseCanonicalUuid(rawOperationId));
           } catch (RuntimeException exception) {
             // UUID is the only identity this API can expose. Do not let one unrepresentable
             // operation hide later valid operation identities during startup enumeration.
@@ -111,9 +111,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     for (ReservationRow row : reservations.values()) {
       String key = operationKey(row.operationId());
       boolean proven = !duplicateOperations.contains(key)
+          && isUuid(row.operationId())
           && provenTerminal(row.operationId(), row.ownerKind(), row.ownerUuid(), row.status());
       terminal.put(key, proven);
-      if (!proven && !isUuid(row.operationId())) unresolved = true;
+      if (!proven) unresolved = true;
     }
     unresolved |= scanRawChildTable("reservation_copies", reservations, duplicateOperations, terminal,
         copies, true);
@@ -166,10 +167,23 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     return operationId == null ? null : operationId.toLowerCase(java.util.Locale.ROOT);
   }
 
-  private static boolean isUuid(String value) {
-    if (value == null) return false;
+  private static UUID parseCanonicalUuid(String value) {
+    if (value == null) throw new IllegalArgumentException("UUID is required");
+    UUID parsed;
     try {
-      UUID.fromString(value);
+      parsed = UUID.fromString(value);
+    } catch (RuntimeException exception) {
+      throw new IllegalArgumentException("invalid UUID", exception);
+    }
+    if (!parsed.toString().equals(value)) {
+      throw new IllegalArgumentException("noncanonical UUID");
+    }
+    return parsed;
+  }
+
+  private static boolean isUuid(String value) {
+    try {
+      parseCanonicalUuid(value);
       return true;
     } catch (RuntimeException exception) {
       return false;
@@ -177,9 +191,8 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   }
 
   private static CardCopyId parseCopyId(String value) {
-    if (value == null) return null;
     try {
-      return new CardCopyId(UUID.fromString(value));
+      return new CardCopyId(parseCanonicalUuid(value));
     } catch (RuntimeException exception) {
       return null;
     }
@@ -567,8 +580,8 @@ public final class SqliteCardRepository implements CardCustodyJournal {
           UUID operationId;
           CardCopyId copyId;
           try {
-            operationId = UUID.fromString(rows.getString(1));
-            copyId = new CardCopyId(UUID.fromString(rows.getString(2)));
+            operationId = parseCanonicalUuid(rows.getString(1));
+            copyId = new CardCopyId(parseCanonicalUuid(rows.getString(2)));
           } catch (RuntimeException exception) {
             throw new IllegalStateException("invalid recovery identity data", exception);
           }
@@ -646,15 +659,22 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       query.setString(2, rawCopyId);
       query.setString(3, rawCopyId);
       query.setString(4, rawCopyId);
-      Set<String> seenOperationKeys = new HashSet<>();
+      Map<String, String> seenOperationSpellings = new HashMap<>();
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
           String rawOperationId = rows.getString(1);
           String operationKey = operationKey(rawOperationId);
-          if (!seenOperationKeys.add(operationKey)) continue;
+          String previousSpelling = seenOperationSpellings.putIfAbsent(operationKey, rawOperationId);
+          if (previousSpelling != null) {
+            if (!previousSpelling.equals(rawOperationId)) {
+              throw new CustodyIntegrityException(operationId, List.of(copy),
+                  "ambiguous case-variant custody operation identity", null);
+            }
+            continue;
+          }
           UUID existingOperation;
           try {
-            existingOperation = UUID.fromString(rawOperationId);
+            existingOperation = parseCanonicalUuid(rawOperationId);
           } catch (RuntimeException exception) {
             throw new CustodyIntegrityException(operationId, List.of(copy),
                 "invalid existing custody operation identity", exception);
@@ -716,7 +736,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
           try (var copyRows = copyQuery.executeQuery()) {
             while (copyRows.next()) {
               try {
-                copies.add(new CardCopyId(UUID.fromString(copyRows.getString(1))));
+                copies.add(new CardCopyId(parseCanonicalUuid(copyRows.getString(1))));
               } catch (RuntimeException exception) {
                 if (decodeFailure == null) decodeFailure = exception;
               }
@@ -732,7 +752,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
           try (var snapshotRows = snapshotQuery.executeQuery()) {
             while (snapshotRows.next()) {
               try {
-                CardCopyId copy = new CardCopyId(UUID.fromString(snapshotRows.getString(1)));
+                CardCopyId copy = new CardCopyId(parseCanonicalUuid(snapshotRows.getString(1)));
                 snapshots.add(new SerializedItemSnapshot(copy, snapshotRows.getBytes(2)));
               } catch (RuntimeException exception) {
                 if (decodeFailure == null) decodeFailure = exception;
@@ -749,7 +769,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
           try (var restoredRows = restoredQuery.executeQuery()) {
             while (restoredRows.next()) {
               try {
-                restored.add(new CardCopyId(UUID.fromString(restoredRows.getString(1))));
+                restored.add(new CardCopyId(parseCanonicalUuid(restoredRows.getString(1))));
               } catch (RuntimeException exception) {
                 if (decodeFailure == null) decodeFailure = exception;
               }
@@ -808,7 +828,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         while (rows.next()) {
           CardCopyId copy;
           try {
-            copy = new CardCopyId(UUID.fromString(rows.getString(1)));
+            copy = new CardCopyId(parseCanonicalUuid(rows.getString(1)));
           } catch (RuntimeException exception) {
             return false;
           }
@@ -869,7 +889,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
 
   private boolean provenTerminal(String rawOperationId, String ownerKind, String ownerUuid,
       String rawStatus) throws SQLException {
-    if (rawOperationId == null
+    if (!isUuid(rawOperationId)
         || (!"RETURNED".equals(rawStatus) && !"ABORTED".equals(rawStatus))) return false;
     CopyOwner owner;
     try {
@@ -884,7 +904,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
           try {
-            CardCopyId copy = new CardCopyId(UUID.fromString(rows.getString(1)));
+            CardCopyId copy = new CardCopyId(parseCanonicalUuid(rows.getString(1)));
             if (copies.contains(copy)) return false;
             copies.add(copy);
           } catch (RuntimeException exception) {
@@ -910,7 +930,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
           try {
-            CardCopyId copy = new CardCopyId(UUID.fromString(rows.getString(1)));
+            CardCopyId copy = new CardCopyId(parseCanonicalUuid(rows.getString(1)));
             byte[] bytes = rows.getBytes(2);
             if (!snapshotIds.add(copy) || bytes == null || bytes.length == 0) return false;
             snapshots.add(new SerializedItemSnapshot(copy, bytes));
@@ -928,7 +948,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
           try {
-            CardCopyId copy = new CardCopyId(UUID.fromString(rows.getString(1)));
+            CardCopyId copy = new CardCopyId(parseCanonicalUuid(rows.getString(1)));
             if (!restored.add(copy)) return false;
           } catch (RuntimeException exception) {
             return false;
@@ -1062,7 +1082,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     if ("HOUSE".equals(kind) && id == null) return CopyOwner.house();
     if ("PLAYER".equals(kind) && id != null) {
       try {
-        return CopyOwner.player(UUID.fromString(id));
+        return CopyOwner.player(parseCanonicalUuid(id));
       } catch (IllegalArgumentException exception) {
         throw new IllegalStateException("invalid player owner UUID in database", exception);
       }

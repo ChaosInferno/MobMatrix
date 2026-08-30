@@ -179,6 +179,50 @@ final class SqliteCustodyTest {
     }
     Files.deleteIfExists(path);
   }
+  @Test
+  void canonicalOperationWithMalformedOwnerOrStatusIsUnresolvedWithoutCopyIds() throws Exception {
+    var path = Files.createTempFile("mobmatrix-unresolved-parent-integrity", ".sqlite");
+    UUID operation = UUID.randomUUID();
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA ignore_check_constraints = ON");
+      }
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
+            created_at, updated_at)
+          VALUES (?, 'PLAYER', 'not-a-uuid', NULL, 'CORRUPT',
+            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          """)) {
+        insert.setString(1, operation.toString());
+        insert.executeUpdate();
+      }
+
+      assertTrue(repository.reservedCopyIds().isEmpty());
+      assertTrue(repository.hasUnresolvedReservationIdentity());
+    }
+    Files.deleteIfExists(path);
+  }
+  @Test
+  void noncanonicalOperationTextIsUnresolvedEvenWhenJavaParsesIt() throws Exception {
+    var path = Files.createTempFile("mobmatrix-noncanonical-operation", ".sqlite");
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
+            created_at, updated_at)
+          VALUES ('1-1-1-1-1', 'HOUSE', NULL, NULL, 'RETURNED',
+            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          """)) {
+        insert.executeUpdate();
+      }
+
+      assertTrue(repository.hasUnresolvedReservationIdentity());
+    }
+    Files.deleteIfExists(path);
+  }
+
+
 
 
 
@@ -2076,6 +2120,7 @@ final class SqliteCustodyTest {
     CopyOwner owner = CopyOwner.player(UUID.randomUUID());
     CardCopyId activeCopy = new CardCopyId(UUID.randomUUID());
     CardCopyId terminalCopy = new CardCopyId(UUID.randomUUID());
+    UUID terminalOperation = UUID.randomUUID();
     SerializedItemSnapshot terminalSnapshot = new SerializedItemSnapshot(terminalCopy, new byte[] {5, 5});
     try (Database database = new Database(path)) {
       SqliteCardRepository repository = new SqliteCardRepository(database);
@@ -2093,7 +2138,7 @@ final class SqliteCustodyTest {
         insert.setString(2, owner.playerId().toString());
         insert.setString(3, "PREPARED");
         insert.executeUpdate();
-        insert.setString(1, "terminal-operation");
+        insert.setString(1, terminalOperation.toString());
         insert.setString(3, "RETURNED");
         insert.executeUpdate();
       }
@@ -2102,29 +2147,28 @@ final class SqliteCustodyTest {
         insert.setString(1, "malformed-operation");
         insert.setString(2, activeCopy.value().toString());
         insert.executeUpdate();
-        insert.setString(1, "terminal-operation");
+        insert.setString(1, terminalOperation.toString());
         insert.setString(2, terminalCopy.value().toString());
         insert.executeUpdate();
       }
       try (var insert = database.connection().prepareStatement(
           "INSERT INTO escrow_items(operation_id, copy_uuid, item_bytes) VALUES (?, ?, ?)")) {
-        insert.setString(1, "terminal-operation");
+        insert.setString(1, terminalOperation.toString());
         insert.setString(2, terminalCopy.value().toString());
         insert.setBytes(3, terminalSnapshot.bytes());
         insert.executeUpdate();
       }
       try (var insert = database.connection().prepareStatement(
           "INSERT INTO reservation_restored(operation_id, copy_uuid) VALUES (?, ?)")) {
-        insert.setString(1, "terminal-operation");
+        insert.setString(1, terminalOperation.toString());
         insert.setString(2, terminalCopy.value().toString());
         insert.executeUpdate();
       }
       assertEquals(Set.of(activeCopy), repository.reservedCopyIds());
       UUID reusableOperation = UUID.randomUUID();
-      assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
-          () -> repository.prepare(reusableOperation, owner, List.of(terminalCopy),
-              List.of(terminalSnapshot)));
-      assertEquals(Set.of(activeCopy), repository.reservedCopyIds());
+      repository.prepare(reusableOperation, owner, List.of(terminalCopy),
+          List.of(terminalSnapshot));
+      assertEquals(Set.of(activeCopy, terminalCopy), repository.reservedCopyIds());
     }
     Files.deleteIfExists(path);
   }

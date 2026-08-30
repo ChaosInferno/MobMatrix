@@ -22,6 +22,7 @@ public final class SchemaMigrator {
     for (int next = version + 1; next <= CURRENT_VERSION; next++) {
       applyMigration(connection, next);
     }
+    if (CURRENT_VERSION >= 7) applyV7(connection);
     validateSchema(connection);
   }
 
@@ -389,6 +390,7 @@ public final class SchemaMigrator {
                 OR substr(existing.operation_id, 19, 1) <> '-'
                 OR substr(existing.operation_id, 24, 1) <> '-'
                 OR existing.operation_id GLOB '*[^0-9A-Fa-f-]*'
+                OR existing.operation_id <> lower(existing.operation_id)
                 OR (SELECT COUNT(*) FROM reservations duplicate
                     WHERE lower(duplicate.operation_id) = lower(existing.operation_id)) <> 1
                 OR reservation.status IS NULL
@@ -404,6 +406,7 @@ public final class SchemaMigrator {
                   OR substr(reservation.owner_uuid, 19, 1) <> '-'
                   OR substr(reservation.owner_uuid, 24, 1) <> '-'
                   OR reservation.owner_uuid GLOB '*[^0-9A-Fa-f-]*'
+                  OR reservation.owner_uuid <> lower(reservation.owner_uuid)
                 ))
                 OR EXISTS (
                   SELECT 1 FROM reservation_copies malformed
@@ -416,7 +419,32 @@ public final class SchemaMigrator {
                       OR substr(malformed.copy_uuid, 19, 1) <> '-'
                       OR substr(malformed.copy_uuid, 24, 1) <> '-'
                       OR malformed.copy_uuid GLOB '*[^0-9A-Fa-f-]*'
+                      OR malformed.copy_uuid <> lower(malformed.copy_uuid)
                     )
+                OR EXISTS (
+                  SELECT 1 FROM (
+                    SELECT operation_id, copy_uuid FROM reservation_copies
+                    UNION ALL
+                    SELECT operation_id, copy_uuid FROM escrow_items
+                    UNION ALL
+                    SELECT operation_id, copy_uuid FROM reservation_restored
+                    UNION ALL
+                    SELECT operation_id, copy_uuid FROM recovery_rows
+                  ) child
+                  WHERE lower(child.operation_id) = lower(existing.operation_id)
+                    AND (
+                      child.operation_id IS NULL
+                      OR child.operation_id <> lower(child.operation_id)
+                      OR child.copy_uuid IS NULL
+                      OR length(child.copy_uuid) <> 36
+                      OR substr(child.copy_uuid, 9, 1) <> '-'
+                      OR substr(child.copy_uuid, 14, 1) <> '-'
+                      OR substr(child.copy_uuid, 19, 1) <> '-'
+                      OR substr(child.copy_uuid, 24, 1) <> '-'
+                      OR child.copy_uuid GLOB '*[^0-9A-Fa-f-]*'
+                      OR child.copy_uuid <> lower(child.copy_uuid)
+                    )
+                )
                 )
                 OR EXISTS (
                   SELECT 1 FROM reservation_copies first_copy

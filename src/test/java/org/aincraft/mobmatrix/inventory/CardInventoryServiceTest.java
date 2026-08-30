@@ -271,10 +271,25 @@ final class CardInventoryServiceTest {
     assertFalse(service.reservedCopyIds().contains(copy));
     assertFalse(service.hasUnresolvedReservationIdentity());
   }
+  @Test
+  void refreshRetainsPriorCopiesWhenEmptyReadPrecedesSecondReadFailure() {
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    FlakyIdentityJournal journal = new FlakyIdentityJournal(Set.of(copy));
+    CardInventoryService service = new CardInventoryService(
+        new CardItemCodec("test", "0123456789abcdef"), id -> null, journal);
+
+    assertTrue(service.reservedCopyIds().contains(copy));
+    journal.emptyThenFail = true;
+    assertTrue(service.reservedCopyIds().contains(copy));
+    assertTrue(service.hasUnresolvedReservationIdentity());
+  }
+
 
   private static final class FlakyIdentityJournal implements CardCustodyJournal {
     private Set<CardCopyId> identities;
     private boolean failRefresh;
+    private boolean emptyThenFail;
+    private boolean throwSecondRead;
     private boolean unresolved;
 
     private FlakyIdentityJournal(Set<CardCopyId> identities) {
@@ -283,12 +298,22 @@ final class CardInventoryServiceTest {
 
     @Override
     public Set<CardCopyId> reservedCopyIds() {
+      if (emptyThenFail) {
+        emptyThenFail = false;
+        throwSecondRead = true;
+        return Set.of();
+      }
       if (failRefresh) throw new IllegalStateException("identity refresh failed");
       return identities;
     }
 
     @Override
     public boolean hasUnresolvedReservationIdentity() {
+      if (throwSecondRead) {
+        throwSecondRead = false;
+        unresolved = true;
+        throw new IllegalStateException("identity uncertainty read failed");
+      }
       return unresolved;
     }
 
