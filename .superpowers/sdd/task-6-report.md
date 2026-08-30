@@ -2357,3 +2357,86 @@ suite was run.
 Implementation commits: `eea5ac5`, `255a8d3`, `0d465c9`
 (`fix: fail closed custody identity proofs`).
 Report commit: `f8663ee` (`docs: record fail-closed custody identity verification`).
+
+# Task 6 fix36 aggregate recovery identities
+
+## Status
+
+Implemented and committed aggregate recovery identity preservation. `SqliteCardRepository.findReservationInternal`
+now gathers a deduplicated parseable copy identity set from `reservation_copies`, `escrow_items`,
+`reservation_restored`, and `recovery_rows` before raising `CustodyIntegrityException`. Reservation
+copy IDs remain a separate authoritative set for successful hydration checks, so malformed or missing
+`reservation_copies` rows cannot become a false successful recovery. Application conversion therefore
+reports the complete set as both expected and pending recovery IDs with `DATABASE_ERROR` and
+`RETURN_PENDING`.
+
+Implementation commit: `df681c6` (`fix: aggregate recovery identities`).
+
+## TDD and focused verification
+
+Focused red command, before the production aggregation change:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.malformedReservationCopiesAggregateParseableChildIdentities --no-daemon
+```
+
+Exact red result:
+
+> Task :test FAILED
+
+SqliteCustodyTest > malformedReservationCopiesAggregateParseableChildIdentities() FAILED
+    org.opentest4j.AssertionFailedError at SqliteCustodyTest.java:2652
+
+1 test completed, 1 failed
+
+FAILURE: Build failed with an exception.
+
+Focused green regression command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.malformedReservationCopiesAggregateParseableChildIdentities --no-daemon
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 7s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+Focused storage and application command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --no-daemon
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 7s
+4 actionable tasks: 1 executed, 3 up-to-date
+```
+
+The final focused selection executed 83 storage tests and 47 application tests with zero failures,
+errors, or skips. It verifies parseable identities from each child table, cross-table
+deduplication, retention alongside malformed rows, and application expected/pending recovery
+conversion. SQLite emitted its existing JVM restricted-native-access warning. No formatter,
+linter, project-wide build, or project-wide test suite was run.
+
+## Corrective coverage
+
+- Child-table identity aggregation preserves every canonical copy UUID found in
+  `reservation_copies`, `escrow_items`, `reservation_restored`, and `recovery_rows`.
+- Duplicate UUIDs across child tables are emitted once in deterministic scan order.
+- Malformed child UUID rows still mark the reservation unresolved without discarding valid IDs.
+- Missing reservation-copy rows remain integrity failures because authoritative reservation IDs are
+  separate from the aggregate recovery identity set.
+- `MatchApplicationService` converts the structured integrity failure to `DATABASE_ERROR`,
+  `RETURN_PENDING`, and matching expected/pending copy-ID lists; no successful recovery is exposed.
+
+## Current commits
+
+Implementation commit: `df681c6` (`fix: aggregate recovery identities`).
+Report commit: pending.
