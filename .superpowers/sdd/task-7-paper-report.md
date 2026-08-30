@@ -6,23 +6,17 @@
 - `/mobmatrix` exposes only `give`, `deck`, `challenge`, `bot`, `accept`, `decline`, and `cancel` with pure validation helpers for labels, positive bounded amounts, exact five-copy decks, and challenge target/state checks.
 - Direct PvP reserves the exact selected physical UUIDs. Bot starts use a pure `BotStartMatchRequest`; bot copies are deterministic house-owned copies and are excluded from settlement.
 - Inventory and lifecycle listeners delegate every existing custody guard and recover exact pending operations on join. Active state remains durable on disable.
-- Descriptor declares Paper API `26.2` and the required MapGUI `BEFORE`/`true`/`true` dependency.
+- MapGui deck and match screens render projections and submit UI intents without owning match state or rule calculations.
+- Descriptor declares Paper API `26.2` and the required MapGUI `BEFORE`/`true`/`true` dependency. Gradle expands the descriptor version during resource processing.
+- Runtime resources package only the 475-card CSV. Catalog provenance and acceptable-use attribution remain repository-only in `catalog/source.txt`.
 
-## Focused verification
+## Verification
 
-- `cmd /c gradlew.bat compileJava --no-daemon` — passed before the screen imports were added; final compile waits for the concurrently-produced public `DeckScreen`/`MatchScreen` source.
-- `cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.paper.CommandValidationTest --no-daemon` — passed for the focused command/descriptor tests before screen source was required by the plugin imports.
-- `cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --no-daemon` — passed after the bot-start/house-ownership application changes.
+- `cmd /c gradlew.bat clean check shadowJar --no-daemon` — passed; compilation, tests, Spotless, Checkstyle, PMD, SpotBugs, and shadow packaging completed successfully.
+- The packaged `build/libs/MobMatrix-2026.08.29-SNAPSHOT.jar` contains a concrete descriptor version, required MapGUI dependency metadata, the runtime CSV, and no FFXIV source URLs or artwork payload.
+- Gradle-managed Paper startup smoke passed with MapGUI 2.0.0 and MobMatrix `2026.08.29-SNAPSHOT`; `help mobmatrix` listed the registration and `mobmatrix` returned the command usage. The server then shut down cleanly.
+- Actual player-client MapGui gameplay and exact-copy settlement were not exercised in this environment.
 
 ## Commit
 
-`aac54fd feat: wire Paper commands and lifecycle`
-
-## Pending integration checkpoint
-
-The Paper plugin imports the agreed public screen constructors:
-
-- `DeckScreen(List<HandCard>, SelectionSink)`
-- `MatchScreen(MatchView, PlayerSeat, IntentSink)`
-
-Run the focused command/projection test command again after those screen classes appear, then amend this report with final green output.
+`7ef0cae fix: harden plugin lifecycle and inventory recovery`

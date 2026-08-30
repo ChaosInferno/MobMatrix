@@ -92,7 +92,7 @@ function sourceText({ retrievedAt, sha256, patches }) {
   ].join('\n');
 }
 
-async function refresh({ fetchImpl = fetch, outputDir = path.resolve(__dirname, '../src/main/resources/catalog'), now = new Date() } = {}) {
+async function refresh({ fetchImpl = fetch, outputDir = path.resolve(__dirname, '../src/main/resources/catalog'), sourceOutputDir = path.resolve(__dirname, '../catalog'), now = new Date() } = {}) {
   const response = await fetchImpl(SOURCE_URL);
   if (!response || !response.ok) fail(`HTTP request failed with status ${response && response.status}`);
   let payload;
@@ -106,8 +106,9 @@ async function refresh({ fetchImpl = fetch, outputDir = path.resolve(__dirname, 
   const sha256 = crypto.createHash('sha256').update(csvText, 'utf8').digest('hex');
   const patches = [...new Set(cards.map(card => payload.results.find(record => record.id === card.id).patch).filter(Boolean))].sort();
   await fs.mkdir(outputDir, { recursive: true });
+  await fs.mkdir(sourceOutputDir, { recursive: true });
   await fs.writeFile(path.join(outputDir, 'cards.csv'), csvText, 'utf8');
-  await fs.writeFile(path.join(outputDir, 'source.txt'), sourceText({ retrievedAt: now.toISOString(), sha256, patches }), 'utf8');
+  await fs.writeFile(path.join(sourceOutputDir, 'source.txt'), sourceText({ retrievedAt: now.toISOString(), sha256, patches }), 'utf8');
   return { count: cards.length, csvSha256: sha256, retrievedAt: now.toISOString(), patches };
 }
 
