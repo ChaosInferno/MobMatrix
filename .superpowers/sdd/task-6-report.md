@@ -2202,3 +2202,82 @@ BUILD SUCCESSFUL in 7s
 
 The focused runs emitted SQLite's existing JVM restricted-native-access warning. No formatter,
 linter, or project-wide suite was run.
+
+## Task 6 fix34 strict identity boundary completion
+
+### Status
+
+Implemented and committed strict identity movement protection, canonical match-start UUID parsing,
+and duplicate logical card-copy ledger detection/migration.
+
+Implementation commit: `3327252` (`fix: enforce strict identity boundaries`).
+
+### Corrective coverage
+
+- `CardInventoryService.isReserved(ItemStack)` now protects every invalid item carrying any
+  configured card identity key, regardless of whether its copy UUID is parseable, currently
+  reserved, changed, or unreserved. Ordinary items without card identity keys remain movable.
+  The protection is used by click, drag, swap, drop, death, quit, automated move, pickup, and
+  ItemFrame interaction guards.
+- `SqliteMatchRepository` decodes operation IDs, copy IDs, and player owner IDs from
+  `match_start_bindings` with the storage strict canonical UUID parser. Uppercase, shorthand,
+  whitespace-padded, malformed, and null identities are rejected instead of normalized.
+- Schema version 8 scans `card_copies` for case-insensitive logical UUID duplicates before
+  creating the durable unique index `card_copies_copy_uuid_ci`; migration fails closed when
+  pre-existing canonical/case-variant duplicates are present. Schema validation requires the
+  index, and the active-copy trigger rejects duplicate ledger matches.
+- `findCopyInternal`, public `findCopy`, `saveCopy`, and stored-copy UUID lookup reject multiple
+  ledger rows matching one semantic UUID. Terminal proof consequently cannot arbitrate one row
+  from an ambiguous duplicate ledger, and Java reuse preflight remains fail-closed.
+
+### TDD and focused verification
+
+Focused red command after adding the three SQLite regressions:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.matchStartBindingRejectsNonCanonicalOperationCopyAndOwnerUuids --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.migrationRejectsPreexistingCaseVariantCardCopyLedgerDuplicates --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.duplicateCardCopyLedgerRowsCannotBeUsedByLookupOrTerminalProof --no-daemon
+```
+
+Exact red result:
+
+```text
+> Task :test FAILED
+SqliteCustodyTest > migrationRejectsPreexistingCaseVariantCardCopyLedgerDuplicates() FAILED
+SqliteCustodyTest > duplicateCardCopyLedgerRowsCannotBeUsedByLookupOrTerminalProof() FAILED
+SqliteCustodyTest > matchStartBindingRejectsNonCanonicalOperationCopyAndOwnerUuids() FAILED
+3 tests completed, 3 failed
+FAILURE: Build failed with an exception.
+```
+
+Focused green command after implementation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.matchStartBindingRejectsNonCanonicalOperationCopyAndOwnerUuids --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.migrationRejectsPreexistingCaseVariantCardCopyLedgerDuplicates --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.duplicateCardCopyLedgerRowsCannotBeUsedByLookupOrTerminalProof --no-daemon
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 8s
+4 actionable tasks: 3 executed, 1 up-to-date
+```
+
+Final focused custody command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --no-daemon
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 7s
+4 actionable tasks: 1 executed, 3 up-to-date
+```
+
+The final focused selection completed 146 tests successfully and assumption-skipped 8 Paper
+registry-dependent tests (the four codec tests and the four existing inventory tests requiring a
+running Paper item registry). SQLite emitted its existing JVM restricted-native-access warning.
+No formatter, linter, project-wide build, or project-wide test suite was run.
