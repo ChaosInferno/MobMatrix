@@ -1931,3 +1931,41 @@ BUILD SUCCESSFUL in 2s
 The focused custody/storage/application run selected 123 tests and passed. SQLite emitted the
 existing JVM restricted-native-access warning. No formatter, linter, project-wide build, or
 project-wide test suite was run.
+
+### Proven malformed-terminal follow-up
+
+The final proof correction was committed as `2518208` (`fix: reuse proven terminal custody
+identities`). A malformed operation row with complete terminal status, escrow snapshots, and
+restored ledger is now reusable; malformed active/unproven rows remain fail-closed.
+
+Focused red command for the follow-up regression:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.identityEnumerationProtectsMalformedOperationCopiesButReleasesProvenTerminalCopies
+```
+
+Exact red result:
+
+```text
+> Task :test FAILED
+SqliteCustodyTest > identityEnumerationProtectsMalformedOperationCopiesButReleasesProvenTerminalCopies() FAILED
+1 test completed, 1 failed
+FAILURE: Build failed with an exception.
+```
+
+Focused green command after the follow-up implementation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 3 executed, 1 up-to-date
+```
+
+Current fix29 implementation commits are `7a8d663` and `2518208`; the report commit is
+`f67cc87`. No formatter, linter, project-wide build, or project-wide test suite was run.
