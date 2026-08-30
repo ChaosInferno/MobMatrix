@@ -1992,3 +1992,72 @@ BUILD SUCCESSFUL in 6s
 
 The final focused rerun selected 124 tests (68 storage, 10 inventory, and 46 application) and
 passed. SQLite emitted the existing JVM restricted-native-access warning.
+# Task 6 fix30 fail-closed identity refresh
+
+## TDD and focused verification
+
+Focused red command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest.identityRefreshRetainsPriorCopiesAndMarksUnknown --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.unresolvedReservationIdentityIsReportedForMalformedOperation
+```
+
+Expected before implementation: the new journal identity-uncertainty API is absent, so test compilation fails.
+
+Implementation commit: `02f48b2` (`fix: retain fail-closed custody identities`).
+
+The focused red command failed during test compilation as expected because the new journal and
+service identity-uncertainty methods were not yet implemented:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest.identityRefreshRetainsPriorCopiesAndMarksUnknown --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.unresolvedReservationIdentityIsReportedForMalformedOperation
+
+> Task :compileTestJava FAILED
+CardInventoryServiceTest.java:250: error: cannot find symbol
+  symbol:   method hasUnresolvedReservationIdentity()
+  location: variable service of type CardInventoryService
+SqliteCustodyTest.java:152: error: cannot find symbol
+  symbol:   method hasUnresolvedReservationIdentity()
+  location: variable repository of type SqliteCardRepository
+3 errors
+FAILURE: Build failed with an exception.
+```
+
+Focused green identity command (including malformed-copy coverage):
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest.identityRefreshRetainsPriorCopiesAndMarksUnknown --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.unresolvedReservationIdentityIsReportedForMalformedOperation --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.unresolvedReservationIdentityIsReportedForMalformedCopy
+
+> Task :test
+BUILD SUCCESSFUL in 1s
+4 actionable tasks: 3 executed, 1 up-to-date
+```
+
+Focused custody suites passed:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest
+
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 1 executed, 3 up-to-date
+```
+
+The malformed-item movement guard was also run:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest.malformedReservedIdentityCannotMove
+
+> Task :test
+BUILD SUCCESSFUL in 1s
+4 actionable tasks: 1 executed, 3 up-to-date
+```
+
+Fix30 now builds the durable identity replacement in a temporary set and commits it only after
+both identity reads succeed. Refresh failures retain the prior reserved IDs and set an explicit
+unknown-identity flag. SQLite reports unresolved operation or copy identity whenever the
+reservation lacks proven terminal proof; malformed identity rows therefore remain fail-closed even
+when no UUID can be returned. Invalid identity-bearing items are blocked while that flag is set,
+while ordinary items without card PDC identity remain movable. The flag is cleared only after a
+successful refresh proves no unresolved identity remains. SQLite emitted its existing restricted
+native-access warning. No formatter, linter, or project-wide suite was run.
