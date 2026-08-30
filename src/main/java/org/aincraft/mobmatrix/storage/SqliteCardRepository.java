@@ -167,7 +167,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     return operationId == null ? null : operationId.toLowerCase(java.util.Locale.ROOT);
   }
 
-  private static UUID parseCanonicalUuid(String value) {
+  static UUID parseCanonicalUuid(String value) {
     if (value == null) throw new IllegalArgumentException("UUID is required");
     UUID parsed;
     try {
@@ -214,8 +214,12 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         existing.setString(1, copy.copyId().value().toString());
         try (var rows = existing.executeQuery()) {
           if (rows.next()) {
+            int catalogId = rows.getInt(1);
             CopyOwner owner = readOwner(rows.getString(2), rows.getString(3));
-            if (rows.getInt(1) != copy.catalogId().value() || !owner.equals(copy.owner())) {
+            if (rows.next()) {
+              throw new IllegalStateException("duplicate card-copy UUID: " + copy.copyId());
+            }
+            if (catalogId != copy.catalogId().value() || !owner.equals(copy.owner())) {
               throw new IllegalStateException("copy UUID already belongs to another card or owner");
             }
             return;
@@ -368,15 +372,8 @@ public final class SqliteCardRepository implements CardCustodyJournal {
 
   public Optional<StoredCardCopy> findCopy(CardCopyId copyId) {
     Objects.requireNonNull(copyId, "copy id is required");
-    try (var query = connection.prepareStatement(
-        "SELECT catalog_id, owner_kind, owner_uuid FROM card_copies "
-            + "WHERE lower(copy_uuid) = lower(?)")) {
-      query.setString(1, copyId.value().toString());
-      try (var rows = query.executeQuery()) {
-        if (!rows.next()) return Optional.empty();
-        return Optional.of(new StoredCardCopy(copyId, new CardId(rows.getInt(1)),
-            readOwner(rows.getString(2), rows.getString(3))));
-      }
+    try {
+      return Optional.ofNullable(findCopyInternal(copyId));
     } catch (SQLException exception) {
       throw failure(exception);
     }
@@ -967,8 +964,15 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         "SELECT copy_uuid FROM card_copies WHERE lower(copy_uuid) = lower(?)")) {
       query.setString(1, copyId.value().toString());
       try (var rows = query.executeQuery()) {
-        if (!rows.next()) throw new IllegalStateException("unknown card copy: " + copyId);
-        return rows.getString(1);
+        String stored = null;
+        while (rows.next()) {
+          if (stored != null) {
+            throw new IllegalStateException("duplicate card-copy UUID: " + copyId);
+          }
+          stored = rows.getString(1);
+        }
+        if (stored == null) throw new IllegalStateException("unknown card copy: " + copyId);
+        return stored;
       }
     }
   }
@@ -1004,8 +1008,15 @@ public final class SqliteCardRepository implements CardCustodyJournal {
             + "WHERE lower(copy_uuid) = lower(?)")) {
       query.setString(1, copyId.value().toString());
       try (var rows = query.executeQuery()) {
-        if (!rows.next()) return null;
-        return new StoredCardCopy(copyId, new CardId(rows.getInt(1)), readOwner(rows.getString(2), rows.getString(3)));
+        StoredCardCopy found = null;
+        while (rows.next()) {
+          if (found != null) {
+            throw new IllegalStateException("duplicate card-copy UUID: " + copyId);
+          }
+          found = new StoredCardCopy(copyId, new CardId(rows.getInt(1)),
+              readOwner(rows.getString(2), rows.getString(3)));
+        }
+        return found;
       }
     }
   }

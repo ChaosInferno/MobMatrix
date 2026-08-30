@@ -10,7 +10,7 @@ import java.util.Set;
 
 /** Explicit, repeatable schema migrations for custody and active-match state. */
 public final class SchemaMigrator {
-  public static final int CURRENT_VERSION = 7;
+  public static final int CURRENT_VERSION = 8;
 
   private SchemaMigrator() {}
 
@@ -23,6 +23,7 @@ public final class SchemaMigrator {
       applyMigration(connection, next);
     }
     if (CURRENT_VERSION >= 7) applyV7(connection);
+    if (CURRENT_VERSION >= 8) applyV8(connection);
     validateSchema(connection);
   }
 
@@ -49,6 +50,7 @@ public final class SchemaMigrator {
         case 5 -> applyV5(connection);
         case 6 -> applyV6(connection);
         case 7 -> applyV7(connection);
+        case 8 -> applyV8(connection);
       }
       try (var insert = connection.prepareStatement(
           "INSERT INTO schema_migrations(version, applied_at) VALUES (?, CURRENT_TIMESTAMP)")) {
@@ -147,6 +149,9 @@ public final class SchemaMigrator {
               + table[0] + "." + table[index]);
         }
       }
+    }
+    if (!hasRequiredCopyUuidIndex(connection)) {
+      throw new SQLException("schema migration incomplete: missing case-insensitive card copy UUID index");
     }
   }
 
@@ -484,6 +489,13 @@ public final class SchemaMigrator {
                 OR EXISTS (
                   SELECT 1
                   FROM reservation_copies expected
+                  WHERE lower(expected.operation_id) = lower(existing.operation_id)
+                    AND (SELECT COUNT(*) FROM card_copies ledger
+                         WHERE lower(ledger.copy_uuid) = lower(expected.copy_uuid)) <> 1
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM reservation_copies expected
                   LEFT JOIN escrow_items snapshot
                     ON lower(snapshot.operation_id) = lower(expected.operation_id)
                     AND lower(snapshot.copy_uuid) = lower(expected.copy_uuid)
@@ -596,5 +608,35 @@ public final class SchemaMigrator {
   /** Reinstalls the reservation guard for databases already marked through V6. */
   private static void applyV7(Connection connection) throws SQLException {
     applyV6(connection);
+  }
+
+  private static boolean hasRequiredCopyUuidIndex(Connection connection) throws SQLException {
+    try (var query = connection.createStatement().executeQuery("PRAGMA index_list(card_copies)")) {
+      while (query.next()) {
+        if ("card_copies_copy_uuid_ci".equals(query.getString("name")) && query.getInt("unique") == 1) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private static void applyV8(Connection connection) throws SQLException {
+    try (var query = connection.createStatement().executeQuery("""
+        SELECT lower(copy_uuid), COUNT(*)
+        FROM card_copies
+        GROUP BY lower(copy_uuid)
+        HAVING COUNT(*) > 1
+        """)) {
+      if (query.next()) {
+        throw new SQLException("duplicate logical card-copy UUID: " + query.getString(1));
+      }
+    }
+    try (var statement = connection.createStatement()) {
+      statement.execute("""
+          CREATE UNIQUE INDEX IF NOT EXISTS card_copies_copy_uuid_ci
+          ON card_copies(lower(copy_uuid))
+          """);
+    }
   }
 }

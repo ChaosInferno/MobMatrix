@@ -426,9 +426,10 @@ public final class CardInventoryService implements CardCustodyPort {
     if (result.isValid()) return isReserved(result.data().copyId());
     var copyId = codec.identityCopyId(item);
     if (copyId.isPresent() && isReserved(copyId.get())) return true;
-    // An invalid identity-bearing item cannot be matched to a durable copy while any unresolved
-    // reservation identity exists. Ordinary items without configured PDC identity remain movable.
-    return codec.hasIdentity(item) && hasUnresolvedReservationIdentity();
+    // Any configured card identity key makes an invalid item unsafe to move. The identity may
+    // be malformed, changed, or unknown to custody, so fail closed independently of durable
+    // reservation uncertainty. Ordinary items without configured PDC identity remain movable.
+    return codec.hasIdentity(item);
   }
 
   public synchronized Set<CardCopyId> reservedCopyIds() {

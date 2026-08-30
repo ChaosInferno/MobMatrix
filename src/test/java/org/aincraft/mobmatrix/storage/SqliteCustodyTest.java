@@ -2268,7 +2268,7 @@ final class SqliteCustodyTest {
         insert.executeUpdate();
       }
       try (var delete = database.connection().prepareStatement(
-          "DELETE FROM schema_migrations WHERE version = 7")) {
+          "DELETE FROM schema_migrations WHERE version >= 7")) {
         delete.executeUpdate();
       }
       SchemaMigrator.migrate(database.connection());
@@ -2277,6 +2277,147 @@ final class SqliteCustodyTest {
           () -> repository.prepare(secondOperation, owner, List.of(copy), List.of(snapshot)));
 
 
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
+            created_at, updated_at)
+          VALUES (?, 'PLAYER', ?, NULL, 'PREPARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          """)) {
+        insert.setString(1, secondOperation.toString());
+        insert.setString(2, owner.playerId().toString());
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES (?, ?)")) {
+        insert.setString(1, secondOperation.toString());
+        insert.setString(2, copy.value().toString());
+        assertThrows(java.sql.SQLException.class, insert::executeUpdate);
+      }
+    }
+    Files.deleteIfExists(path);
+  }
+  @Test
+  void matchStartBindingRejectsNonCanonicalOperationCopyAndOwnerUuids() throws Exception {
+    var path = Files.createTempFile("mobmatrix-strict-start-binding", ".sqlite");
+    MatchId matchId = new MatchId("strict-start-binding");
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId oneCopy = new CardCopyId(UUID.fromString("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"));
+    CardCopyId twoCopy = new CardCopyId(UUID.fromString("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"));
+    UUID oneOperation = UUID.fromString("cccccccc-cccc-4ccc-8ccc-cccccccccccc");
+    UUID twoOperation = UUID.fromString("dddddddd-dddd-4ddd-8ddd-dddddddddddd");
+    MatchRepository.StartBinding expected = new MatchRepository.StartBinding(matchId, 1, "identity",
+        oneOwner, List.of(oneCopy), oneOperation, twoOwner, List.of(twoCopy), twoOperation);
+    try (Database database = new Database(path)) {
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO matches(match_id, revision, status, state_bytes, transcript_json, updated_at) "
+              + "VALUES (?, 0, 'ACTIVE', ?, '{}', CURRENT_TIMESTAMP)")) {
+        insert.setString(1, matchId.value());
+        insert.setBytes(2, new byte[] {1});
+        insert.executeUpdate();
+      }
+      SqliteMatchRepository repository = new SqliteMatchRepository(database);
+      repository.saveStartBinding(expected);
+      try (var update = database.connection().prepareStatement(
+          "UPDATE match_start_bindings SET one_operation_id = ? WHERE match_id = ?")) {
+        update.setString(1, oneOperation.toString().toUpperCase(java.util.Locale.ROOT));
+        update.setString(2, matchId.value());
+        update.executeUpdate();
+      }
+      assertThrows(IllegalArgumentException.class, () -> repository.findStartBinding(matchId));
+
+      try (var update = database.connection().prepareStatement(
+          "UPDATE match_start_bindings SET one_operation_id = ?, one_copy_ids = ? WHERE match_id = ?")) {
+        update.setString(1, oneOperation.toString());
+        update.setString(2, oneCopy.value().toString().toUpperCase(java.util.Locale.ROOT));
+        update.setString(3, matchId.value());
+        update.executeUpdate();
+      }
+      assertThrows(IllegalArgumentException.class, () -> repository.findStartBinding(matchId));
+
+      try (var update = database.connection().prepareStatement(
+          "UPDATE match_start_bindings SET one_copy_ids = ?, one_owner_uuid = ? WHERE match_id = ?")) {
+        update.setString(1, oneCopy.value().toString());
+        update.setString(2, oneOwner.playerId().toString() + " ");
+        update.setString(3, matchId.value());
+        update.executeUpdate();
+      }
+      assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+          () -> repository.findStartBinding(matchId));
+
+      try (var update = database.connection().prepareStatement(
+          "UPDATE match_start_bindings SET one_owner_uuid = ?, two_operation_id = ? WHERE match_id = ?")) {
+        update.setString(1, oneOwner.playerId().toString());
+        update.setString(2, "1-1-1-1-1");
+        update.setString(3, matchId.value());
+        update.executeUpdate();
+      }
+      assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+          () -> repository.findStartBinding(matchId));
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void migrationRejectsPreexistingCaseVariantCardCopyLedgerDuplicates() throws Exception {
+    var path = Files.createTempFile("mobmatrix-card-copy-duplicate-migration", ".sqlite");
+    String lower = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+    String upper = lower.toUpperCase(java.util.Locale.ROOT);
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    try (Database database = new Database(path)) {
+      try (var drop = database.connection().createStatement()) {
+        drop.execute("DROP INDEX IF EXISTS card_copies_copy_uuid_ci");
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO card_copies(copy_uuid, catalog_id, owner_kind, owner_uuid, created_at) "
+              + "VALUES (?, 1, 'PLAYER', ?, CURRENT_TIMESTAMP)")) {
+        insert.setString(1, lower);
+        insert.setString(2, owner.playerId().toString());
+        insert.executeUpdate();
+        insert.setString(1, upper);
+        insert.executeUpdate();
+      }
+      try (var delete = database.connection().createStatement()) {
+        delete.execute("DELETE FROM schema_migrations WHERE version = 8");
+      }
+      assertThrows(java.sql.SQLException.class,
+          () -> SchemaMigrator.migrate(database.connection()));
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void duplicateCardCopyLedgerRowsCannotBeUsedByLookupOrTerminalProof() throws Exception {
+    var path = Files.createTempFile("mobmatrix-card-copy-duplicate-proof", ".sqlite");
+    UUID firstOperation = UUID.randomUUID();
+    UUID secondOperation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.fromString("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"));
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {6, 2});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(firstOperation, owner, List.of(copy), List.of(snapshot));
+      repository.transition(firstOperation, OperationStatus.ESCROWED);
+      repository.transition(firstOperation, OperationStatus.RETURN_PENDING);
+      repository.addRecovery(firstOperation, owner, snapshot);
+      repository.markRestored(firstOperation, copy);
+      repository.transition(firstOperation, OperationStatus.RETURNED);
+      try (var drop = database.connection().createStatement()) {
+        drop.execute("DROP INDEX IF EXISTS card_copies_copy_uuid_ci");
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO card_copies(copy_uuid, catalog_id, owner_kind, owner_uuid, created_at) "
+              + "VALUES (?, 1, 'PLAYER', ?, CURRENT_TIMESTAMP)")) {
+        insert.setString(1, copy.value().toString().toUpperCase(java.util.Locale.ROOT));
+        insert.setString(2, owner.playerId().toString());
+        insert.executeUpdate();
+      }
+
+      assertThrows(IllegalStateException.class, () -> repository.findCopy(copy));
+      assertTrue(repository.reservedCopyIds().contains(copy));
+      assertTrue(repository.hasUnresolvedReservationIdentity());
+      assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+          () -> repository.prepare(secondOperation, owner, List.of(copy), List.of(snapshot)));
       try (var insert = database.connection().prepareStatement("""
           INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
             created_at, updated_at)

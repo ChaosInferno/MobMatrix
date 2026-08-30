@@ -374,8 +374,8 @@ public final class SqliteMatchRepository implements MatchRepository {
         try {
           oneCopies = readCopies(rows.getString(6));
           twoCopies = readCopies(rows.getString(10));
-          oneOperation = java.util.UUID.fromString(rows.getString(5));
-          twoOperation = java.util.UUID.fromString(rows.getString(9));
+          oneOperation = SqliteCardRepository.parseCanonicalUuid(rows.getString(5));
+          twoOperation = SqliteCardRepository.parseCanonicalUuid(rows.getString(9));
           return Optional.of(new StartBinding(matchId, rows.getInt(1), rows.getString(2),
               readOwner(rows.getString(3), rows.getString(4)), oneCopies, oneOperation,
               readOwner(rows.getString(7), rows.getString(8)), twoCopies, twoOperation));
@@ -436,9 +436,11 @@ public final class SqliteMatchRepository implements MatchRepository {
   }
 
   private static List<org.aincraft.mobmatrix.domain.CardCopyId> readCopies(String value) {
-    if (value == null || value.isEmpty()) return List.of();
+    if (value == null) throw new IllegalArgumentException("copy IDs are required");
+    if (value.isEmpty()) return List.of();
     return java.util.Arrays.stream(value.split(",", -1))
-        .map(text -> new org.aincraft.mobmatrix.domain.CardCopyId(java.util.UUID.fromString(text))).toList();
+        .map(text -> new org.aincraft.mobmatrix.domain.CardCopyId(
+            SqliteCardRepository.parseCanonicalUuid(text))).toList();
   }
 
   private static org.aincraft.mobmatrix.domain.CopyOwner readOwner(String kind, String uuid) {
@@ -446,7 +448,8 @@ public final class SqliteMatchRepository implements MatchRepository {
       return org.aincraft.mobmatrix.domain.CopyOwner.house();
     }
     if ("PLAYER".equals(kind) && uuid != null) {
-      return org.aincraft.mobmatrix.domain.CopyOwner.player(java.util.UUID.fromString(uuid));
+      return org.aincraft.mobmatrix.domain.CopyOwner.player(
+          SqliteCardRepository.parseCanonicalUuid(uuid));
     }
     throw new IllegalStateException("invalid owner in database");
   }

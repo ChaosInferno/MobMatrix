@@ -412,4 +412,41 @@ final class CardInventoryServiceTest {
     assertTrue(!codec.read(item).isValid());
     assertTrue(service.hasReservedInventory(inventory));
   }
+  @Test
+  void everyInvalidIdentityBearingItemIsProtectedEvenWithoutReservationUncertainty() {
+    boolean paperAvailable;
+    try {
+      new ItemStack(org.bukkit.Material.PAPER);
+      paperAvailable = true;
+    } catch (Throwable unavailable) {
+      paperAvailable = false;
+    }
+    org.junit.jupiter.api.Assumptions.assumeTrue(paperAvailable,
+        "Paper API item registry requires a running Paper server");
+    CardItemCodec codec = new CardItemCodec("mobmatrix", "0123456789abcdef");
+    CardCopyId original = new CardCopyId(UUID.randomUUID());
+    ItemStack changed = codec.create(
+        new org.aincraft.mobmatrix.domain.CardDefinition(
+            new CardId(1), "No. 1", "Dodo", 1,
+            org.aincraft.mobmatrix.domain.CardType.NORMAL, 4, 2, 3, 4, 0),
+        original, CopyOwner.player(UUID.randomUUID()));
+    var changedMeta = changed.getItemMeta();
+    changedMeta.getPersistentDataContainer().set(codec.copyIdKey(),
+        org.bukkit.persistence.PersistentDataType.STRING, UUID.randomUUID().toString());
+    changed.setItemMeta(changedMeta);
+
+    ItemStack malformed = changed.clone();
+    var malformedMeta = malformed.getItemMeta();
+    malformedMeta.getPersistentDataContainer().set(codec.copyIdKey(),
+        org.bukkit.persistence.PersistentDataType.STRING, "not-a-uuid");
+    malformed.setItemMeta(malformedMeta);
+
+    CardInventoryService service = new CardInventoryService(codec, id -> null,
+        new org.aincraft.mobmatrix.application.InMemoryCardCustodyJournal());
+    assertFalse(service.hasUnresolvedReservationIdentity());
+    assertTrue(codec.read(changed).isInvalid());
+    assertTrue(codec.read(malformed).isInvalid());
+    assertTrue(service.isReserved(changed));
+    assertTrue(service.isReserved(malformed));
+  }
 }
