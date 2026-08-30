@@ -628,27 +628,44 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   }
   private void validateCopyReuse(UUID operationId, CopyOwner owner, CardCopyId copy)
       throws SQLException {
-    try (var query = connection.prepareStatement(
-        "SELECT operation_id FROM reservation_copies "
-            + "WHERE lower(copy_uuid) = lower(?) ORDER BY rowid")) {
-      query.setString(1, copy.value().toString());
-      Set<String> seenRawOperationIds = new HashSet<>();
+    try (var query = connection.prepareStatement("""
+        SELECT operation_id FROM reservation_copies
+        WHERE lower(copy_uuid) = lower(?)
+        UNION ALL
+        SELECT operation_id FROM escrow_items
+        WHERE lower(copy_uuid) = lower(?)
+        UNION ALL
+        SELECT operation_id FROM reservation_restored
+        WHERE lower(copy_uuid) = lower(?)
+        UNION ALL
+        SELECT operation_id FROM recovery_rows
+        WHERE lower(copy_uuid) = lower(?)
+        """)) {
+      String rawCopyId = copy.value().toString();
+      query.setString(1, rawCopyId);
+      query.setString(2, rawCopyId);
+      query.setString(3, rawCopyId);
+      query.setString(4, rawCopyId);
+      Set<String> seenOperationKeys = new HashSet<>();
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
           String rawOperationId = rows.getString(1);
-          if (!seenRawOperationIds.add(rawOperationId)) continue;
+          String operationKey = operationKey(rawOperationId);
+          if (!seenOperationKeys.add(operationKey)) continue;
           UUID existingOperation;
           try {
             existingOperation = UUID.fromString(rawOperationId);
           } catch (RuntimeException exception) {
-            if (provenTerminal(rawOperationId)) continue;
             throw new CustodyIntegrityException(operationId, List.of(copy),
-                "invalid existing reservation operation identity", exception);
+                "invalid existing custody operation identity", exception);
           }
-          if (existingOperation.equals(operationId)) continue;
+          if (existingOperation.equals(operationId)) {
+            throw new CustodyIntegrityException(operationId, List.of(copy),
+                "copy has an existing custody identity", null);
+          }
           Reservation existing = findReservationInternal(existingOperation);
           if (existing == null) {
-            throw new IllegalStateException("reservation copy has no reservation");
+            throw new IllegalStateException("custody child has no reservation");
           }
           if (!existing.owner().equals(owner)) {
             throw new IllegalStateException("existing reservation owner does not match copy owner");
@@ -667,6 +684,16 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   }
 
   private Reservation findReservationInternal(UUID operationId) throws SQLException {
+    try (var count = connection.prepareStatement(
+        "SELECT COUNT(*) FROM reservations WHERE lower(operation_id) = lower(?)")) {
+      count.setString(1, operationId.toString());
+      try (var rows = count.executeQuery()) {
+        if (rows.next() && rows.getInt(1) > 1) {
+          throw new CustodyIntegrityException(operationId, List.of(),
+              "duplicate case-variant reservation operation identity");
+        }
+      }
+    }
     try (var query = connection.prepareStatement(
         "SELECT owner_kind, owner_uuid, match_id, status FROM reservations "
             + "WHERE lower(operation_id) = lower(?)")) {

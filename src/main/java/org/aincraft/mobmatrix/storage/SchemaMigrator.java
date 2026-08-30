@@ -369,11 +369,29 @@ public final class SchemaMigrator {
           BEFORE INSERT ON reservation_copies
           WHEN EXISTS (
             SELECT 1
-            FROM reservation_copies existing
-            JOIN reservations reservation ON reservation.operation_id = existing.operation_id
+            FROM (
+              SELECT operation_id, copy_uuid FROM reservation_copies
+              UNION ALL
+              SELECT operation_id, copy_uuid FROM escrow_items
+              UNION ALL
+              SELECT operation_id, copy_uuid FROM reservation_restored
+              UNION ALL
+              SELECT operation_id, copy_uuid FROM recovery_rows
+            ) existing
+            LEFT JOIN reservations reservation
+              ON lower(reservation.operation_id) = lower(existing.operation_id)
             WHERE lower(existing.copy_uuid) = lower(NEW.copy_uuid)
               AND (
-                reservation.status IS NULL
+                existing.operation_id IS NULL
+                OR length(existing.operation_id) <> 36
+                OR substr(existing.operation_id, 9, 1) <> '-'
+                OR substr(existing.operation_id, 14, 1) <> '-'
+                OR substr(existing.operation_id, 19, 1) <> '-'
+                OR substr(existing.operation_id, 24, 1) <> '-'
+                OR existing.operation_id GLOB '*[^0-9A-Fa-f-]*'
+                OR (SELECT COUNT(*) FROM reservations duplicate
+                    WHERE lower(duplicate.operation_id) = lower(existing.operation_id)) <> 1
+                OR reservation.status IS NULL
                 OR reservation.status NOT IN ('RETURNED', 'ABORTED')
                 OR reservation.owner_kind IS NULL
                 OR reservation.owner_kind NOT IN ('PLAYER', 'HOUSE')
@@ -387,21 +405,52 @@ public final class SchemaMigrator {
                   OR substr(reservation.owner_uuid, 24, 1) <> '-'
                   OR reservation.owner_uuid GLOB '*[^0-9A-Fa-f-]*'
                 ))
+                OR EXISTS (
+                  SELECT 1 FROM reservation_copies malformed
+                  WHERE lower(malformed.operation_id) = lower(existing.operation_id)
+                    AND (
+                      malformed.copy_uuid IS NULL
+                      OR length(malformed.copy_uuid) <> 36
+                      OR substr(malformed.copy_uuid, 9, 1) <> '-'
+                      OR substr(malformed.copy_uuid, 14, 1) <> '-'
+                      OR substr(malformed.copy_uuid, 19, 1) <> '-'
+                      OR substr(malformed.copy_uuid, 24, 1) <> '-'
+                      OR malformed.copy_uuid GLOB '*[^0-9A-Fa-f-]*'
+                    )
+                )
+                OR EXISTS (
+                  SELECT 1 FROM reservation_copies first_copy
+                  JOIN reservation_copies duplicate_copy
+                    ON lower(first_copy.operation_id) = lower(duplicate_copy.operation_id)
+                    AND lower(first_copy.copy_uuid) = lower(duplicate_copy.copy_uuid)
+                    AND first_copy.rowid < duplicate_copy.rowid
+                  WHERE lower(first_copy.operation_id) = lower(existing.operation_id)
+                )
                 OR NOT EXISTS (
                   SELECT 1
-                  FROM card_copies ledger
-                  WHERE lower(ledger.copy_uuid) = lower(existing.copy_uuid)
-                    AND ledger.owner_kind = reservation.owner_kind
-                    AND (
-                      (ledger.owner_kind = 'HOUSE' AND ledger.owner_uuid IS NULL)
-                      OR (ledger.owner_kind = 'PLAYER'
-                        AND lower(ledger.owner_uuid) = lower(reservation.owner_uuid)
-                        AND length(ledger.owner_uuid) = 36
-                        AND substr(ledger.owner_uuid, 9, 1) = '-'
-                        AND substr(ledger.owner_uuid, 14, 1) = '-'
-                        AND substr(ledger.owner_uuid, 19, 1) = '-'
-                        AND substr(ledger.owner_uuid, 24, 1) = '-'
-                        AND ledger.owner_uuid NOT GLOB '*[^0-9A-Fa-f-]*')
+                  FROM reservation_copies expected
+                  WHERE lower(expected.operation_id) = lower(existing.operation_id)
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM reservation_copies expected
+                  WHERE lower(expected.operation_id) = lower(existing.operation_id)
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM card_copies ledger
+                      WHERE lower(ledger.copy_uuid) = lower(expected.copy_uuid)
+                        AND ledger.owner_kind = reservation.owner_kind
+                        AND (
+                          (ledger.owner_kind = 'HOUSE' AND ledger.owner_uuid IS NULL)
+                          OR (ledger.owner_kind = 'PLAYER'
+                            AND lower(ledger.owner_uuid) = lower(reservation.owner_uuid)
+                            AND length(ledger.owner_uuid) = 36
+                            AND substr(ledger.owner_uuid, 9, 1) = '-'
+                            AND substr(ledger.owner_uuid, 14, 1) = '-'
+                            AND substr(ledger.owner_uuid, 19, 1) = '-'
+                            AND substr(ledger.owner_uuid, 24, 1) = '-'
+                            AND ledger.owner_uuid NOT GLOB '*[^0-9A-Fa-f-]*')
+                        )
                     )
                 )
                 OR EXISTS (
@@ -428,6 +477,15 @@ public final class SchemaMigrator {
                 )
                 OR EXISTS (
                   SELECT 1
+                  FROM escrow_items first_snapshot
+                  JOIN escrow_items duplicate_snapshot
+                    ON lower(first_snapshot.operation_id) = lower(duplicate_snapshot.operation_id)
+                    AND lower(first_snapshot.copy_uuid) = lower(duplicate_snapshot.copy_uuid)
+                    AND first_snapshot.rowid < duplicate_snapshot.rowid
+                  WHERE lower(first_snapshot.operation_id) = lower(existing.operation_id)
+                )
+                OR EXISTS (
+                  SELECT 1
                   FROM reservation_copies expected
                   LEFT JOIN reservation_restored restored
                     ON lower(restored.operation_id) = lower(expected.operation_id)
@@ -443,24 +501,6 @@ public final class SchemaMigrator {
                     AND lower(expected.copy_uuid) = lower(restored.copy_uuid)
                   WHERE lower(restored.operation_id) = lower(existing.operation_id)
                     AND expected.copy_uuid IS NULL
-                )
-                OR EXISTS (
-                  SELECT 1
-                  FROM reservation_copies first_copy
-                  JOIN reservation_copies duplicate_copy
-                    ON lower(first_copy.operation_id) = lower(duplicate_copy.operation_id)
-                    AND lower(first_copy.copy_uuid) = lower(duplicate_copy.copy_uuid)
-                    AND first_copy.rowid < duplicate_copy.rowid
-                  WHERE lower(first_copy.operation_id) = lower(existing.operation_id)
-                )
-                OR EXISTS (
-                  SELECT 1
-                  FROM escrow_items first_snapshot
-                  JOIN escrow_items duplicate_snapshot
-                    ON lower(first_snapshot.operation_id) = lower(duplicate_snapshot.operation_id)
-                    AND lower(first_snapshot.copy_uuid) = lower(duplicate_snapshot.copy_uuid)
-                    AND first_snapshot.rowid < duplicate_snapshot.rowid
-                  WHERE lower(first_snapshot.operation_id) = lower(existing.operation_id)
                 )
                 OR EXISTS (
                   SELECT 1

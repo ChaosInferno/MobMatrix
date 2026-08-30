@@ -2121,8 +2121,133 @@ final class SqliteCustodyTest {
       }
       assertEquals(Set.of(activeCopy), repository.reservedCopyIds());
       UUID reusableOperation = UUID.randomUUID();
-      repository.prepare(reusableOperation, owner, List.of(terminalCopy), List.of(terminalSnapshot));
-      assertEquals(Set.of(activeCopy, terminalCopy), repository.reservedCopyIds());
+      assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+          () -> repository.prepare(reusableOperation, owner, List.of(terminalCopy),
+              List.of(terminalSnapshot)));
+      assertEquals(Set.of(activeCopy), repository.reservedCopyIds());
+    }
+    Files.deleteIfExists(path);
+  }
+  @Test
+  void orphanChildRowsBlockCopyReuseInJavaAndTrigger() throws Exception {
+    var path = Files.createTempFile("mobmatrix-orphan-child-reuse", ".sqlite");
+    UUID firstOperation = UUID.randomUUID();
+    UUID secondOperation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {6, 7});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(firstOperation, owner, List.of(copy), List.of(snapshot));
+      repository.transition(firstOperation, OperationStatus.ESCROWED);
+      repository.transition(firstOperation, OperationStatus.RETURN_PENDING);
+      repository.markRestored(firstOperation, copy);
+      repository.transition(firstOperation, OperationStatus.RETURNED);
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA foreign_keys = OFF");
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO escrow_items(operation_id, copy_uuid, item_bytes) VALUES (?, ?, ?)")) {
+        insert.setString(1, "orphan-escrow");
+        insert.setString(2, copy.value().toString());
+        insert.setBytes(3, snapshot.bytes());
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO reservation_restored(operation_id, copy_uuid) VALUES (?, ?)")) {
+        insert.setString(1, "orphan-restored");
+        insert.setString(2, copy.value().toString());
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO recovery_rows(operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status)
+          VALUES (?, ?, 'PLAYER', ?, ?, 'RESTORED')
+          """)) {
+        insert.setString(1, "orphan-recovery");
+        insert.setString(2, copy.value().toString());
+        insert.setString(3, owner.playerId().toString());
+        insert.setBytes(4, snapshot.bytes());
+        insert.executeUpdate();
+      }
+
+      assertThrows(IllegalStateException.class,
+          () -> repository.prepare(secondOperation, owner, List.of(copy), List.of(snapshot)));
+
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
+            created_at, updated_at)
+          VALUES (?, 'PLAYER', ?, NULL, 'PREPARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          """)) {
+        insert.setString(1, secondOperation.toString());
+        insert.setString(2, owner.playerId().toString());
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES (?, ?)")) {
+        insert.setString(1, secondOperation.toString());
+        insert.setString(2, copy.value().toString());
+        assertThrows(java.sql.SQLException.class, insert::executeUpdate);
+      }
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void duplicateCaseVariantOperationRowsBlockCopyReuseInJavaAndTrigger() throws Exception {
+    var path = Files.createTempFile("mobmatrix-duplicate-operation-reuse", ".sqlite");
+    UUID firstOperation = UUID.randomUUID();
+    UUID secondOperation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {4, 8});
+    String upperOperation = firstOperation.toString().toUpperCase(java.util.Locale.ROOT);
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(firstOperation, owner, List.of(copy), List.of(snapshot));
+      repository.transition(firstOperation, OperationStatus.ESCROWED);
+      repository.transition(firstOperation, OperationStatus.RETURN_PENDING);
+      repository.markRestored(firstOperation, copy);
+      repository.transition(firstOperation, OperationStatus.RETURNED);
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA foreign_keys = OFF");
+        pragma.execute("DROP TRIGGER active_copy_reservation_guard");
+      }
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
+            created_at, updated_at)
+          VALUES (?, 'PLAYER', ?, NULL, 'RETURNED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          """)) {
+        insert.setString(1, upperOperation);
+        insert.setString(2, owner.playerId().toString());
+        insert.executeUpdate();
+      }
+      try (var delete = database.connection().prepareStatement(
+          "DELETE FROM schema_migrations WHERE version = 7")) {
+        delete.executeUpdate();
+      }
+      SchemaMigrator.migrate(database.connection());
+
+      assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+          () -> repository.prepare(secondOperation, owner, List.of(copy), List.of(snapshot)));
+
+
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
+            created_at, updated_at)
+          VALUES (?, 'PLAYER', ?, NULL, 'PREPARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          """)) {
+        insert.setString(1, secondOperation.toString());
+        insert.setString(2, owner.playerId().toString());
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES (?, ?)")) {
+        insert.setString(1, secondOperation.toString());
+        insert.setString(2, copy.value().toString());
+        assertThrows(java.sql.SQLException.class, insert::executeUpdate);
+      }
     }
     Files.deleteIfExists(path);
   }

@@ -481,7 +481,10 @@ public final class CardInventoryService implements CardCustodyPort {
   public boolean hasReservedInventory(Inventory inventory) {
     requirePrimaryThread();
     Objects.requireNonNull(inventory, "inventory is required");
-    return scan(inventory).cards.keySet().stream().anyMatch(this::isReserved);
+    for (int slot = 0; slot < inventory.getSize(); slot++) {
+      if (isReserved(inventory.getItem(slot))) return true;
+    }
+    return false;
   }
   public boolean handleNumberKey(org.bukkit.event.inventory.InventoryClickEvent event) {
     return handleInventoryClick(event);
