@@ -2435,8 +2435,51 @@ linter, project-wide build, or project-wide test suite was run.
   separate from the aggregate recovery identity set.
 - `MatchApplicationService` converts the structured integrity failure to `DATABASE_ERROR`,
   `RETURN_PENDING`, and matching expected/pending copy-ID lists; no successful recovery is exposed.
+ 
+## Fix36 follow-up: malformed child-operation identity
+
+The regression was strengthened to mark one parseable child row in each non-parent table with a
+non-canonical operation spelling. This ensures a malformed child operation does not discard its
+parseable copy UUID. The implementation now parses operation and copy identities independently,
+retaining the copy identity while still recording the operation-integrity failure.
+
+Focused red command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.malformedReservationCopiesAggregateParseableChildIdentities --no-daemon
+```
+
+Exact red result:
+
+```text
+> Task :test FAILED
+
+SqliteCustodyTest > malformedReservationCopiesAggregateParseableChildIdentities() FAILED
+    org.opentest4j.AssertionFailedError at SqliteCustodyTest.java:2677
+
+1 test completed, 1 failed
+
+FAILURE: Build failed with an exception.
+```
+
+Focused green command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.malformedReservationCopiesAggregateParseableChildIdentities --no-daemon
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 7s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+Final implementation commits: `df681c6`, `fd39316` (both `fix: aggregate recovery identities`).
+No formatter, linter, project-wide build, or project-wide test suite was run.
 
 ## Current commits
 
-Implementation commit: `df681c6` (`fix: aggregate recovery identities`).
+Implementation commits: `df681c6`, `fd39316` (`fix: aggregate recovery identities`).
 Report commit: pending.
