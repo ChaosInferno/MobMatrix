@@ -1871,3 +1871,63 @@ BUILD SUCCESSFUL in 3s
 
 The focused runs emitted the existing SQLite JDBC restricted-native-access warning. No
 formatter, linter, project-wide build, or project-wide test suite was run.
+
+## Task 6 fix29 semantic reservation identity corrections
+
+### Status
+
+Implemented and committed as `7a8d663` (`fix: preserve malformed reservation identities`).
+The implementation adds canonical case-insensitive UUID reuse checks to Java preflight and the
+V6/V7 active-copy trigger, durable identity-only enumeration for parseable copies in malformed
+operation rows, fail-closed inventory hydration/movement protection, and terminal reuse rejection
+when recovery rows are pending or have invalid linkage, owner, status, or snapshot bytes.
+
+### Corrective coverage
+
+- `CardCustodyJournal.reservedCopyIds()` now provides a durable physical-copy identity view that
+  does not depend on decoding operation UUIDs. SQLite scans raw operation rows and excludes only
+  reservations with complete terminal proof; `CardInventoryService` hydrates and refreshes this
+  set alongside its operation cache, so malformed operation rows remain movement-protected.
+- Reservation and ledger UUID lookups use semantic `lower(...)` comparisons and preserve stored
+  UUID spellings for foreign-key writes. The Java preflight and recreated SQLite trigger therefore
+  reject an active uppercase copy UUID when a new reservation supplies the lowercase identity.
+- `RETURNED`/`ABORTED` reuse requires exact snapshots, complete restored identity, valid recovery
+  row linkage/owner/snapshot bytes, and no `PENDING` recovery row. The trigger includes equivalent
+  fail-closed checks, including canonical duplicate identity detection.
+- Schema version 7 reapplies the corrected V6 trigger to databases already marked through V6.
+
+### TDD and focused verification
+
+Focused red command before implementation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.canonicalCopyUuidReuseBlocksCaseVariantActiveReservation --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.pendingRecoveryBlocksTerminalReuseInJavaAndTrigger --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.identityEnumerationProtectsMalformedOperationCopiesButReleasesProvenTerminalCopies --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest.hydratesDurableReservedIdentitiesWhenOperationIdIsMalformed
+```
+
+Exact red result:
+
+```text
+> Task :compileTestJava FAILED
+SqliteCustodyTest.java:1968: error: cannot find symbol
+  symbol:   method reservedCopyIds()
+  location: variable repository of type SqliteCardRepository
+FAILURE: Build failed with an exception.
+```
+
+Focused green command after implementation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 2s
+4 actionable tasks: 2 executed, 1 up-to-date
+```
+
+The focused custody/storage/application run selected 123 tests and passed. SQLite emitted the
+existing JVM restricted-native-access warning. No formatter, linter, project-wide build, or
+project-wide test suite was run.
