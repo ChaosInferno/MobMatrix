@@ -2301,7 +2301,7 @@ trigger and V8 migration reject uppercase, shorthand, whitespace, malformed, or 
 ledger identities before reuse. Existing atomic identity refresh semantics retain the prior
 reserved set and unknown gating when either refresh read fails.
 
-Implementation commit: `eea5ac5` (`fix: fail closed custody identity proofs`).
+Implementation commits: `eea5ac5`, `255a8d3` (`fix: fail closed custody identity proofs`).
 
 ## TDD and focused verification
 
@@ -2353,5 +2353,5 @@ suite was run.
 
 ## Current commits
 
-Implementation commit: `eea5ac5` (`fix: fail closed custody identity proofs`).
+Implementation commits: `eea5ac5`, `255a8d3` (`fix: fail closed custody identity proofs`).
 Report commit: `f8663ee` (`docs: record fail-closed custody identity verification`).
