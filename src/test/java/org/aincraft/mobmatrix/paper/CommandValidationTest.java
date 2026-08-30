@@ -12,15 +12,16 @@ import java.util.UUID;
 import org.aincraft.mobmatrix.MobMatrixPlugin;
 import org.aincraft.mobmatrix.domain.CardCatalog;
 import org.aincraft.mobmatrix.domain.CardCopyId;
-import org.aincraft.mobmatrix.domain.CardDefinition;
 import org.junit.jupiter.api.Test;
 
 final class CommandValidationTest {
   @Test
   void resolvesNoAndExLabelsWithoutUsingDisplayText() throws IOException {
     CardCatalog catalog = currentCatalog();
-    assertEquals("Dodo", MobMatrixCommand.lookupPublicNumber(catalog, "No. 1").orElseThrow().name());
-    assertEquals("Clive Rosfield", MobMatrixCommand.lookupCard(catalog, "Ex. 15").orElseThrow().name());
+    assertEquals(
+        "Dodo", MobMatrixCommand.lookupPublicNumber(catalog, "No. 1").orElseThrow().name());
+    assertEquals(
+        "Clive Rosfield", MobMatrixCommand.lookupCard(catalog, "Ex. 15").orElseThrow().name());
     assertEquals("Dodo", MobMatrixCommand.lookupPublicNumber(catalog, "1").orElseThrow().name());
     assertTrue(MobMatrixCommand.lookupPublicNumber(catalog, "No. 999").isEmpty());
     assertTrue(MobMatrixCommand.lookupPublicNumber(catalog, "Ex. 0").isEmpty());
@@ -28,25 +29,35 @@ final class CommandValidationTest {
 
   @Test
   void rejectsConsoleMissingTargetAndSelfChallenge() {
-    MobMatrixCommand.ChallengeValidation console = MobMatrixCommand.validateChallenge(
-        null, UUID.randomUUID(), true, false, false, false, false);
+    MobMatrixCommand.ChallengeValidation console =
+        MobMatrixCommand.validateChallenge(
+            null, UUID.randomUUID(), true, false, false, false, false);
     assertFalse(console.accepted());
-    MobMatrixCommand.ChallengeValidation missing = MobMatrixCommand.validateChallenge(
-        UUID.randomUUID(), null, false, false, false, false, false);
+    MobMatrixCommand.ChallengeValidation missing =
+        MobMatrixCommand.validateChallenge(
+            UUID.randomUUID(), null, false, false, false, false, false);
     assertFalse(missing.accepted());
     UUID player = UUID.randomUUID();
-    MobMatrixCommand.ChallengeValidation self = MobMatrixCommand.validateChallenge(
-        player, player, true, false, false, false, false);
+    MobMatrixCommand.ChallengeValidation self =
+        MobMatrixCommand.validateChallenge(player, player, true, false, false, false, false);
     assertFalse(self.accepted());
   }
 
   @Test
   void enforcesExactFiveDistinctPhysicalCopiesAndBoundedPositiveAmount() {
-    List<CardCopyId> five = List.of(new CardCopyId(UUID.randomUUID()), new CardCopyId(UUID.randomUUID()),
-        new CardCopyId(UUID.randomUUID()), new CardCopyId(UUID.randomUUID()), new CardCopyId(UUID.randomUUID()));
+    List<CardCopyId> five =
+        List.of(
+            new CardCopyId(UUID.randomUUID()),
+            new CardCopyId(UUID.randomUUID()),
+            new CardCopyId(UUID.randomUUID()),
+            new CardCopyId(UUID.randomUUID()),
+            new CardCopyId(UUID.randomUUID()));
     assertTrue(MobMatrixCommand.validateDeck(five).accepted());
     assertFalse(MobMatrixCommand.validateDeck(five.subList(0, 4)).accepted());
-    assertFalse(MobMatrixCommand.validateDeck(List.of(five.get(0), five.get(0), five.get(1), five.get(2), five.get(3))).accepted());
+    assertFalse(
+        MobMatrixCommand.validateDeck(
+                List.of(five.get(0), five.get(0), five.get(1), five.get(2), five.get(3)))
+            .accepted());
     assertFalse(MobMatrixCommand.validateAmount(0, 64).accepted());
     assertFalse(MobMatrixCommand.validateAmount(65, 64).accepted());
     assertTrue(MobMatrixCommand.validateAmount(5, 64).accepted());
@@ -56,11 +67,21 @@ final class CommandValidationTest {
   void challengeValidationCoversPendingAndBusyTransitions() {
     UUID sender = UUID.randomUUID();
     UUID target = UUID.randomUUID();
-    assertTrue(MobMatrixCommand.validateChallenge(sender, target, true, false, false, false, false).accepted());
-    assertFalse(MobMatrixCommand.validateChallenge(sender, target, true, false, false, true, false).accepted());
-    assertFalse(MobMatrixCommand.validateChallenge(sender, target, true, false, false, false, true).accepted());
-    assertFalse(MobMatrixCommand.validateChallenge(sender, target, true, true, false, false, false).accepted());
-    assertFalse(MobMatrixCommand.validateChallenge(sender, target, true, false, true, false, false).accepted());
+    assertTrue(
+        MobMatrixCommand.validateChallenge(sender, target, true, false, false, false, false)
+            .accepted());
+    assertFalse(
+        MobMatrixCommand.validateChallenge(sender, target, true, false, false, true, false)
+            .accepted());
+    assertFalse(
+        MobMatrixCommand.validateChallenge(sender, target, true, false, false, false, true)
+            .accepted());
+    assertFalse(
+        MobMatrixCommand.validateChallenge(sender, target, true, true, false, false, false)
+            .accepted());
+    assertFalse(
+        MobMatrixCommand.validateChallenge(sender, target, true, false, true, false, false)
+            .accepted());
   }
 
   @Test
@@ -78,7 +99,8 @@ final class CommandValidationTest {
   }
 
   private static CardCatalog currentCatalog() throws IOException {
-    try (InputStream input = CommandValidationTest.class.getResourceAsStream("/catalog/cards.csv")) {
+    try (InputStream input =
+        CommandValidationTest.class.getResourceAsStream("/catalog/cards.csv")) {
       return new CardCatalog(MobMatrixPlugin.parseCatalog(input.readAllBytes()), "test-catalog");
     }
   }

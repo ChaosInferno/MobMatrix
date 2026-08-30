@@ -28,25 +28,26 @@ final class CardCatalogTest {
     }
     assertEquals(expected, actual);
   }
- 
+
   @Test
   void rejectsGapsInInternalIdsWithinSuppliedCollection() {
-    CardDefinition first = new CardDefinition(
-        new CardId(1), "No. 1", "First", 1, CardType.NORMAL, 1, 1, 1, 1, 100);
-    CardDefinition third = new CardDefinition(
-        new CardId(3), "No. 3", "Third", 1, CardType.NORMAL, 1, 1, 1, 1, 100);
+    CardDefinition first =
+        new CardDefinition(new CardId(1), "No. 1", "First", 1, CardType.NORMAL, 1, 1, 1, 1, 100);
+    CardDefinition third =
+        new CardDefinition(new CardId(3), "No. 3", "Third", 1, CardType.NORMAL, 1, 1, 1, 1, 100);
 
-    IllegalArgumentException exception = assertThrows(
-        IllegalArgumentException.class,
-        () -> new CardCatalog(List.of(first, third), "snapshot"));
+    IllegalArgumentException exception =
+        assertThrows(
+            IllegalArgumentException.class,
+            () -> new CardCatalog(List.of(first, third), "snapshot"));
 
     assertTrue(exception.getMessage().contains("missing card id: 2"));
   }
 
   @Test
   void definitionsExposePrintedValuesAndImmutableCatalog() {
-    CardDefinition card = new CardDefinition(
-        new CardId(7), "No. 7", "Test", 4, CardType.NORMAL, 1, 2, 3, 10, 800);
+    CardDefinition card =
+        new CardDefinition(new CardId(7), "No. 7", "Test", 4, CardType.NORMAL, 1, 2, 3, 10, 800);
     assertEquals(10, card.value(Side.LEFT));
     CardCatalog catalog = new CardCatalog(List.of(card), "snapshot");
     assertEquals(card, catalog.require(new CardId(7)));
@@ -56,15 +57,27 @@ final class CardCatalogTest {
   @Test
   void valueObjectsRejectInvalidValues() {
     assertThrows(IllegalArgumentException.class, () -> new CardId(0));
-    assertThrows(IllegalArgumentException.class, () -> new CardDefinition(
-        new CardId(1), "", "Name", 1, CardType.NORMAL, 1, 1, 1, 1, 1));
-    assertThrows(IllegalArgumentException.class, () -> new CardDefinition(
-        new CardId(1), "No. 1", "Name", 6, CardType.NORMAL, 1, 1, 1, 1, 1));
-    assertThrows(IllegalArgumentException.class, () -> new CardDefinition(
-        new CardId(1), "No. 1", "Name", 1, CardType.NORMAL, 11, 1, 1, 1, 1));
-    assertThrows(IllegalArgumentException.class, () -> new CardCatalog(
-        List.of(new CardDefinition(new CardId(1), "No. 1", "A", 1, CardType.NORMAL, 1, 1, 1, 1, 1),
-            new CardDefinition(new CardId(1), "No. 2", "B", 1, CardType.NORMAL, 1, 1, 1, 1, 1)), "snapshot"));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> new CardDefinition(new CardId(1), "", "Name", 1, CardType.NORMAL, 1, 1, 1, 1, 1));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new CardDefinition(new CardId(1), "No. 1", "Name", 6, CardType.NORMAL, 1, 1, 1, 1, 1));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new CardDefinition(new CardId(1), "No. 1", "Name", 1, CardType.NORMAL, 11, 1, 1, 1, 1));
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            new CardCatalog(
+                List.of(
+                    new CardDefinition(
+                        new CardId(1), "No. 1", "A", 1, CardType.NORMAL, 1, 1, 1, 1, 1),
+                    new CardDefinition(
+                        new CardId(1), "No. 2", "B", 1, CardType.NORMAL, 1, 1, 1, 1, 1)),
+                "snapshot"));
   }
 
   @Test

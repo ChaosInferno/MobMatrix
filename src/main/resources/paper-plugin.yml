@@ -9,12 +9,6 @@ dependencies:
       load: BEFORE
       required: true
       join-classpath: true
-commands:
-  mobmatrix:
-    description: Play MobMatrix Triple Triad
-    usage: /mobmatrix <give|deck|challenge|bot|accept|decline|cancel>
-    aliases: [mm]
-    permission: mobmatrix.use
 permissions:
   mobmatrix.use:
     default: true

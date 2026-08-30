@@ -10,7 +10,6 @@
   </module>
   <module name="TreeWalker">
     <module name="AvoidStarImport"/>
-    <module name="EmptyLineSeparator"/>
     <module name="FinalClass"/>
     <module name="UnusedImports"/>
   </module>

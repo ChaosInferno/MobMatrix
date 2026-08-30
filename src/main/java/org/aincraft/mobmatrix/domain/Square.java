@@ -34,9 +34,12 @@ public record Square(int index) {
 
   public List<Square> adjacentSquares() {
     return List.of(
-        row() > 0 ? new Square(index - 3) : null,
-        column() < 2 ? new Square(index + 1) : null,
-        row() < 2 ? new Square(index + 3) : null,
-        column() > 0 ? new Square(index - 1) : null).stream().filter(java.util.Objects::nonNull).toList();
+            row() > 0 ? new Square(index - 3) : null,
+            column() < 2 ? new Square(index + 1) : null,
+            row() < 2 ? new Square(index + 3) : null,
+            column() > 0 ? new Square(index - 1) : null)
+        .stream()
+        .filter(java.util.Objects::nonNull)
+        .toList();
   }
 }

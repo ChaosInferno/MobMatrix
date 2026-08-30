@@ -1,12 +1,13 @@
 package org.aincraft.mobmatrix.paper;
 
+import io.papermc.paper.command.brigadier.BasicCommand;
+import io.papermc.paper.command.brigadier.CommandSourceStack;
 import java.util.Collection;
 import java.util.List;
 import java.util.Locale;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
-import java.util.stream.Stream;
 import org.aincraft.mobmatrix.MobMatrixPlugin;
 import org.aincraft.mobmatrix.domain.CardCatalog;
 import org.aincraft.mobmatrix.domain.CardCopyId;
@@ -19,7 +20,7 @@ import org.bukkit.command.TabCompleter;
 import org.bukkit.entity.Player;
 
 /** The intentionally small public command surface for the playable Paper slice. */
-public final class MobMatrixCommand implements CommandExecutor, TabCompleter {
+public final class MobMatrixCommand implements CommandExecutor, TabCompleter, BasicCommand {
   private static final List<String> COMMANDS =
       List.of("give", "deck", "challenge", "bot", "accept", "decline", "cancel");
 
@@ -31,6 +32,25 @@ public final class MobMatrixCommand implements CommandExecutor, TabCompleter {
 
   @Override
   public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
+    return dispatch(sender, args);
+  }
+
+  @Override
+  public void execute(CommandSourceStack source, String[] args) {
+    dispatch(source.getSender(), args);
+  }
+
+  @Override
+  public Collection<String> suggest(CommandSourceStack source, String[] args) {
+    return complete(source.getSender(), args);
+  }
+
+  @Override
+  public String permission() {
+    return "mobmatrix.use";
+  }
+
+  private boolean dispatch(CommandSender sender, String[] args) {
     if (args == null || args.length == 0) {
       sender.sendMessage("/mobmatrix <give|deck|challenge|bot|accept|decline|cancel>");
       return true;
@@ -63,8 +83,7 @@ public final class MobMatrixCommand implements CommandExecutor, TabCompleter {
     }
     String label = args[2];
     int amountIndex = 3;
-    if ((args[2].equalsIgnoreCase("no.") || args[2].equalsIgnoreCase("ex."))
-        && args.length >= 4) {
+    if ((args[2].equalsIgnoreCase("no.") || args[2].equalsIgnoreCase("ex.")) && args.length >= 4) {
       label = args[2] + " " + args[3];
       amountIndex = 4;
     }
@@ -109,10 +128,15 @@ public final class MobMatrixCommand implements CommandExecutor, TabCompleter {
     Player player = playerSender(sender);
     if (player == null) return true;
     Player target = Bukkit.getPlayerExact(args[1]);
-    ChallengeValidation validation = validateChallenge(player.getUniqueId(),
-        target == null ? null : target.getUniqueId(), target != null,
-        plugin.isBusy(player.getUniqueId()), target != null && plugin.isBusy(target.getUniqueId()),
-        plugin.hasChallengeFrom(player.getUniqueId()), plugin.hasChallengeTo(player.getUniqueId()));
+    ChallengeValidation validation =
+        validateChallenge(
+            player.getUniqueId(),
+            target == null ? null : target.getUniqueId(),
+            target != null,
+            plugin.isBusy(player.getUniqueId()),
+            target != null && plugin.isBusy(target.getUniqueId()),
+            plugin.hasChallengeFrom(player.getUniqueId()),
+            plugin.hasChallengeTo(player.getUniqueId()));
     if (!validation.accepted()) {
       sender.sendMessage(validation.message());
       return true;
@@ -139,11 +163,12 @@ public final class MobMatrixCommand implements CommandExecutor, TabCompleter {
     }
     Player player = playerSender(sender);
     if (player == null) return true;
-    MobMatrixPlugin.ChallengeResult result = switch (transition) {
-      case ACCEPT -> plugin.accept(player);
-      case DECLINE -> plugin.decline(player);
-      case CANCEL -> plugin.cancel(player);
-    };
+    MobMatrixPlugin.ChallengeResult result =
+        switch (transition) {
+          case ACCEPT -> plugin.accept(player);
+          case DECLINE -> plugin.decline(player);
+          case CANCEL -> plugin.cancel(player);
+        };
     sender.sendMessage(result.message());
     return true;
   }
@@ -155,22 +180,32 @@ public final class MobMatrixCommand implements CommandExecutor, TabCompleter {
   }
 
   @Override
-  public List<String> onTabComplete(CommandSender sender, Command command, String alias, String[] args) {
+  public List<String> onTabComplete(
+      CommandSender sender, Command command, String alias, String[] args) {
+    return complete(sender, args);
+  }
+
+  private List<String> complete(CommandSender sender, String[] args) {
     if (args == null || args.length == 0) return COMMANDS;
     if (args.length == 1) {
       String prefix = args[0].toLowerCase(Locale.ROOT);
       return COMMANDS.stream().filter(value -> value.startsWith(prefix)).toList();
     }
-    if (args.length == 2 && (args[0].equalsIgnoreCase("give")
-        || args[0].equalsIgnoreCase("challenge"))) {
+    if (args.length == 2
+        && (args[0].equalsIgnoreCase("give") || args[0].equalsIgnoreCase("challenge"))) {
       String prefix = args[1].toLowerCase(Locale.ROOT);
-      return Bukkit.getOnlinePlayers().stream().map(Player::getName)
-          .filter(name -> name.toLowerCase(Locale.ROOT).startsWith(prefix)).sorted().toList();
+      return Bukkit.getOnlinePlayers().stream()
+          .map(Player::getName)
+          .filter(name -> name.toLowerCase(Locale.ROOT).startsWith(prefix))
+          .sorted()
+          .toList();
     }
     if (args.length == 3 && args[0].equalsIgnoreCase("give")) {
       String prefix = args[2].toLowerCase(Locale.ROOT);
-      return plugin.catalog().all().stream().map(CardDefinition::publicNumber)
-          .filter(number -> number.toLowerCase(Locale.ROOT).startsWith(prefix)).toList();
+      return plugin.catalog().all().stream()
+          .map(CardDefinition::publicNumber)
+          .filter(number -> number.toLowerCase(Locale.ROOT).startsWith(prefix))
+          .toList();
     }
     return List.of();
   }
@@ -182,8 +217,10 @@ public final class MobMatrixCommand implements CommandExecutor, TabCompleter {
     String candidate = label.trim();
     if (candidate.chars().allMatch(Character::isDigit)) candidate = "No. " + candidate;
     String normalized = candidate.toLowerCase(Locale.ROOT);
-    List<CardDefinition> matches = catalog.all().stream()
-        .filter(card -> card.publicNumber().trim().toLowerCase(Locale.ROOT).equals(normalized)).toList();
+    List<CardDefinition> matches =
+        catalog.all().stream()
+            .filter(card -> card.publicNumber().trim().toLowerCase(Locale.ROOT).equals(normalized))
+            .toList();
     return matches.size() == 1 ? Optional.of(matches.getFirst()) : Optional.empty();
   }
 
@@ -205,16 +242,27 @@ public final class MobMatrixCommand implements CommandExecutor, TabCompleter {
       return Validation.rejected("Select exactly five physical cards first.");
     }
     long distinct = copyIds.stream().filter(Objects::nonNull).distinct().count();
-    return distinct == 5 ? Validation.ok()
+    return distinct == 5
+        ? Validation.ok()
         : Validation.rejected("A deck cannot contain duplicate physical cards.");
   }
 
-  public static ChallengeValidation validateChallenge(UUID sender, UUID target, boolean online,
-      boolean senderBusy, boolean targetBusy, boolean senderHasIncoming, boolean senderHasOutgoing) {
-    if (sender == null) return ChallengeValidation.rejected("This command can only be used by a player.");
-    if (!online || target == null) return ChallengeValidation.rejected("That player must be online.");
-    if (sender.equals(target)) return ChallengeValidation.rejected("You cannot challenge yourself.");
-    if (senderBusy || targetBusy) return ChallengeValidation.rejected("Both players must be free to challenge.");
+  public static ChallengeValidation validateChallenge(
+      UUID sender,
+      UUID target,
+      boolean online,
+      boolean senderBusy,
+      boolean targetBusy,
+      boolean senderHasIncoming,
+      boolean senderHasOutgoing) {
+    if (sender == null)
+      return ChallengeValidation.rejected("This command can only be used by a player.");
+    if (!online || target == null)
+      return ChallengeValidation.rejected("That player must be online.");
+    if (sender.equals(target))
+      return ChallengeValidation.rejected("You cannot challenge yourself.");
+    if (senderBusy || targetBusy)
+      return ChallengeValidation.rejected("Both players must be free to challenge.");
     if (senderHasIncoming || senderHasOutgoing) {
       return ChallengeValidation.rejected("You already have a pending challenge.");
     }
@@ -222,14 +270,28 @@ public final class MobMatrixCommand implements CommandExecutor, TabCompleter {
   }
 
   public record Validation(boolean accepted, String message) {
-    public static Validation ok() { return new Validation(true, ""); }
-    public static Validation rejected(String message) { return new Validation(false, message); }
+    public static Validation ok() {
+      return new Validation(true, "");
+    }
+
+    public static Validation rejected(String message) {
+      return new Validation(false, message);
+    }
   }
 
   public record ChallengeValidation(boolean accepted, String message) {
-    public static ChallengeValidation ok() { return new ChallengeValidation(true, ""); }
-    public static ChallengeValidation rejected(String message) { return new ChallengeValidation(false, message); }
+    public static ChallengeValidation ok() {
+      return new ChallengeValidation(true, "");
+    }
+
+    public static ChallengeValidation rejected(String message) {
+      return new ChallengeValidation(false, message);
+    }
   }
 
-  private enum Transition { ACCEPT, DECLINE, CANCEL }
+  private enum Transition {
+    ACCEPT,
+    DECLINE,
+    CANCEL
+  }
 }

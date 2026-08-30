@@ -21,6 +21,8 @@ import org.aincraft.mobmatrix.domain.CardCatalog;
 import org.aincraft.mobmatrix.domain.CardCopy;
 import org.aincraft.mobmatrix.domain.CardCopyId;
 import org.aincraft.mobmatrix.domain.CardId;
+import org.aincraft.mobmatrix.domain.CopyOwner;
+import org.aincraft.mobmatrix.domain.Deck;
 import org.aincraft.mobmatrix.domain.DraftOfferings;
 import org.aincraft.mobmatrix.domain.HandCard;
 import org.aincraft.mobmatrix.domain.MatchResult;
@@ -31,8 +33,6 @@ import org.aincraft.mobmatrix.domain.RandomTranscript;
 import org.aincraft.mobmatrix.domain.Rule;
 import org.aincraft.mobmatrix.domain.Side;
 import org.aincraft.mobmatrix.domain.Square;
-import org.aincraft.mobmatrix.domain.CopyOwner;
-import org.aincraft.mobmatrix.domain.Deck;
 
 /** Complete, versioned binary codec for executable MatchState snapshots. */
 public final class MatchStateSnapshotCodec {
@@ -44,6 +44,7 @@ public final class MatchStateSnapshotCodec {
   private static final int MAX_SNAPSHOT_BYTES = 16 * 1024 * 1024;
 
   private MatchStateSnapshotCodec() {}
+
   public static String catalogSnapshotId(byte[] bytes) {
     Objects.requireNonNull(bytes, "snapshot bytes are required");
     try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes))) {
@@ -68,7 +69,8 @@ public final class MatchStateSnapshotCodec {
         out.writeUTF(state.matchId().value());
         out.writeLong(state.revision());
         out.writeUTF(state.catalog().snapshotId());
-        List<Rule> rules = state.rules().rules().stream().sorted(Comparator.comparing(Enum::name)).toList();
+        List<Rule> rules =
+            state.rules().rules().stream().sorted(Comparator.comparing(Enum::name)).toList();
         out.writeInt(rules.size());
         for (Rule rule : rules) out.writeUTF(rule.name());
         out.writeUTF(state.currentSeat().name());
@@ -116,14 +118,21 @@ public final class MatchStateSnapshotCodec {
         }
         for (PlayerSeat seat : PlayerSeat.values()) writeCopyIds(out, state.revealedCards(seat));
         out.writeInt(state.originalOwners().size());
-        for (var entry : state.originalOwners().entrySet().stream()
-            .sorted(Map.Entry.comparingByKey(Comparator.comparing(value -> value.value().toString()))).toList()) {
+        for (var entry :
+            state.originalOwners().entrySet().stream()
+                .sorted(
+                    Map.Entry.comparingByKey(
+                        Comparator.comparing(value -> value.value().toString())))
+                .toList()) {
           writeUuid(out, entry.getKey().value());
           out.writeUTF(entry.getValue().name());
         }
         out.writeInt(state.consecutiveDraws());
         out.writeInt(state.draftOfferings().size());
-        for (var entry : state.draftOfferings().entrySet().stream().sorted(Map.Entry.comparingByKey()).toList()) {
+        for (var entry :
+            state.draftOfferings().entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .toList()) {
           out.writeUTF(entry.getKey().name());
           out.writeInt(entry.getValue().offerings().size());
           for (DraftOfferings.Offering offering : entry.getValue().offerings()) {
@@ -133,7 +142,10 @@ public final class MatchStateSnapshotCodec {
           }
         }
         out.writeInt(state.draftSelections().size());
-        for (var entry : state.draftSelections().entrySet().stream().sorted(Map.Entry.comparingByKey()).toList()) {
+        for (var entry :
+            state.draftSelections().entrySet().stream()
+                .sorted(Map.Entry.comparingByKey())
+                .toList()) {
           out.writeUTF(entry.getKey().name());
           DraftOfferings.Selection selection = entry.getValue();
           out.writeInt(selection.offeringChoices().size());
@@ -143,15 +155,20 @@ public final class MatchStateSnapshotCodec {
           out.writeInt(selection.deck().copies().size());
           for (CardCopy copy : selection.deck().copies()) writeCopy(out, copy);
           out.writeInt(selection.provenance().size());
-          for (var provenance : selection.provenance().entrySet().stream()
-              .sorted(Map.Entry.comparingByKey(Comparator.comparing(value -> value.value().toString()))).toList()) {
+          for (var provenance :
+              selection.provenance().entrySet().stream()
+                  .sorted(
+                      Map.Entry.comparingByKey(
+                          Comparator.comparing(value -> value.value().toString())))
+                  .toList()) {
             writeUuid(out, provenance.getKey().value());
             writeUuid(out, provenance.getValue());
           }
         }
         writeCopyIdSet(out, state.houseOwnedCopies());
         out.writeInt(state.chaosChoices().size());
-        for (var entry : state.chaosChoices().entrySet().stream().sorted(Map.Entry.comparingByKey()).toList()) {
+        for (var entry :
+            state.chaosChoices().entrySet().stream().sorted(Map.Entry.comparingByKey()).toList()) {
           out.writeUTF(entry.getKey().name());
           writeUuid(out, entry.getValue().value());
         }
@@ -167,8 +184,10 @@ public final class MatchStateSnapshotCodec {
     Objects.requireNonNull(catalog, "catalog is required");
     DecodeBudget budget = new DecodeBudget(bytes.length);
     try (DataInputStream in = new DataInputStream(new ByteArrayInputStream(bytes))) {
-      if (in.readInt() != MAGIC) throw new IllegalArgumentException("unknown match snapshot format");
-      if (in.readInt() != VERSION) throw new IllegalArgumentException("unsupported match snapshot version");
+      if (in.readInt() != MAGIC)
+        throw new IllegalArgumentException("unknown match snapshot format");
+      if (in.readInt() != VERSION)
+        throw new IllegalArgumentException("unsupported match snapshot version");
       var matchId = new org.aincraft.mobmatrix.domain.MatchId(in.readUTF());
       long revision = in.readLong();
       String catalogSnapshotId = in.readUTF();
@@ -206,7 +225,8 @@ public final class MatchStateSnapshotCodec {
       for (int i = 0; i < decisionCount; i++) {
         decisions.add(new RandomTranscript.Decision(in.readUTF(), in.readInt(), in.readInt()));
       }
-      RandomTranscript transcript = RandomTranscript.restore(transcriptSeed, decisions, replay, cursor);
+      RandomTranscript transcript =
+          RandomTranscript.restore(transcriptSeed, decisions, replay, cursor);
       Map<CardCopyId, CardCopy> activeCopies = new HashMap<>();
       Map<PlayerSeat, List<HandCard>> hands = new EnumMap<>(PlayerSeat.class);
       for (PlayerSeat seat : PlayerSeat.values()) {
@@ -226,7 +246,8 @@ public final class MatchStateSnapshotCodec {
         requireUniqueActiveCopy(activeCopies, copy);
         catalog.require(copy.cardId());
         CardId cardId = new CardId(in.readInt());
-        if (!copy.cardId().equals(cardId)) throw new IllegalArgumentException("board card identity mismatch");
+        if (!copy.cardId().equals(cardId))
+          throw new IllegalArgumentException("board card identity mismatch");
         PlayerSeat owner = PlayerSeat.valueOf(in.readUTF());
         Map<Side, Integer> effective = new EnumMap<>(Side.class);
         for (Side side : Side.values()) if (in.readBoolean()) effective.put(side, in.readInt());
@@ -245,10 +266,16 @@ public final class MatchStateSnapshotCodec {
       }
       boolean ownershipMetadataRequired = rules.contains(Rule.RANDOM) || rules.contains(Rule.SWAP);
       boolean plainInitialBoard = board.cells().stream().allMatch(Objects::isNull);
-      boolean initialStateCandidate = originalOwners.isEmpty() && !ownershipMetadataRequired
-          && plainInitialBoard && revision == 0 && result == null && transcript.cursor() >= 0
-          && isInitialTranscript(transcript) && commandIds.isEmpty()
-          && revealed.values().stream().allMatch(Set::isEmpty);
+      boolean initialStateCandidate =
+          originalOwners.isEmpty()
+              && !ownershipMetadataRequired
+              && plainInitialBoard
+              && revision == 0
+              && result == null
+              && transcript.cursor() >= 0
+              && isInitialTranscript(transcript)
+              && commandIds.isEmpty()
+              && revealed.values().stream().allMatch(Set::isEmpty);
       int consecutiveDraws = in.readInt();
       Map<PlayerSeat, DraftOfferings.SeatOffers> offerings = new EnumMap<>(PlayerSeat.class);
       Set<UUID> offeringIds = new HashSet<>();
@@ -256,7 +283,8 @@ public final class MatchStateSnapshotCodec {
       int offeringSeatCount = readCount(in, "draft offering seats", budget);
       for (int i = 0; i < offeringSeatCount; i++) {
         PlayerSeat seat = PlayerSeat.valueOf(in.readUTF());
-        if (offerings.containsKey(seat)) throw new IllegalArgumentException("duplicate draft offering seat");
+        if (offerings.containsKey(seat))
+          throw new IllegalArgumentException("duplicate draft offering seat");
         List<DraftOfferings.Offering> seatOfferings = new ArrayList<>();
         int offeringCount = readCount(in, "draft offerings", budget);
         for (int j = 0; j < offeringCount; j++) {
@@ -283,7 +311,8 @@ public final class MatchStateSnapshotCodec {
           }
           seatOfferings.add(new DraftOfferings.Offering(offeringId, cards));
         }
-        if (offerings.putIfAbsent(seat, new DraftOfferings.SeatOffers(seat, seatOfferings)) != null) {
+        if (offerings.putIfAbsent(seat, new DraftOfferings.SeatOffers(seat, seatOfferings))
+            != null) {
           throw new IllegalArgumentException("duplicate draft offering seat");
         }
       }
@@ -296,7 +325,8 @@ public final class MatchStateSnapshotCodec {
       int selectionCount = readCount(in, "draft selections", budget);
       for (int i = 0; i < selectionCount; i++) {
         PlayerSeat seat = PlayerSeat.valueOf(in.readUTF());
-        if (selections.containsKey(seat)) throw new IllegalArgumentException("duplicate draft selection seat");
+        if (selections.containsKey(seat))
+          throw new IllegalArgumentException("duplicate draft selection seat");
         DraftOfferings.SeatOffers seatOffers = offerings.get(seat);
         if (seatOffers == null) throw new IllegalArgumentException("selection has no offerings");
         List<Integer> choices = new ArrayList<>();
@@ -324,13 +354,17 @@ public final class MatchStateSnapshotCodec {
           }
         }
         validateSelection(seatOffers, choices, selected, deckCards, provenance, offeringCopies);
-        selections.put(seat, DraftOfferings.Selection.restore(seat, choices, selected,
-            new Deck(deckCards), provenance));
+        selections.put(
+            seat,
+            DraftOfferings.Selection.restore(
+                seat, choices, selected, new Deck(deckCards), provenance));
       }
       boolean draft = rules.contains(Rule.DRAFT);
-      if (draft && (offerings.size() != PlayerSeat.values().length
-          || selections.size() != PlayerSeat.values().length)) {
-        throw new IllegalArgumentException("draft snapshot must contain both seat metadata records");
+      if (draft
+          && (offerings.size() != PlayerSeat.values().length
+              || selections.size() != PlayerSeat.values().length)) {
+        throw new IllegalArgumentException(
+            "draft snapshot must contain both seat metadata records");
       }
       if (!draft && (!offerings.isEmpty() || !selections.isEmpty())) {
         throw new IllegalArgumentException("non-draft snapshot contains draft metadata");
@@ -364,8 +398,12 @@ public final class MatchStateSnapshotCodec {
           }
         }
       }
-      boolean inferredOwnership = initialStateCandidate && consecutiveDraws == 0
-          && offerings.isEmpty() && selections.isEmpty() && chaos.isEmpty();
+      boolean inferredOwnership =
+          initialStateCandidate
+              && consecutiveDraws == 0
+              && offerings.isEmpty()
+              && selections.isEmpty()
+              && chaos.isEmpty();
       if (inferredOwnership) {
         for (PlayerSeat seat : PlayerSeat.values()) {
           for (HandCard card : hands.get(seat)) {
@@ -385,18 +423,39 @@ public final class MatchStateSnapshotCodec {
         if (!copy.owner().isPlayer()) continue;
         expectedOriginalOwners.add(copy.copyId());
         PlayerSeat originalSeat = originalOwners.get(copy.copyId());
-        PlayerSeat priorSeat = originalSeatByOwner.putIfAbsent(copy.owner().playerId(), originalSeat);
-        if (originalSeat == null || (!inferredOwnership && priorSeat != null && priorSeat != originalSeat)) {
+        PlayerSeat priorSeat =
+            originalSeatByOwner.putIfAbsent(copy.owner().playerId(), originalSeat);
+        if (originalSeat == null
+            || (!inferredOwnership && priorSeat != null && priorSeat != originalSeat)) {
           throw new IllegalArgumentException("original-owner seat mismatch");
         }
       }
       if (!originalOwners.keySet().equals(expectedOriginalOwners)) {
         throw new IllegalArgumentException("original-owner metadata does not cover active copies");
       }
-      MatchState state = MatchState.rehydrate(matchId, catalog, new MatchRules(rules), board, hands,
-          currentSeat, revision, result, banks, turnStartedAt, graceDeadline, turnDeadline,
-          commandIds, seed, transcript, revealed, originalOwners, consecutiveDraws, offerings,
-          selections, chaos);
+      MatchState state =
+          MatchState.rehydrate(
+              matchId,
+              catalog,
+              new MatchRules(rules),
+              board,
+              hands,
+              currentSeat,
+              revision,
+              result,
+              banks,
+              turnStartedAt,
+              graceDeadline,
+              turnDeadline,
+              commandIds,
+              seed,
+              transcript,
+              revealed,
+              originalOwners,
+              consecutiveDraws,
+              offerings,
+              selections,
+              chaos);
       if (!state.houseOwnedCopies().equals(persistedHouseCopies)) {
         throw new IllegalArgumentException("house-owned snapshot metadata mismatch");
       }
@@ -428,14 +487,16 @@ public final class MatchStateSnapshotCodec {
     else throw new IllegalArgumentException("invalid copy owner");
     return new CardCopy(copyId, cardId, owner);
   }
-  private static void requireUniqueActiveCopy(Map<CardCopyId, CardCopy> activeCopies,
-      CardCopy copy) {
+
+  private static void requireUniqueActiveCopy(
+      Map<CardCopyId, CardCopy> activeCopies, CardCopy copy) {
     if (activeCopies.putIfAbsent(copy.copyId(), copy) != null) {
       throw new IllegalArgumentException("duplicate active card copy UUID");
     }
   }
-  private static CardCopy requireOfferingReference(CardCopy copy,
-      Map<CardCopyId, CardCopy> offeringCopies) {
+
+  private static CardCopy requireOfferingReference(
+      CardCopy copy, Map<CardCopyId, CardCopy> offeringCopies) {
     if (!copy.owner().equals(CopyOwner.house())) {
       throw new IllegalArgumentException("draft reference must be house-owned");
     }
@@ -446,9 +507,13 @@ public final class MatchStateSnapshotCodec {
     return authoritative;
   }
 
-  private static void validateSelection(DraftOfferings.SeatOffers offers,
-      List<Integer> choices, List<CardCopy> selected, List<CardCopy> deck,
-      Map<CardCopyId, UUID> provenance, Map<CardCopyId, CardCopy> offeringCopies) {
+  private static void validateSelection(
+      DraftOfferings.SeatOffers offers,
+      List<Integer> choices,
+      List<CardCopy> selected,
+      List<CardCopy> deck,
+      Map<CardCopyId, UUID> provenance,
+      Map<CardCopyId, CardCopy> offeringCopies) {
     if (choices.size() != offers.offerings().size() || selected.size() != choices.size()) {
       throw new IllegalArgumentException("draft selection shape mismatch");
     }
@@ -478,9 +543,11 @@ public final class MatchStateSnapshotCodec {
       if (copy == null || !copy.owner().equals(CopyOwner.house())) {
         throw new IllegalArgumentException("draft provenance copy is outside offerings");
       }
-      DraftOfferings.Offering offering = offers.offerings().stream()
-          .filter(candidate -> candidate.offeringId().equals(entry.getValue()))
-          .findFirst().orElse(null);
+      DraftOfferings.Offering offering =
+          offers.offerings().stream()
+              .filter(candidate -> candidate.offeringId().equals(entry.getValue()))
+              .findFirst()
+              .orElse(null);
       if (offering == null || !offering.cards().contains(copy)) {
         throw new IllegalArgumentException("draft provenance offering mismatch");
       }
@@ -493,22 +560,27 @@ public final class MatchStateSnapshotCodec {
     }
   }
 
-  private static void writeCopyIds(DataOutputStream out, Set<CardCopyId> copies) throws IOException {
+  private static void writeCopyIds(DataOutputStream out, Set<CardCopyId> copies)
+      throws IOException {
     writeCopyIdSet(out, copies);
   }
 
-  private static void writeCopyIdSet(DataOutputStream out, Set<CardCopyId> copies) throws IOException {
+  private static void writeCopyIdSet(DataOutputStream out, Set<CardCopyId> copies)
+      throws IOException {
     out.writeInt(copies.size());
-    for (CardCopyId copy : copies.stream()
-        .sorted(Comparator.comparing(value -> value.value().toString())).toList()) {
+    for (CardCopyId copy :
+        copies.stream().sorted(Comparator.comparing(value -> value.value().toString())).toList()) {
       writeUuid(out, copy.value());
     }
   }
 
-  private static Set<CardCopyId> readCopyIds(DataInputStream in, DecodeBudget budget) throws IOException {
+  private static Set<CardCopyId> readCopyIds(DataInputStream in, DecodeBudget budget)
+      throws IOException {
     return readCopyIdSet(in, budget);
   }
-  private static Set<CardCopyId> readCopyIdSet(DataInputStream in, DecodeBudget budget) throws IOException {
+
+  private static Set<CardCopyId> readCopyIdSet(DataInputStream in, DecodeBudget budget)
+      throws IOException {
     Set<CardCopyId> result = new HashSet<>();
     int count = readCount(in, "copy UUID set", budget);
     for (int i = 0; i < count; i++) {

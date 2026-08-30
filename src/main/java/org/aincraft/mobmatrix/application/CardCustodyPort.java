@@ -16,10 +16,12 @@ public interface CardCustodyPort {
   ReturnResult returnCopies(UUID operationId);
 
   RecoveryResult recover(UUID operationId);
+
   /** Open durable operations to reconcile during startup. */
   default List<UUID> openOperationIds() {
     return List.of();
   }
+
   /**
    * Enumerates durable startup identities without requiring callers to hydrate every row. A
    * malformed identity is represented by a raw operation string and no synthetic UUID.
@@ -27,7 +29,6 @@ public interface CardCustodyPort {
   default List<StartupEntry> startupEntries() {
     return openOperationIds().stream().map(StartupEntry::valid).toList();
   }
-
 
   /** Durable match binding for an open operation, when supported by the adapter. */
   default Optional<org.aincraft.mobmatrix.domain.MatchId> operationMatchId(UUID operationId) {
@@ -40,32 +41,39 @@ public interface CardCustodyPort {
     Objects.requireNonNull(operationId, "operation id is required");
     return Optional.empty();
   }
+
   /** Durable identity of a prepared operation, including its ordered physical copies. */
   default Optional<OperationBinding> operationBinding(UUID operationId) {
     Objects.requireNonNull(operationId, "operation id is required");
     return Optional.empty();
   }
+
   /**
    * Structured identity exposed by durable custody integrity failures. Application recovery uses
    * this contract without depending on a particular storage implementation.
    */
   interface CustodyIntegrityFailure {
     UUID operationId();
+
     List<CardCopyId> expectedCopyIds();
   }
 
   /**
-   * Raw/structured durable identity used during startup. {@code operationId} is empty for
-   * malformed raw text; such entries must remain pending and must never be passed to recover.
+   * Raw/structured durable identity used during startup. {@code operationId} is empty for malformed
+   * raw text; such entries must remain pending and must never be passed to recover.
    */
-  record StartupEntry(String rawOperationId, Optional<UUID> operationId, List<CardCopyId> copyIds,
+  record StartupEntry(
+      String rawOperationId,
+      Optional<UUID> operationId,
+      List<CardCopyId> copyIds,
       boolean integrityFailure) {
     public StartupEntry {
       rawOperationId = Objects.requireNonNull(rawOperationId, "raw operation id is required");
       operationId = Objects.requireNonNull(operationId, "operation id is required");
       copyIds = List.copyOf(Objects.requireNonNull(copyIds, "copy ids are required"));
       if (operationId.isPresent() && rawOperationId.isBlank()) {
-        throw new IllegalArgumentException("raw operation id cannot be blank when parsed identity exists");
+        throw new IllegalArgumentException(
+            "raw operation id cannot be blank when parsed identity exists");
       }
       if (operationId.isPresent() && !operationId.get().toString().equals(rawOperationId)) {
         throw new IllegalArgumentException("parsed operation ID does not match raw identity");
@@ -100,8 +108,10 @@ public interface CardCustodyPort {
     }
   }
 
-
-  record OperationBinding(CopyOwner owner, List<CardCopyId> copyIds, OperationStatus status,
+  record OperationBinding(
+      CopyOwner owner,
+      List<CardCopyId> copyIds,
+      OperationStatus status,
       org.aincraft.mobmatrix.domain.MatchId matchId) {
     public OperationBinding {
       Objects.requireNonNull(owner, "owner is required");
@@ -110,12 +120,14 @@ public interface CardCustodyPort {
     }
   }
 
-  default PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId,
+  default PrepareResult prepare(
+      CopyOwner owner,
+      List<CardCopyId> copyIds,
+      UUID operationId,
       org.aincraft.mobmatrix.domain.MatchId matchId) {
     Objects.requireNonNull(matchId, "match id is required");
     return PrepareResult.rejected(operationId, owner, copyIds, Failure.MISMATCHED_OPERATION);
   }
-
 
   default PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, String operationId) {
     return prepare(owner, copyIds, parseOperation(operationId));
@@ -138,8 +150,8 @@ public interface CardCustodyPort {
    * cannot claim that an operation reached ABORTED.
    */
   default CustodyResult abort(UUID operationId) {
-    return CustodyResult.rejected(Objects.requireNonNull(operationId), OperationStatus.ABORTED,
-        Failure.INVALID_STATE);
+    return CustodyResult.rejected(
+        Objects.requireNonNull(operationId), OperationStatus.ABORTED, Failure.INVALID_STATE);
   }
 
   private static UUID parseOperation(String operationId) {
@@ -171,30 +183,49 @@ public interface CardCustodyPort {
     INVALID_STATE
   }
 
-  record PrepareResult(UUID operationId, CopyOwner owner, List<CardCopyId> expectedCopyIds,
-      List<SerializedItemSnapshot> snapshots, Failure failure) {
+  record PrepareResult(
+      UUID operationId,
+      CopyOwner owner,
+      List<CardCopyId> expectedCopyIds,
+      List<SerializedItemSnapshot> snapshots,
+      Failure failure) {
     public PrepareResult {
       Objects.requireNonNull(operationId, "operation id is required");
       Objects.requireNonNull(owner, "owner is required");
-      expectedCopyIds = List.copyOf(Objects.requireNonNull(expectedCopyIds, "copy ids are required"));
+      expectedCopyIds =
+          List.copyOf(Objects.requireNonNull(expectedCopyIds, "copy ids are required"));
       snapshots = List.copyOf(Objects.requireNonNull(snapshots, "snapshots are required"));
       Objects.requireNonNull(failure, "failure is required");
     }
 
-    public static PrepareResult success(UUID operationId, CopyOwner owner,
-        List<CardCopyId> copyIds, List<SerializedItemSnapshot> snapshots) {
+    public static PrepareResult success(
+        UUID operationId,
+        CopyOwner owner,
+        List<CardCopyId> copyIds,
+        List<SerializedItemSnapshot> snapshots) {
       return new PrepareResult(operationId, owner, copyIds, snapshots, Failure.NONE);
     }
 
-    public static PrepareResult rejected(UUID operationId, CopyOwner owner,
-        List<CardCopyId> copyIds, Failure failure) {
+    public static PrepareResult rejected(
+        UUID operationId, CopyOwner owner, List<CardCopyId> copyIds, Failure failure) {
       return new PrepareResult(operationId, owner, copyIds, List.of(), failure);
     }
 
-    public boolean accepted() { return failure == Failure.NONE; }
-    public boolean success() { return accepted(); }
-    public List<CardCopyId> copyIds() { return expectedCopyIds; }
-    public List<CardCopyId> expectedCopies() { return expectedCopyIds; }
+    public boolean accepted() {
+      return failure == Failure.NONE;
+    }
+
+    public boolean success() {
+      return accepted();
+    }
+
+    public List<CardCopyId> copyIds() {
+      return expectedCopyIds;
+    }
+
+    public List<CardCopyId> expectedCopies() {
+      return expectedCopyIds;
+    }
   }
 
   record CustodyResult(UUID operationId, OperationStatus status, Failure failure) {
@@ -208,17 +239,28 @@ public interface CardCustodyPort {
       return new CustodyResult(operationId, status, Failure.NONE);
     }
 
-    public static CustodyResult rejected(UUID operationId, OperationStatus status, Failure failure) {
+    public static CustodyResult rejected(
+        UUID operationId, OperationStatus status, Failure failure) {
       return new CustodyResult(operationId, status, failure);
     }
 
-    public boolean accepted() { return failure == Failure.NONE; }
-    public boolean success() { return accepted(); }
+    public boolean accepted() {
+      return failure == Failure.NONE;
+    }
+
+    public boolean success() {
+      return accepted();
+    }
   }
 
-  record ReturnResult(UUID operationId, OperationStatus status, List<CardCopyId> expectedCopyIds,
-      List<CardCopyId> returnedCopyIds, List<CardCopyId> missingCopyIds,
-      List<CardCopyId> recoveryCopyIds, Failure failure) {
+  record ReturnResult(
+      UUID operationId,
+      OperationStatus status,
+      List<CardCopyId> expectedCopyIds,
+      List<CardCopyId> returnedCopyIds,
+      List<CardCopyId> missingCopyIds,
+      List<CardCopyId> recoveryCopyIds,
+      Failure failure) {
     public ReturnResult {
       Objects.requireNonNull(operationId, "operation id is required");
       Objects.requireNonNull(status, "status is required");
@@ -230,28 +272,64 @@ public interface CardCustodyPort {
     }
 
     public static ReturnResult returned(UUID operationId, List<CardCopyId> expectedCopyIds) {
-      return new ReturnResult(operationId, OperationStatus.RETURNED, expectedCopyIds, expectedCopyIds,
-          List.of(), List.of(), Failure.NONE);
+      return new ReturnResult(
+          operationId,
+          OperationStatus.RETURNED,
+          expectedCopyIds,
+          expectedCopyIds,
+          List.of(),
+          List.of(),
+          Failure.NONE);
     }
 
-    public static ReturnResult pending(UUID operationId, List<CardCopyId> expectedCopyIds,
-        List<CardCopyId> returnedCopyIds, List<CardCopyId> missingCopyIds,
+    public static ReturnResult pending(
+        UUID operationId,
+        List<CardCopyId> expectedCopyIds,
+        List<CardCopyId> returnedCopyIds,
+        List<CardCopyId> missingCopyIds,
         List<CardCopyId> recoveryCopyIds) {
-      return new ReturnResult(operationId, OperationStatus.RETURN_PENDING, expectedCopyIds,
-          returnedCopyIds, missingCopyIds, recoveryCopyIds, Failure.NO_ROOM);
+      return new ReturnResult(
+          operationId,
+          OperationStatus.RETURN_PENDING,
+          expectedCopyIds,
+          returnedCopyIds,
+          missingCopyIds,
+          recoveryCopyIds,
+          Failure.NO_ROOM);
     }
 
-    public boolean accepted() { return failure == Failure.NONE || status == OperationStatus.RETURN_PENDING; }
-    public boolean complete() { return status == OperationStatus.RETURNED && missingCopyIds.isEmpty(); }
-    public List<CardCopyId> missing() { return missingCopyIds; }
-    public List<CardCopyId> recovery() { return recoveryCopyIds; }
+    public boolean accepted() {
+      return failure == Failure.NONE || status == OperationStatus.RETURN_PENDING;
+    }
+
+    public boolean complete() {
+      return status == OperationStatus.RETURNED && missingCopyIds.isEmpty();
+    }
+
+    public List<CardCopyId> missing() {
+      return missingCopyIds;
+    }
+
+    public List<CardCopyId> recovery() {
+      return recoveryCopyIds;
+    }
   }
 
-  record RecoveryResult(UUID operationId, OperationStatus status, List<CardCopyId> expectedCopyIds,
-      List<CardCopyId> recoveredCopyIds, List<CardCopyId> pendingCopyIds, Failure failure,
+  record RecoveryResult(
+      UUID operationId,
+      OperationStatus status,
+      List<CardCopyId> expectedCopyIds,
+      List<CardCopyId> recoveredCopyIds,
+      List<CardCopyId> pendingCopyIds,
+      Failure failure,
       String rawOperationId) {
-    public RecoveryResult(UUID operationId, OperationStatus status, List<CardCopyId> expectedCopyIds,
-        List<CardCopyId> recoveredCopyIds, List<CardCopyId> pendingCopyIds, Failure failure) {
+    public RecoveryResult(
+        UUID operationId,
+        OperationStatus status,
+        List<CardCopyId> expectedCopyIds,
+        List<CardCopyId> recoveredCopyIds,
+        List<CardCopyId> pendingCopyIds,
+        Failure failure) {
       this(operationId, status, expectedCopyIds, recoveredCopyIds, pendingCopyIds, failure, null);
     }
 
@@ -259,7 +337,8 @@ public interface CardCustodyPort {
       if (operationId == null && rawOperationId == null) {
         throw new NullPointerException("operation or raw operation identity is required");
       }
-      if (operationId != null && rawOperationId != null
+      if (operationId != null
+          && rawOperationId != null
           && !operationId.toString().equals(rawOperationId)) {
         throw new IllegalArgumentException("operation ID does not match raw identity");
       }
@@ -271,31 +350,47 @@ public interface CardCustodyPort {
     }
 
     public static RecoveryResult none(UUID operationId) {
-      return new RecoveryResult(operationId, OperationStatus.RETURNED, List.of(), List.of(), List.of(), Failure.NONE);
+      return new RecoveryResult(
+          operationId, OperationStatus.RETURNED, List.of(), List.of(), List.of(), Failure.NONE);
     }
 
-    public static RecoveryResult complete(UUID operationId, OperationStatus status,
-        List<CardCopyId> expectedCopyIds) {
+    public static RecoveryResult complete(
+        UUID operationId, OperationStatus status, List<CardCopyId> expectedCopyIds) {
       Objects.requireNonNull(status, "status is required");
       if (status != OperationStatus.RETURNED && status != OperationStatus.ABORTED) {
         throw new IllegalArgumentException("complete recovery requires a terminal status");
       }
-      return new RecoveryResult(operationId, status, expectedCopyIds, expectedCopyIds,
-          List.of(), Failure.NONE);
+      return new RecoveryResult(
+          operationId, status, expectedCopyIds, expectedCopyIds, List.of(), Failure.NONE);
     }
 
     public static RecoveryResult complete(UUID operationId, List<CardCopyId> expectedCopyIds) {
       return complete(operationId, OperationStatus.RETURNED, expectedCopyIds);
     }
 
-    public static RecoveryResult malformed(String rawOperationId, List<CardCopyId> expectedCopyIds) {
-      return new RecoveryResult(null, OperationStatus.RETURN_PENDING, expectedCopyIds, List.of(),
-          expectedCopyIds, Failure.DATABASE_ERROR, rawOperationId);
+    public static RecoveryResult malformed(
+        String rawOperationId, List<CardCopyId> expectedCopyIds) {
+      return new RecoveryResult(
+          null,
+          OperationStatus.RETURN_PENDING,
+          expectedCopyIds,
+          List.of(),
+          expectedCopyIds,
+          Failure.DATABASE_ERROR,
+          rawOperationId);
     }
 
-    public boolean complete() { return pendingCopyIds.isEmpty() && failure == Failure.NONE; }
-    public List<CardCopyId> recovery() { return pendingCopyIds; }
-    public Optional<String> rawIdentity() { return Optional.ofNullable(rawOperationId); }
+    public boolean complete() {
+      return pendingCopyIds.isEmpty() && failure == Failure.NONE;
+    }
+
+    public List<CardCopyId> recovery() {
+      return pendingCopyIds;
+    }
+
+    public Optional<String> rawIdentity() {
+      return Optional.ofNullable(rawOperationId);
+    }
 
     public static RecoveryResult failed(UUID operationId, OperationStatus status, Failure failure) {
       return new RecoveryResult(operationId, status, List.of(), List.of(), List.of(), failure);

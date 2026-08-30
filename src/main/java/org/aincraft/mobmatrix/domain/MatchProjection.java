@@ -18,11 +18,15 @@ public record MatchProjection(
     long viewerGraceMillis,
     long viewerTurnMillis) {
   public record HandSlot(CardCopyId copyId, CardId cardId, boolean revealed) {
-    public static HandSlot masked() { return new HandSlot(null, null, false); }
+    public static HandSlot masked() {
+      return new HandSlot(null, null, false);
+    }
   }
 
   public MatchProjection {
-    board = java.util.Collections.unmodifiableList(new java.util.ArrayList<>(Objects.requireNonNull(board)));
+    board =
+        java.util.Collections.unmodifiableList(
+            new java.util.ArrayList<>(Objects.requireNonNull(board)));
     viewerHand = List.copyOf(Objects.requireNonNull(viewerHand));
     opponentHandSlots = List.copyOf(Objects.requireNonNull(opponentHandSlots));
     currentSeat = Objects.requireNonNull(currentSeat);
@@ -39,32 +43,58 @@ public record MatchProjection(
     Objects.requireNonNull(state, "state is required");
     Objects.requireNonNull(viewer, "viewer is required");
     Objects.requireNonNull(now, "time is required");
-    boolean canAct = state.currentSeat() == viewer && !state.isFinished() && !state.isTurnExpired(now);
+    boolean canAct =
+        state.currentSeat() == viewer && !state.isFinished() && !state.isTurnExpired(now);
     List<CardCopyId> legalCopies;
     if (!canAct) {
       legalCopies = List.of();
     } else if (state.ruleSet().has(Rule.ORDER)) {
-      legalCopies = state.hand(viewer).isEmpty() ? List.of() : List.of(state.hand(viewer).getFirst().copyId());
+      legalCopies =
+          state.hand(viewer).isEmpty()
+              ? List.of()
+              : List.of(state.hand(viewer).getFirst().copyId());
     } else if (state.ruleSet().has(Rule.CHAOS)) {
       CardCopyId chaos = state.chaosChoice(viewer);
       legalCopies = chaos == null ? List.of() : List.of(chaos);
     } else {
       legalCopies = state.hand(viewer).stream().map(HandCard::copyId).toList();
     }
-    List<Square> legalSquares = canAct
-        ? state.board().emptySquares() : List.of();
-    List<HandSlot> opponentSlots = state.hand(viewer.opponent()).stream().map(card -> {
-      boolean reveal = state.ruleSet().has(Rule.ALL_OPEN)
-          || state.revealedCards(viewer.opponent()).contains(card.copyId());
-      return reveal ? new HandSlot(card.copyId(), card.cardId(), true) : HandSlot.masked();
-    }).toList();
-    return new MatchProjection(state.board().cells(), state.hand(viewer), opponentSlots,
-        state.currentSeat(), legalCopies, legalSquares, state.revision(), state.result(),
-        state.remainingBankMillis(viewer, now), state.remainingGraceMillis(viewer, now),
+    List<Square> legalSquares = canAct ? state.board().emptySquares() : List.of();
+    List<HandSlot> opponentSlots =
+        state.hand(viewer.opponent()).stream()
+            .map(
+                card -> {
+                  boolean reveal =
+                      state.ruleSet().has(Rule.ALL_OPEN)
+                          || state.revealedCards(viewer.opponent()).contains(card.copyId());
+                  return reveal
+                      ? new HandSlot(card.copyId(), card.cardId(), true)
+                      : HandSlot.masked();
+                })
+            .toList();
+    return new MatchProjection(
+        state.board().cells(),
+        state.hand(viewer),
+        opponentSlots,
+        state.currentSeat(),
+        legalCopies,
+        legalSquares,
+        state.revision(),
+        state.result(),
+        state.remainingBankMillis(viewer, now),
+        state.remainingGraceMillis(viewer, now),
         state.remainingTurnMillis(viewer, now));
   }
 
-  public List<Board.Cell> boardCells() { return board; }
-  public List<HandCard> hand() { return viewerHand; }
-  public List<HandSlot> opponentHand() { return opponentHandSlots; }
+  public List<Board.Cell> boardCells() {
+    return board;
+  }
+
+  public List<HandCard> hand() {
+    return viewerHand;
+  }
+
+  public List<HandSlot> opponentHand() {
+    return opponentHandSlots;
+  }
 }

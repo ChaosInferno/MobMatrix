@@ -4,8 +4,8 @@ import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.util.HexFormat;
 import java.util.Objects;
-import java.util.UUID;
 import java.util.Optional;
+import java.util.UUID;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import net.kyori.adventure.text.Component;
@@ -36,7 +36,8 @@ public final class CardItemCodec {
   private final byte[] serverSecret;
 
   public CardItemCodec(String namespace, String serverSecret) {
-    this(new NamespacedKey(requireNamespace(namespace), "schema"),
+    this(
+        new NamespacedKey(requireNamespace(namespace), "schema"),
         new NamespacedKey(requireNamespace(namespace), "catalog_id"),
         new NamespacedKey(requireNamespace(namespace), "copy_uuid"),
         new NamespacedKey(requireNamespace(namespace), "integrity"),
@@ -59,8 +60,13 @@ public final class CardItemCodec {
     this(Objects.requireNonNull(plugin, "plugin is required").getName(), serverSecret);
   }
 
-  public CardItemCodec(NamespacedKey schemaKey, NamespacedKey catalogIdKey, NamespacedKey copyIdKey,
-      NamespacedKey integrityKey, NamespacedKey ownerKindKey, NamespacedKey ownerIdKey,
+  public CardItemCodec(
+      NamespacedKey schemaKey,
+      NamespacedKey catalogIdKey,
+      NamespacedKey copyIdKey,
+      NamespacedKey integrityKey,
+      NamespacedKey ownerKindKey,
+      NamespacedKey ownerIdKey,
       byte[] serverSecret) {
     this.schemaKey = Objects.requireNonNull(schemaKey, "schema key is required");
     this.catalogIdKey = Objects.requireNonNull(catalogIdKey, "catalog id key is required");
@@ -92,28 +98,33 @@ public final class CardItemCodec {
     pdc.set(copyIdKey, PersistentDataType.STRING, copyUuid);
     pdc.set(ownerKindKey, PersistentDataType.STRING, ownerKind);
     pdc.set(ownerIdKey, PersistentDataType.STRING, ownerUuid);
-    pdc.set(integrityKey, PersistentDataType.STRING,
+    pdc.set(
+        integrityKey,
+        PersistentDataType.STRING,
         marker(SCHEMA_VERSION, catalogId, copyUuid, ownerKind, ownerUuid));
     meta.displayName(Component.text(definition.name() + " (" + definition.publicNumber() + ")"));
-    meta.lore(java.util.List.of(
-        Component.text("★".repeat(definition.stars()) + " " + definition.type().name()),
-        Component.text("Top " + definition.top() + "  Right " + definition.right()),
-        Component.text("Bottom " + definition.bottom() + "  Left " + definition.left())));
-    item.setItemMeta(meta);
+    meta.lore(
+        java.util.List.of(
+            Component.text("★".repeat(definition.stars()) + " " + definition.type().name()),
+            Component.text("Top " + definition.top() + "  Right " + definition.right()),
+            Component.text("Bottom " + definition.bottom() + "  Left " + definition.left())));
+    if (!item.setItemMeta(meta)) throw new IllegalStateException("unable to set card metadata");
     return item;
   }
+
   public ItemStack create(CardDefinition definition, CardCopyId copyId, UUID owner) {
-    return create(definition, copyId, CopyOwner.player(Objects.requireNonNull(owner, "owner is required")));
+    return create(
+        definition, copyId, CopyOwner.player(Objects.requireNonNull(owner, "owner is required")));
   }
 
   public ReadResult decode(ItemStack item) {
     return read(item);
   }
 
-
   /** Reads only PDC identity; display text is never used as an authority. */
   public ReadResult read(ItemStack item) {
-    if (item == null || item.getType() != Material.PAPER) return ReadResult.invalid(InvalidReason.NOT_PAPER);
+    if (item == null || item.getType() != Material.PAPER)
+      return ReadResult.invalid(InvalidReason.NOT_PAPER);
     if (item.getAmount() != 1) return ReadResult.invalid(InvalidReason.INVALID_AMOUNT);
     try {
       ItemMeta meta = item.getItemMeta();
@@ -125,8 +136,12 @@ public final class CardItemCodec {
       String ownerKind = pdc.get(ownerKindKey, PersistentDataType.STRING);
       String ownerUuid = pdc.get(ownerIdKey, PersistentDataType.STRING);
       String integrity = pdc.get(integrityKey, PersistentDataType.STRING);
-      if (schema == null || catalogId == null || copyUuid == null || ownerKind == null
-          || ownerUuid == null || integrity == null) {
+      if (schema == null
+          || catalogId == null
+          || copyUuid == null
+          || ownerKind == null
+          || ownerUuid == null
+          || integrity == null) {
         return ReadResult.invalid(InvalidReason.MISSING_FIELD);
       }
       if (schema != SCHEMA_VERSION) return ReadResult.invalid(InvalidReason.INVALID_SCHEMA);
@@ -141,12 +156,16 @@ public final class CardItemCodec {
         return ReadResult.invalid(InvalidReason.INVALID_OWNER);
       }
       String expected = marker(schema, catalogId, copyUuid, ownerKind, ownerUuid);
-      if (!constantTimeEquals(expected, integrity)) return ReadResult.invalid(InvalidReason.INVALID_INTEGRITY);
-      String displayName = meta.hasDisplayName() && meta.displayName() != null
-          ? net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText().serialize(meta.displayName())
-          : "";
-      return ReadResult.valid(new CardItemData(new CardId(catalogId), new CardCopyId(copy), owner,
-          schema, integrity, displayName));
+      if (!constantTimeEquals(expected, integrity))
+        return ReadResult.invalid(InvalidReason.INVALID_INTEGRITY);
+      String displayName =
+          meta.hasDisplayName() && meta.displayName() != null
+              ? net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer.plainText()
+                  .serialize(meta.displayName())
+              : "";
+      return ReadResult.valid(
+          new CardItemData(
+              new CardId(catalogId), new CardCopyId(copy), owner, schema, integrity, displayName));
     } catch (InvalidUuidException exception) {
       return ReadResult.invalid(InvalidReason.INVALID_UUID);
     } catch (IllegalArgumentException exception) {
@@ -155,17 +174,34 @@ public final class CardItemCodec {
       return ReadResult.invalid(InvalidReason.INVALID_VALUE);
     }
   }
+
   private static boolean isCatalogId(int catalogId) {
     return catalogId >= MIN_CATALOG_ID && catalogId <= MAX_CATALOG_ID;
   }
 
-  public NamespacedKey schemaKey() { return schemaKey; }
-  public NamespacedKey catalogIdKey() { return catalogIdKey; }
-  public NamespacedKey copyIdKey() { return copyIdKey; }
-  public NamespacedKey integrityKey() { return integrityKey; }
-  public NamespacedKey ownerKindKey() { return ownerKindKey; }
-  public NamespacedKey ownerIdKey() { return ownerIdKey; }
+  public NamespacedKey schemaKey() {
+    return schemaKey;
+  }
 
+  public NamespacedKey catalogIdKey() {
+    return catalogIdKey;
+  }
+
+  public NamespacedKey copyIdKey() {
+    return copyIdKey;
+  }
+
+  public NamespacedKey integrityKey() {
+    return integrityKey;
+  }
+
+  public NamespacedKey ownerKindKey() {
+    return ownerKindKey;
+  }
+
+  public NamespacedKey ownerIdKey() {
+    return ownerIdKey;
+  }
 
   public boolean hasIdentity(ItemStack item) {
     if (item == null || item.getItemMeta() == null) return false;
@@ -178,25 +214,28 @@ public final class CardItemCodec {
         || keys.contains(ownerKindKey)
         || keys.contains(ownerIdKey);
   }
+
   /**
    * Extracts only the canonical physical copy UUID, without asserting that the full card is valid.
    */
   public Optional<CardCopyId> identityCopyId(ItemStack item) {
     if (item == null || item.getItemMeta() == null) return Optional.empty();
     try {
-      String raw = item.getItemMeta().getPersistentDataContainer().get(copyIdKey,
-          PersistentDataType.STRING);
+      String raw =
+          item.getItemMeta().getPersistentDataContainer().get(copyIdKey, PersistentDataType.STRING);
       return raw == null ? Optional.empty() : Optional.of(new CardCopyId(parseCanonicalUuid(raw)));
     } catch (RuntimeException exception) {
       return Optional.empty();
     }
   }
 
-  private String marker(int schema, int catalogId, String copyUuid, String ownerKind, String ownerUuid) {
+  private String marker(
+      int schema, int catalogId, String copyUuid, String ownerKind, String ownerUuid) {
     try {
       Mac mac = Mac.getInstance("HmacSHA256");
       mac.init(new SecretKeySpec(serverSecret, "HmacSHA256"));
-      String payload = schema + "|" + catalogId + "|" + copyUuid + "|" + ownerKind + "|" + ownerUuid;
+      String payload =
+          schema + "|" + catalogId + "|" + copyUuid + "|" + ownerKind + "|" + ownerUuid;
       return HexFormat.of().formatHex(mac.doFinal(payload.getBytes(StandardCharsets.UTF_8)));
     } catch (GeneralSecurityException exception) {
       throw new IllegalStateException("HMAC unavailable", exception);
@@ -216,33 +255,37 @@ public final class CardItemCodec {
   }
 
   private static boolean constantTimeEquals(String expected, String actual) {
-    return java.security.MessageDigest.isEqual(expected.getBytes(StandardCharsets.UTF_8),
-        actual.getBytes(StandardCharsets.UTF_8));
+    return java.security.MessageDigest.isEqual(
+        expected.getBytes(StandardCharsets.UTF_8), actual.getBytes(StandardCharsets.UTF_8));
   }
 
   private static String requireNamespace(String namespace) {
-    if (namespace == null || namespace.isBlank()) throw new IllegalArgumentException("namespace is required");
+    if (namespace == null || namespace.isBlank())
+      throw new IllegalArgumentException("namespace is required");
     return namespace.toLowerCase(java.util.Locale.ROOT);
   }
 
   private static String requireSecret(String secret) {
-    if (secret == null || secret.isBlank()) throw new IllegalArgumentException("server secret is required");
+    if (secret == null || secret.isBlank())
+      throw new IllegalArgumentException("server secret is required");
     return secret;
   }
 
   private static String configuredSecret(String namespace) {
     String normalized = requireNamespace(namespace);
     String property = System.getProperty("mobmatrix." + normalized + ".server-secret");
-    String value = property == null || property.isBlank()
-        ? System.getenv("MOBMATRIX_SERVER_SECRET") : property;
+    String value =
+        property == null || property.isBlank()
+            ? System.getenv("MOBMATRIX_SERVER_SECRET")
+            : property;
     return requireSecret(value);
   }
+
   private static final class InvalidUuidException extends IllegalArgumentException {
     private InvalidUuidException() {
       super("invalid UUID");
     }
   }
-
 
   public enum InvalidReason {
     NOT_PAPER,
@@ -265,13 +308,36 @@ public final class CardItemCodec {
       this.reason = reason;
     }
 
-    public static ReadResult valid(CardItemData data) { return new ReadResult(Objects.requireNonNull(data), null); }
-    public static ReadResult invalid(InvalidReason reason) { return new ReadResult(null, Objects.requireNonNull(reason)); }
-    public boolean isValid() { return data != null; }
-    public boolean valid() { return isValid(); }
-    public boolean isInvalid() { return !isValid(); }
-    public CardItemData data() { return data; }
-    public InvalidReason reason() { return reason; }
-    public InvalidReason error() { return reason; }
+    public static ReadResult valid(CardItemData data) {
+      return new ReadResult(Objects.requireNonNull(data), null);
+    }
+
+    public static ReadResult invalid(InvalidReason reason) {
+      return new ReadResult(null, Objects.requireNonNull(reason));
+    }
+
+    public boolean isValid() {
+      return data != null;
+    }
+
+    public boolean valid() {
+      return isValid();
+    }
+
+    public boolean isInvalid() {
+      return !isValid();
+    }
+
+    public CardItemData data() {
+      return data;
+    }
+
+    public InvalidReason reason() {
+      return reason;
+    }
+
+    public InvalidReason error() {
+      return reason;
+    }
   }
 }

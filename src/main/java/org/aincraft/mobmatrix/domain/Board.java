@@ -8,13 +8,16 @@ import java.util.Objects;
 
 /** Immutable nine-cell board and standard adjacency operations. */
 public final class Board {
-  public record Cell(CardCopy copy, CardId cardId, PlayerSeat owner, Map<Side, Integer> effectiveValues) {
+  public record Cell(
+      CardCopy copy, CardId cardId, PlayerSeat owner, Map<Side, Integer> effectiveValues) {
     public Cell {
       Objects.requireNonNull(copy, "copy is required");
       Objects.requireNonNull(cardId, "card id is required");
       Objects.requireNonNull(owner, "owner is required");
-      if (!copy.cardId().equals(cardId)) throw new IllegalArgumentException("card id does not match copy");
-      effectiveValues = Map.copyOf(Objects.requireNonNull(effectiveValues, "effective values are required"));
+      if (!copy.cardId().equals(cardId))
+        throw new IllegalArgumentException("card id does not match copy");
+      effectiveValues =
+          Map.copyOf(Objects.requireNonNull(effectiveValues, "effective values are required"));
       for (Map.Entry<Side, Integer> entry : effectiveValues.entrySet()) {
         Objects.requireNonNull(entry.getKey(), "effective side is required");
         if (entry.getValue() == null || entry.getValue() < 1 || entry.getValue() > 10) {
@@ -64,13 +67,15 @@ public final class Board {
 
   public List<Square> emptySquares() {
     List<Square> result = new ArrayList<>();
-    for (int index = 0; index < 9; index++) if (cells.get(index) == null) result.add(Square.of(index));
+    for (int index = 0; index < 9; index++)
+      if (cells.get(index) == null) result.add(Square.of(index));
     return List.copyOf(result);
   }
 
   public List<Square> occupiedSquares() {
     List<Square> result = new ArrayList<>();
-    for (int index = 0; index < 9; index++) if (cells.get(index) != null) result.add(Square.of(index));
+    for (int index = 0; index < 9; index++)
+      if (cells.get(index) != null) result.add(Square.of(index));
     return List.copyOf(result);
   }
 
@@ -93,7 +98,8 @@ public final class Board {
     return place(square, copy, owner, Map.of());
   }
 
-  public Board place(Square square, CardCopy copy, PlayerSeat owner, Map<Side, Integer> effectiveValues) {
+  public Board place(
+      Square square, CardCopy copy, PlayerSeat owner, Map<Side, Integer> effectiveValues) {
     Objects.requireNonNull(square, "square is required");
     Objects.requireNonNull(copy, "copy is required");
     Objects.requireNonNull(owner, "owner is required");
@@ -107,7 +113,8 @@ public final class Board {
     Cell cell = cellAt(square);
     if (cell == null) throw new IllegalArgumentException("square is empty");
     List<Cell> updated = new ArrayList<>(cells);
-    updated.set(square.index(), new Cell(cell.copy(), cell.cardId(), owner, cell.effectiveValues()));
+    updated.set(
+        square.index(), new Cell(cell.copy(), cell.cardId(), owner, cell.effectiveValues()));
     return new Board(updated);
   }
 
@@ -136,7 +143,8 @@ public final class Board {
     return List.copyOf(result);
   }
 
-  private void addAdjacent(List<Adjacent> result, Square source, Side facing, int offset, Side adjacentSide) {
+  private void addAdjacent(
+      List<Adjacent> result, Square source, Side facing, int offset, Side adjacentSide) {
     int target = source.index() + offset;
     if (target < 0 || target > 8) return;
     if (offset == 1 && source.column() == 2 || offset == -1 && source.column() == 0) return;

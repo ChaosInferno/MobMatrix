@@ -1,13 +1,12 @@
 package org.aincraft.mobmatrix.domain;
 
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
-import java.util.HashSet;
 
 /** Pure validation of a five physical-copy deck against a catalog. */
 public final class DeckValidation {
@@ -60,7 +59,8 @@ public final class DeckValidation {
     public Result {
       errors = List.copyOf(Objects.requireNonNull(errors, "errors are required"));
       if (errors.isEmpty() != (deck != null)) {
-        throw new IllegalArgumentException("valid result must contain a deck and invalid result must not");
+        throw new IllegalArgumentException(
+            "valid result must contain a deck and invalid result must not");
       }
     }
 

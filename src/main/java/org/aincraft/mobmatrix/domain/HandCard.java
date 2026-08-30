@@ -7,7 +7,8 @@ public record HandCard(CardCopy copy, CardDefinition definition) {
   public HandCard {
     Objects.requireNonNull(copy, "copy is required");
     Objects.requireNonNull(definition, "definition is required");
-    if (!copy.cardId().equals(definition.id())) throw new IllegalArgumentException("definition does not match copy");
+    if (!copy.cardId().equals(definition.id()))
+      throw new IllegalArgumentException("definition does not match copy");
   }
 
   public CardCopyId copyId() {

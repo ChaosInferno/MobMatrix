@@ -14,8 +14,8 @@ import org.aincraft.mobmatrix.domain.MatchState;
 /**
  * Explicit non-durable repository for isolated runs and tests.
  *
- * <p>It retains the same initial-save and optimistic-CAS semantics as the durable repository; it
- * is not a production persistence substitute.
+ * <p>It retains the same initial-save and optimistic-CAS semantics as the durable repository; it is
+ * not a production persistence substitute.
  */
 public final class InMemoryMatchRepository implements MatchRepository {
   private final Map<MatchId, MatchState> states = new ConcurrentHashMap<>();
@@ -62,8 +62,13 @@ public final class InMemoryMatchRepository implements MatchRepository {
     Objects.requireNonNull(matchId, "match id is required");
     MatchState state = states.get(matchId);
     if (state == null) return Optional.empty();
-    return Optional.of(new MatchSnapshot(matchId, state.revision(),
-        state.isFinished() ? "FINISHED" : "ACTIVE", new byte[0], "{}"));
+    return Optional.of(
+        new MatchSnapshot(
+            matchId,
+            state.revision(),
+            state.isFinished() ? "FINISHED" : "ACTIVE",
+            new byte[0],
+            "{}"));
   }
 
   @Override
@@ -72,7 +77,8 @@ public final class InMemoryMatchRepository implements MatchRepository {
     Objects.requireNonNull(catalog, "catalog is required");
     MatchState state = states.get(matchId);
     return state != null && state.catalog().snapshotId().equals(catalog.snapshotId())
-        ? Optional.of(state) : Optional.empty();
+        ? Optional.of(state)
+        : Optional.empty();
   }
 
   @Override
@@ -84,9 +90,11 @@ public final class InMemoryMatchRepository implements MatchRepository {
   @Override
   public synchronized void saveStartBinding(StartBinding binding) {
     Objects.requireNonNull(binding, "start binding is required");
-    if (!states.containsKey(binding.matchId())) throw new IllegalStateException("match is not persisted");
+    if (!states.containsKey(binding.matchId()))
+      throw new IllegalStateException("match is not persisted");
     StartBinding prior = bindings.putIfAbsent(binding.matchId(), binding);
-    if (prior != null && !prior.equals(binding)) throw new IllegalStateException("start binding mismatch");
+    if (prior != null && !prior.equals(binding))
+      throw new IllegalStateException("start binding mismatch");
   }
 
   @Override
@@ -105,14 +113,13 @@ public final class InMemoryMatchRepository implements MatchRepository {
   }
 
   @Override
-  public Optional<MatchState> rehydrate(MatchSnapshot snapshot,
-      Function<String, CardCatalog> catalogResolver) {
+  public Optional<MatchState> rehydrate(
+      MatchSnapshot snapshot, Function<String, CardCatalog> catalogResolver) {
     Objects.requireNonNull(snapshot, "snapshot is required");
     Objects.requireNonNull(catalogResolver, "catalog resolver is required");
     MatchState state = states.get(snapshot.matchId());
     if (state == null) return Optional.empty();
-    if (!state.matchId().equals(snapshot.matchId())
-        || state.revision() != snapshot.revision()) {
+    if (!state.matchId().equals(snapshot.matchId()) || state.revision() != snapshot.revision()) {
       throw new IllegalArgumentException("snapshot state identity does not match row");
     }
     return Optional.of(state);

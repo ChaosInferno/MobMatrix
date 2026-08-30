@@ -12,8 +12,11 @@ final class CatalogFixtures {
   private CatalogFixtures() {}
 
   static CardCatalog currentSnapshot() {
-    try (BufferedReader reader = new BufferedReader(new InputStreamReader(
-        CatalogFixtures.class.getResourceAsStream("/catalog/cards.csv"), StandardCharsets.UTF_8))) {
+    try (BufferedReader reader =
+        new BufferedReader(
+            new InputStreamReader(
+                CatalogFixtures.class.getResourceAsStream("/catalog/cards.csv"),
+                StandardCharsets.UTF_8))) {
       String header = reader.readLine();
       if (!"id,public_number,name,stars,type,top,right,bottom,left,sale_price".equals(header)) {
         throw new IllegalStateException("unexpected catalog header");
@@ -22,15 +25,25 @@ final class CatalogFixtures {
       for (String line; (line = reader.readLine()) != null; ) {
         String[] fields = parseCsvLine(line);
         if (fields.length != 10) throw new IllegalStateException("malformed catalog row");
-        cards.add(new CardDefinition(new CardId(Integer.parseInt(fields[0])), fields[1], fields[2],
-            Integer.parseInt(fields[3]), CardType.valueOf(fields[4].toUpperCase()), Integer.parseInt(fields[5]),
-            Integer.parseInt(fields[6]), Integer.parseInt(fields[7]), Integer.parseInt(fields[8]), Integer.parseInt(fields[9])));
+        cards.add(
+            new CardDefinition(
+                new CardId(Integer.parseInt(fields[0])),
+                fields[1],
+                fields[2],
+                Integer.parseInt(fields[3]),
+                CardType.valueOf(fields[4].toUpperCase()),
+                Integer.parseInt(fields[5]),
+                Integer.parseInt(fields[6]),
+                Integer.parseInt(fields[7]),
+                Integer.parseInt(fields[8]),
+                Integer.parseInt(fields[9])));
       }
       return new CardCatalog(cards, "fixture");
     } catch (IOException exception) {
       throw new UncheckedIOException(exception);
     }
   }
+
   private static String[] parseCsvLine(String line) {
     List<String> fields = new ArrayList<>();
     StringBuilder field = new StringBuilder();

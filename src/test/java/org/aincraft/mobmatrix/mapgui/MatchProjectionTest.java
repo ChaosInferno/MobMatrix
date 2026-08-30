@@ -50,8 +50,12 @@ final class MatchProjectionTest {
     MatchProjection projection = MatchProjection.forViewer(fixture.state(), PlayerSeat.ONE, START);
     MatchView view = MatchView.from(projection);
 
-    assertEquals(fixture.state().hand(PlayerSeat.ONE).stream().map(card -> card.copyId()).toList(), view.legalCopyIds());
-    assertEquals(List.of(0, 1, 2, 3, 4, 5, 6, 7, 8), view.legalSquares().stream().map(Square::index).toList());
+    assertEquals(
+        fixture.state().hand(PlayerSeat.ONE).stream().map(card -> card.copyId()).toList(),
+        view.legalCopyIds());
+    assertEquals(
+        List.of(0, 1, 2, 3, 4, 5, 6, 7, 8),
+        view.legalSquares().stream().map(Square::index).toList());
     assertEquals(projection.revision(), view.revision());
     assertEquals(projection.viewerTurnMillis(), view.turnMillis());
     assertFalse(view.hasResult());
@@ -59,7 +63,8 @@ final class MatchProjectionTest {
 
   @Test
   void viewCanCarryImmutableRuleBadgesWithoutChangingProjection() {
-    MatchStateFixture fixture = start(13L, new MatchRules(org.aincraft.mobmatrix.domain.Rule.ALL_OPEN));
+    MatchStateFixture fixture =
+        start(13L, new MatchRules(org.aincraft.mobmatrix.domain.Rule.ALL_OPEN));
     MatchProjection projection = MatchProjection.forViewer(fixture.state(), PlayerSeat.ONE, START);
 
     MatchView view = MatchView.from(projection, fixture.state().ruleSet());
@@ -71,8 +76,9 @@ final class MatchProjectionTest {
 
   private static MatchStateFixture start(long seed, MatchRules rules) {
     CardCatalog catalog = fixtureCatalog();
-    MatchEngine.StartMatch start = new MatchEngine.StartMatch(
-        new MatchId("match-" + seed), deck(1), deck(6), catalog, rules, seed, START);
+    MatchEngine.StartMatch start =
+        new MatchEngine.StartMatch(
+            new MatchId("match-" + seed), deck(1), deck(6), catalog, rules, seed, START);
     MatchEngine.MatchTransition transition = MatchEngine.start(start);
     assertTrue(transition.accepted());
     return new MatchStateFixture(transition.state());
@@ -81,7 +87,8 @@ final class MatchProjectionTest {
   private static Deck deck(int firstId) {
     List<CardCopy> copies = new ArrayList<>();
     for (int index = 0; index < 5; index++) {
-      copies.add(new CardCopy(new CardCopyId(new UUID(firstId, index + 1L)), new CardId(firstId + index)));
+      copies.add(
+          new CardCopy(new CardCopyId(new UUID(firstId, index + 1L)), new CardId(firstId + index)));
     }
     return new Deck(copies);
   }
@@ -89,8 +96,9 @@ final class MatchProjectionTest {
   private static CardCatalog fixtureCatalog() {
     List<CardDefinition> definitions = new ArrayList<>();
     for (int id = 1; id <= 10; id++) {
-      definitions.add(new CardDefinition(new CardId(id), "No. " + id, "Card " + id, 1,
-          CardType.NORMAL, 1, 1, 1, 1, 100));
+      definitions.add(
+          new CardDefinition(
+              new CardId(id), "No. " + id, "Card " + id, 1, CardType.NORMAL, 1, 1, 1, 1, 100));
     }
     return new CardCatalog(definitions, "test");
   }

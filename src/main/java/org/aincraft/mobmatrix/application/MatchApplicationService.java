@@ -32,14 +32,17 @@ public final class MatchApplicationService {
   private final CardCustodyPort custody;
   private final MatchRepository matches;
 
-  /** Uses explicit non-durable storage for isolated runs; production must inject a durable repository. */
+  /**
+   * Uses explicit non-durable storage for isolated runs; production must inject a durable
+   * repository.
+   */
   public MatchApplicationService(CardCustodyPort custody) {
     this(custody, new InMemoryMatchRepository());
   }
 
   /**
-   * Performs both seat reservations and writes the active match only after both escrows and
-   * the domain start transition have succeeded.
+   * Performs both seat reservations and writes the active match only after both escrows and the
+   * domain start transition have succeeded.
    */
   public synchronized MatchStartResult start(StartMatchRequest request) {
     return start(request, false);
@@ -86,13 +89,14 @@ public final class MatchApplicationService {
       return MatchStartResult.rejected(request.match().matchId(), Failure.MISMATCHED_OPERATION);
     }
     try {
-      java.util.Optional<MatchState> existing = matches.findState(request.match().matchId(),
-          request.match().catalog());
+      java.util.Optional<MatchState> existing =
+          matches.findState(request.match().matchId(), request.match().catalog());
       if (existing.isPresent()) {
         MatchState state = existing.get();
         Optional<MatchRepository.StartBinding> binding =
             matches.findStartBinding(request.match().matchId());
-        if (binding.isPresent() && startBindingMatches(binding.get(), request, plan)
+        if (binding.isPresent()
+            && startBindingMatches(binding.get(), request, plan)
             && sameInitialState(state, started.state())) {
           BindingCheck custodyCheck = operationBindingsMatch(request, state.matchId());
           if (custodyCheck == BindingCheck.MATCH) {
@@ -111,11 +115,16 @@ public final class MatchApplicationService {
     } catch (RuntimeException exception) {
       return MatchStartResult.rejected(request.match().matchId(), Failure.DATABASE_ERROR);
     }
-    
+
     StartResult one;
     try {
-      one = prepareForStart(request.oneOwner(), plan.oneCopies(), request.oneOperationId(),
-          request.match().matchId());
+      one =
+          prepareForStart(
+              request.oneOwner(),
+              plan.oneCopies(),
+              request.oneOperationId(),
+              request.match().matchId(),
+              allowHouseSeat);
     } catch (RuntimeException exception) {
       CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
       return MatchStartResult.rejected(request.match().matchId(), Failure.DATABASE_ERROR, cleanup);
@@ -128,8 +137,13 @@ public final class MatchApplicationService {
 
     StartResult two;
     try {
-      two = prepareForStart(request.twoOwner(), plan.twoCopies(), request.twoOperationId(),
-          request.match().matchId());
+      two =
+          prepareForStart(
+              request.twoOwner(),
+              plan.twoCopies(),
+              request.twoOperationId(),
+              request.match().matchId(),
+              allowHouseSeat);
     } catch (RuntimeException exception) {
       CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
       cleanup = cleanup.plus(cleanup(request.twoOperationId(), plan.twoCopies()));
@@ -144,10 +158,19 @@ public final class MatchApplicationService {
 
     MatchRepository.SaveResult saved;
     try {
-      saved = matches.saveInitial(started.state(), new MatchRepository.StartBinding(
-          request.match().matchId(), 1, startIdentity(request), request.oneOwner(),
-          plan.oneCopies(), request.oneOperationId(), request.twoOwner(), plan.twoCopies(),
-          request.twoOperationId()));
+      saved =
+          matches.saveInitial(
+              started.state(),
+              new MatchRepository.StartBinding(
+                  request.match().matchId(),
+                  1,
+                  startIdentity(request),
+                  request.oneOwner(),
+                  plan.oneCopies(),
+                  request.oneOperationId(),
+                  request.twoOwner(),
+                  plan.twoCopies(),
+                  request.twoOperationId()));
     } catch (RuntimeException exception) {
       return initialSaveFailure(request, started.state(), plan, Failure.DATABASE_ERROR);
     }
@@ -163,29 +186,37 @@ public final class MatchApplicationService {
   }
 
   /** Prepare and escrow exactly five selected physical cards before exposing a match. */
-  public synchronized StartResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
+  public synchronized StartResult prepare(
+      CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
     return prepare(owner, copyIds, operationId, null);
   }
 
-  private StartResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId,
+  private StartResult prepare(
+      CopyOwner owner,
+      List<CardCopyId> copyIds,
+      UUID operationId,
       org.aincraft.mobmatrix.domain.MatchId matchId) {
     Objects.requireNonNull(operationId, "operation id is required");
     List<CardCopyId> copies;
     try {
       copies = exactDeck(copyIds);
     } catch (IllegalArgumentException exception) {
-      return StartResult.rejected(operationId, owner == null ? CopyOwner.house() : owner,
-          copyIds == null ? List.of() : copyIds, Failure.INVALID_COPY_SET);
+      return StartResult.rejected(
+          operationId,
+          owner == null ? CopyOwner.house() : owner,
+          copyIds == null ? List.of() : copyIds,
+          Failure.INVALID_COPY_SET);
     }
     if (owner == null || !owner.isPlayer()) {
-      return StartResult.rejected(operationId, owner == null ? CopyOwner.house() : owner, copies,
-          Failure.INVALID_OWNER);
+      return StartResult.rejected(
+          operationId, owner == null ? CopyOwner.house() : owner, copies, Failure.INVALID_OWNER);
     }
     PrepareResult prepared;
     try {
-      prepared = matchId == null
-          ? custody.prepare(owner, copies, operationId)
-          : custody.prepare(owner, copies, operationId, matchId);
+      prepared =
+          matchId == null
+              ? custody.prepare(owner, copies, operationId)
+              : custody.prepare(owner, copies, operationId, matchId);
     } catch (RuntimeException exception) {
       cleanup(operationId, copies);
       return StartResult.rejected(operationId, owner, copies, Failure.DATABASE_ERROR);
@@ -202,20 +233,33 @@ public final class MatchApplicationService {
     }
     if (!escrowed.accepted() || escrowed.status() != OperationStatus.ESCROWED) {
       cleanup(operationId, copies);
-      return StartResult.rejected(operationId, owner, copies,
+      return StartResult.rejected(
+          operationId,
+          owner,
+          copies,
           escrowed.failure() == Failure.NONE ? Failure.INVALID_STATE : escrowed.failure());
     }
     return StartResult.escrowed(operationId, owner, copies);
   }
-  private StartResult prepareForStart(CopyOwner owner, List<CardCopyId> copies, UUID operationId,
-      org.aincraft.mobmatrix.domain.MatchId matchId) {
-    if (owner == null || !owner.isPlayer()) {
-      return StartResult.rejected(operationId, owner == null ? CopyOwner.house() : owner,
-          copies, Failure.INVALID_OWNER);
+
+  private StartResult prepareForStart(
+      CopyOwner owner,
+      List<CardCopyId> copies,
+      UUID operationId,
+      org.aincraft.mobmatrix.domain.MatchId matchId,
+      boolean allowHouseSeat) {
+    if (owner == null) {
+      return StartResult.rejected(operationId, CopyOwner.house(), copies, Failure.INVALID_OWNER);
     }
-    if (copies.isEmpty()) return StartResult.escrowed(operationId, owner, copies);
+    if (copies.isEmpty() && (owner.isPlayer() || allowHouseSeat && owner.isHouse())) {
+      return StartResult.escrowed(operationId, owner, copies);
+    }
+    if (!owner.isPlayer()) {
+      return StartResult.rejected(operationId, owner, copies, Failure.INVALID_OWNER);
+    }
     return prepare(owner, copies, operationId, matchId);
   }
+
   /** Returns exact escrowed cards; custody itself provides durable idempotency. */
   public synchronized ReturnResult settle(UUID operationId) {
     Objects.requireNonNull(operationId, "operation id is required");
@@ -229,7 +273,10 @@ public final class MatchApplicationService {
   public synchronized ReturnResult settle(String operationId) {
     return settle(UUID.fromString(Objects.requireNonNull(operationId)));
   }
-  /** Applies a pure domain command to the canonical persisted state before persisting the successor. */
+
+  /**
+   * Applies a pure domain command to the canonical persisted state before persisting the successor.
+   */
   public synchronized ApplyResult apply(MatchState state, MatchCommand command) {
     Objects.requireNonNull(state, "state is required");
     Objects.requireNonNull(command, "command is required");
@@ -239,9 +286,14 @@ public final class MatchApplicationService {
       if (loaded.isEmpty()) return ApplyResult.unavailable(state);
       canonical = Objects.requireNonNull(loaded.get(), "persisted state is required");
     } catch (RuntimeException exception) {
-      return new ApplyResult(new MatchEngine.MatchTransition(state, List.of(),
-          new MatchRejection(MatchErrorCode.INVALID_COMMAND, "canonical match state unavailable")),
-          Failure.DATABASE_ERROR, state.revision());
+      return new ApplyResult(
+          new MatchEngine.MatchTransition(
+              state,
+              List.of(),
+              new MatchRejection(
+                  MatchErrorCode.INVALID_COMMAND, "canonical match state unavailable")),
+          Failure.DATABASE_ERROR,
+          state.revision());
     }
     MatchEngine.MatchTransition transition = MatchEngine.apply(canonical, command);
     if (!transition.accepted()) {
@@ -258,20 +310,19 @@ public final class MatchApplicationService {
       return new ApplyResult(transition, Failure.DATABASE_ERROR, canonical.revision());
     }
     if (!saved.accepted()) {
-      Failure failure = switch (saved.failure()) {
-        case STALE_REVISION -> Failure.STALE_REVISION;
-        case DATABASE_ERROR -> Failure.DATABASE_ERROR;
-        case INVALID_STATE, NONE -> Failure.INVALID_STATE;
-      };
+      Failure failure =
+          switch (saved.failure()) {
+            case STALE_REVISION -> Failure.STALE_REVISION;
+            case DATABASE_ERROR -> Failure.DATABASE_ERROR;
+            case INVALID_STATE, NONE -> Failure.INVALID_STATE;
+          };
       return new ApplyResult(transition, failure, saved.revision());
     }
     return ApplyResult.accepted(transition);
   }
 
-
-
-  private MatchStartResult initialSaveFailure(StartMatchRequest request, MatchState startedState,
-      ReservationPlan plan, Failure failure) {
+  private MatchStartResult initialSaveFailure(
+      StartMatchRequest request, MatchState startedState, ReservationPlan plan, Failure failure) {
     InitialSaveResolution resolution = recheckInitialSave(request, startedState, plan);
     if (resolution.state() != null) {
       return MatchStartResult.active(request.match().matchId(), resolution.state());
@@ -279,7 +330,9 @@ public final class MatchApplicationService {
     if (resolution.ambiguous()) {
       List<CardCopyId> pending = new ArrayList<>(plan.oneCopies());
       pending.addAll(plan.twoCopies());
-      return MatchStartResult.rejected(request.match().matchId(), Failure.DATABASE_ERROR,
+      return MatchStartResult.rejected(
+          request.match().matchId(),
+          Failure.DATABASE_ERROR,
           new CleanupSummary(pending, List.of()));
     }
     CleanupSummary cleanup = cleanup(request.oneOperationId(), plan.oneCopies());
@@ -287,16 +340,17 @@ public final class MatchApplicationService {
     return MatchStartResult.rejected(request.match().matchId(), failure, cleanup);
   }
 
-  private InitialSaveResolution recheckInitialSave(StartMatchRequest request,
-      MatchState startedState, ReservationPlan plan) {
+  private InitialSaveResolution recheckInitialSave(
+      StartMatchRequest request, MatchState startedState, ReservationPlan plan) {
     try {
-      Optional<MatchState> existing = matches.findState(request.match().matchId(),
-          request.match().catalog());
+      Optional<MatchState> existing =
+          matches.findState(request.match().matchId(), request.match().catalog());
       if (existing.isPresent()) {
         MatchState state = existing.get();
         Optional<MatchRepository.StartBinding> binding =
             matches.findStartBinding(request.match().matchId());
-        if (binding.isPresent() && startBindingMatches(binding.get(), request, plan)
+        if (binding.isPresent()
+            && startBindingMatches(binding.get(), request, plan)
             && sameInitialState(state, startedState)) {
           return operationBindingsMatchStrict(request, plan, state.matchId())
               ? InitialSaveResolution.found(state)
@@ -312,17 +366,23 @@ public final class MatchApplicationService {
     }
   }
 
-  private boolean operationBindingsMatchStrict(StartMatchRequest request, ReservationPlan plan,
+  private boolean operationBindingsMatchStrict(
+      StartMatchRequest request,
+      ReservationPlan plan,
       org.aincraft.mobmatrix.domain.MatchId matchId) {
-    return bindingMatchesStrict(request.oneOperationId(), request.oneOwner(), plan.oneCopies(), matchId)
-        && bindingMatchesStrict(request.twoOperationId(), request.twoOwner(), plan.twoCopies(), matchId);
+    return bindingMatchesStrict(
+            request.oneOperationId(), request.oneOwner(), plan.oneCopies(), matchId)
+        && bindingMatchesStrict(
+            request.twoOperationId(), request.twoOwner(), plan.twoCopies(), matchId);
   }
 
-  private boolean bindingMatchesStrict(UUID operationId, CopyOwner owner,
-      List<CardCopyId> copies, org.aincraft.mobmatrix.domain.MatchId matchId) {
+  private boolean bindingMatchesStrict(
+      UUID operationId,
+      CopyOwner owner,
+      List<CardCopyId> copies,
+      org.aincraft.mobmatrix.domain.MatchId matchId) {
     if (copies.isEmpty()) return true;
-    Optional<CardCustodyPort.OperationBinding> binding =
-        custody.operationBinding(operationId);
+    Optional<CardCustodyPort.OperationBinding> binding = custody.operationBinding(operationId);
     if (binding.isEmpty()) return false;
     CardCustodyPort.OperationBinding value = binding.get();
     return value.status() == OperationStatus.ESCROWED
@@ -353,17 +413,21 @@ public final class MatchApplicationService {
     }
   }
 
-  private BindingCheck operationBindingsMatch(StartMatchRequest request,
-      org.aincraft.mobmatrix.domain.MatchId matchId) {
-    BindingCheck one = bindingMatchesIfNeeded(request.oneOperationId(), request.oneOwner(),
-        request.oneCopies(), matchId);
+  private BindingCheck operationBindingsMatch(
+      StartMatchRequest request, org.aincraft.mobmatrix.domain.MatchId matchId) {
+    BindingCheck one =
+        bindingMatchesIfNeeded(
+            request.oneOperationId(), request.oneOwner(), request.oneCopies(), matchId);
     if (one != BindingCheck.MATCH) return one;
-    return bindingMatchesIfNeeded(request.twoOperationId(), request.twoOwner(),
-        request.twoCopies(), matchId);
+    return bindingMatchesIfNeeded(
+        request.twoOperationId(), request.twoOwner(), request.twoCopies(), matchId);
   }
 
-  private BindingCheck bindingMatchesIfNeeded(UUID operationId, CopyOwner owner,
-      List<CardCopyId> copies, org.aincraft.mobmatrix.domain.MatchId matchId) {
+  private BindingCheck bindingMatchesIfNeeded(
+      UUID operationId,
+      CopyOwner owner,
+      List<CardCopyId> copies,
+      org.aincraft.mobmatrix.domain.MatchId matchId) {
     // Draft's intentionally empty house-custody plan has no custody operation to bind.
     if (copies.isEmpty()) return BindingCheck.MATCH;
     try {
@@ -371,10 +435,11 @@ public final class MatchApplicationService {
       if (binding.isEmpty()) return BindingCheck.MISMATCH;
       CardCustodyPort.OperationBinding value = binding.get();
       return value.status() == OperationStatus.ESCROWED
-          && value.owner().equals(owner)
-          && value.copyIds().equals(copies)
-          && Objects.equals(value.matchId(), matchId)
-          ? BindingCheck.MATCH : BindingCheck.MISMATCH;
+              && value.owner().equals(owner)
+              && value.copyIds().equals(copies)
+              && Objects.equals(value.matchId(), matchId)
+          ? BindingCheck.MATCH
+          : BindingCheck.MISMATCH;
     } catch (RuntimeException exception) {
       return BindingCheck.UNAVAILABLE;
     }
@@ -385,8 +450,9 @@ public final class MatchApplicationService {
     MISMATCH,
     UNAVAILABLE
   }
-  private static boolean startBindingMatches(MatchRepository.StartBinding binding,
-      StartMatchRequest request, ReservationPlan plan) {
+
+  private static boolean startBindingMatches(
+      MatchRepository.StartBinding binding, StartMatchRequest request, ReservationPlan plan) {
     return binding.version() == 1
         && binding.requestIdentity().equals(startIdentity(request))
         && binding.oneOwner().equals(request.oneOwner())
@@ -396,6 +462,7 @@ public final class MatchApplicationService {
         && binding.twoCopies().equals(plan.twoCopies())
         && binding.twoOperationId().equals(request.twoOperationId());
   }
+
   private static boolean sameInitialState(MatchState left, MatchState right) {
     return left.matchId().equals(right.matchId())
         && left.catalog().snapshotId().equals(right.catalog().snapshotId())
@@ -404,7 +471,8 @@ public final class MatchApplicationService {
         && left.seed() == right.seed()
         && left.revision() == right.revision()
         && left.currentSeat() == right.currentSeat()
-        && left.result() == null && right.result() == null
+        && left.result() == null
+        && right.result() == null
         && left.board().cells().equals(right.board().cells())
         && left.hands().equals(right.hands())
         && left.bankMillis().equals(right.bankMillis())
@@ -444,9 +512,12 @@ public final class MatchApplicationService {
 
   private static Set<CardCopyId> originalCopies(MatchState state, PlayerSeat seat) {
     Set<CardCopyId> result = new HashSet<>();
-    state.originalOwners().forEach((copyId, owner) -> {
-      if (owner == seat) result.add(copyId);
-    });
+    state
+        .originalOwners()
+        .forEach(
+            (copyId, owner) -> {
+              if (owner == seat) result.add(copyId);
+            });
     return result;
   }
 
@@ -459,7 +530,6 @@ public final class MatchApplicationService {
     }
     return List.copyOf(result);
   }
-
 
   private record ReservationPlan(List<CardCopyId> oneCopies, List<CardCopyId> twoCopies) {}
 
@@ -485,8 +555,8 @@ public final class MatchApplicationService {
       if (returned.complete() || returned.status() == OperationStatus.PREPARED) {
         CustodyResult aborted = custody.abort(operationId);
         if (!aborted.accepted() || aborted.status() != OperationStatus.ABORTED) {
-          for (CardCopyId copyId : returned.expectedCopyIds().isEmpty()
-              ? expected : returned.expectedCopyIds()) {
+          for (CardCopyId copyId :
+              returned.expectedCopyIds().isEmpty() ? expected : returned.expectedCopyIds()) {
             if (!pending.contains(copyId)) pending.add(copyId);
           }
         }
@@ -522,7 +592,10 @@ public final class MatchApplicationService {
       append(value, definition.left());
       append(value, definition.salePrice());
     }
-    request.match().rules().rules().stream().map(Enum::name).sorted().forEach(item -> append(value, item));
+    request.match().rules().rules().stream()
+        .map(Enum::name)
+        .sorted()
+        .forEach(item -> append(value, item));
     append(value, request.match().seed());
     append(value, request.match().startTime());
     append(value, request.oneOwner());
@@ -540,8 +613,8 @@ public final class MatchApplicationService {
     return value.toString();
   }
 
-  private static void appendPhysicalCopies(StringBuilder value,
-      List<org.aincraft.mobmatrix.domain.CardCopy> copies) {
+  private static void appendPhysicalCopies(
+      StringBuilder value, List<org.aincraft.mobmatrix.domain.CardCopy> copies) {
     append(value, copies.size());
     for (var copy : copies) {
       append(value, copy.copyId().value());
@@ -559,9 +632,9 @@ public final class MatchApplicationService {
     String text = String.valueOf(item);
     value.append(text.length()).append(':').append(text);
   }
+
   private static Failure validateSeatOwners(StartMatchRequest request, boolean allowHouseSeat) {
-    if (!allowHouseSeat
-        && (!request.oneOwner().isPlayer() || !request.twoOwner().isPlayer())) {
+    if (!allowHouseSeat && (!request.oneOwner().isPlayer() || !request.twoOwner().isPlayer())) {
       return Failure.INVALID_OWNER;
     }
     if (allowHouseSeat
@@ -569,26 +642,34 @@ public final class MatchApplicationService {
             || (!request.twoOwner().isPlayer() && !request.twoOwner().isHouse()))) {
       return Failure.INVALID_OWNER;
     }
-    if (request.oneOwner().isPlayer() && request.twoOwner().isPlayer()
+    if (request.oneOwner().isPlayer()
+        && request.twoOwner().isPlayer()
         && request.oneOwner().playerId().equals(request.twoOwner().playerId())) {
       return Failure.INVALID_OWNER;
     }
     return Failure.NONE;
   }
 
-
   private static Failure validateDeckSelections(StartMatchRequest request, boolean allowHouseSeat) {
     if (overlaps(request.match())) return Failure.INVALID_COPY_SET;
-    Failure one = validateDeck(request.oneCopies(), request.match().oneDeck(), request.oneOwner(),
-        request.match().oneInventory(), request.match().rules());
+    Failure one =
+        validateDeck(
+            request.oneCopies(),
+            request.match().oneDeck(),
+            request.oneOwner(),
+            request.match().oneInventory(),
+            request.match().rules());
     if (one != Failure.NONE) return one;
     if (allowHouseSeat && request.twoOwner().isHouse()) {
       return validateHouseDeck(request);
     }
-    return validateDeck(request.twoCopies(), request.match().twoDeck(), request.twoOwner(),
-        request.match().twoInventory(), request.match().rules());
+    return validateDeck(
+        request.twoCopies(),
+        request.match().twoDeck(),
+        request.twoOwner(),
+        request.match().twoInventory(),
+        request.match().rules());
   }
-
 
   private static Failure validateHouseDeck(StartMatchRequest request) {
     if (!request.twoCopies().isEmpty() || request.match().twoDeck().copies().size() != 5) {
@@ -603,15 +684,28 @@ public final class MatchApplicationService {
   }
 
   private static Failure validateRandomSelections(StartMatchRequest request, MatchState state) {
-    Failure one = validateRandomSeat(request.oneCopies(), request.oneOwner(),
-        request.match().oneInventory(), state, PlayerSeat.ONE);
+    Failure one =
+        validateRandomSeat(
+            request.oneCopies(),
+            request.oneOwner(),
+            request.match().oneInventory(),
+            state,
+            PlayerSeat.ONE);
     if (one != Failure.NONE) return one;
-    return validateRandomSeat(request.twoCopies(), request.twoOwner(),
-        request.match().twoInventory(), state, PlayerSeat.TWO);
+    return validateRandomSeat(
+        request.twoCopies(),
+        request.twoOwner(),
+        request.match().twoInventory(),
+        state,
+        PlayerSeat.TWO);
   }
 
-  private static Failure validateRandomSeat(List<CardCopyId> requested, CopyOwner owner,
-      List<org.aincraft.mobmatrix.domain.CardCopy> inventory, MatchState state, PlayerSeat seat) {
+  private static Failure validateRandomSeat(
+      List<CardCopyId> requested,
+      CopyOwner owner,
+      List<org.aincraft.mobmatrix.domain.CardCopy> inventory,
+      MatchState state,
+      PlayerSeat seat) {
     final List<CardCopyId> copies;
     try {
       copies = exactDeck(requested);
@@ -633,14 +727,14 @@ public final class MatchApplicationService {
       var selected = selectedById.get(copyId);
       var inventoryCard = inventoryById.get(copyId);
       if (selected == null || inventoryCard == null) return Failure.MISMATCHED_OWNER;
-      if (!selected.owner().equals(owner) || !inventoryCard.owner().equals(owner)
+      if (!selected.owner().equals(owner)
+          || !inventoryCard.owner().equals(owner)
           || !selected.cardId().equals(inventoryCard.cardId())) {
         return Failure.MISMATCHED_OWNER;
       }
     }
     return Failure.NONE;
   }
-
 
   private static boolean overlaps(org.aincraft.mobmatrix.domain.MatchEngine.StartMatch match) {
     Set<CardCopyId> one = new HashSet<>();
@@ -649,8 +743,11 @@ public final class MatchApplicationService {
     return match.twoDeck().copies().stream().anyMatch(copy -> one.contains(copy.copyId()))
         || match.twoInventory().stream().anyMatch(copy -> one.contains(copy.copyId()));
   }
-  private static Failure validateDeck(List<CardCopyId> requested,
-      org.aincraft.mobmatrix.domain.Deck deck, CopyOwner owner,
+
+  private static Failure validateDeck(
+      List<CardCopyId> requested,
+      org.aincraft.mobmatrix.domain.Deck deck,
+      CopyOwner owner,
       List<org.aincraft.mobmatrix.domain.CardCopy> inventory,
       org.aincraft.mobmatrix.domain.MatchRules rules) {
     if (owner == null || !owner.isPlayer()) return Failure.INVALID_OWNER;
@@ -675,11 +772,13 @@ public final class MatchApplicationService {
     for (var card : deck.copies()) {
       if (!card.owner().equals(owner)) return Failure.MISMATCHED_OWNER;
       var inventoryCard = inventoryById.get(card.copyId());
-      if (inventoryCard == null || !inventoryCard.cardId().equals(card.cardId())
+      if (inventoryCard == null
+          || !inventoryCard.cardId().equals(card.cardId())
           || !inventoryCard.owner().equals(owner)) return Failure.MISMATCHED_OWNER;
     }
     return Failure.NONE;
   }
+
   /** Reconciles one operation journal entry on demand. */
   public synchronized RecoveryResult recover(UUID operationId) {
     Objects.requireNonNull(operationId, "operation id is required");
@@ -692,38 +791,49 @@ public final class MatchApplicationService {
 
   private ReturnResult returnFailure(UUID operationId) {
     RecoveryIdentity identity = operationIdentity(operationId, null);
-    return new ReturnResult(identity.operationId(), OperationStatus.RETURN_PENDING,
-        identity.copyIds(), List.of(), identity.copyIds(), identity.copyIds(),
+    return new ReturnResult(
+        identity.operationId(),
+        OperationStatus.RETURN_PENDING,
+        identity.copyIds(),
+        List.of(),
+        identity.copyIds(),
+        identity.copyIds(),
         Failure.DATABASE_ERROR);
-  }
-
-  private RecoveryResult recoveryFailure(UUID operationId) {
-    return recoveryFailure(operationId, null);
   }
 
   private RecoveryResult recoveryFailure(CardCustodyPort.StartupEntry startupEntry) {
     return recoveryFailure(startupEntry, null);
   }
 
-  private RecoveryResult recoveryFailure(CardCustodyPort.StartupEntry startupEntry,
-      RuntimeException source) {
+  private RecoveryResult recoveryFailure(
+      CardCustodyPort.StartupEntry startupEntry, RuntimeException source) {
     if (startupEntry.operationId().isEmpty()) {
-      return RecoveryResult.malformed(startupEntry.rawOperationId(),
-          startupEntry.expectedCopyIds());
+      return RecoveryResult.malformed(
+          startupEntry.rawOperationId(), startupEntry.expectedCopyIds());
     }
     UUID operationId = startupEntry.operationId().orElseThrow();
     RecoveryIdentity identity = operationIdentity(operationId, source);
-    List<CardCopyId> copyIds = identity.copyIds().isEmpty()
-        ? startupEntry.expectedCopyIds() : identity.copyIds();
-    return new RecoveryResult(operationId, OperationStatus.RETURN_PENDING, copyIds, List.of(),
-        copyIds, Failure.DATABASE_ERROR);
-  }
-  private RecoveryResult recoveryFailure(UUID operationId, RuntimeException source) {
-    RecoveryIdentity identity = operationIdentity(operationId, source);
-    return new RecoveryResult(identity.operationId(), OperationStatus.RETURN_PENDING,
-        identity.copyIds(), List.of(), identity.copyIds(), Failure.DATABASE_ERROR);
+    List<CardCopyId> copyIds =
+        identity.copyIds().isEmpty() ? startupEntry.expectedCopyIds() : identity.copyIds();
+    return new RecoveryResult(
+        operationId,
+        OperationStatus.RETURN_PENDING,
+        copyIds,
+        List.of(),
+        copyIds,
+        Failure.DATABASE_ERROR);
   }
 
+  private RecoveryResult recoveryFailure(UUID operationId, RuntimeException source) {
+    RecoveryIdentity identity = operationIdentity(operationId, source);
+    return new RecoveryResult(
+        identity.operationId(),
+        OperationStatus.RETURN_PENDING,
+        identity.copyIds(),
+        List.of(),
+        identity.copyIds(),
+        Failure.DATABASE_ERROR);
+  }
 
   private RecoveryIdentity operationIdentity(UUID operationId, RuntimeException source) {
     RecoveryIdentity identity = identityFrom(operationId, source);
@@ -757,9 +867,11 @@ public final class MatchApplicationService {
       copyIds = List.copyOf(Objects.requireNonNull(copyIds, "copy ids are required"));
     }
   }
+
   private static boolean isTerminal(OperationStatus status) {
     return status == OperationStatus.RETURNED || status == OperationStatus.ABORTED;
   }
+
   private static Failure mapMatchFailure(MatchRepository.Failure failure) {
     return switch (failure) {
       case NONE -> Failure.NONE;
@@ -768,7 +880,6 @@ public final class MatchApplicationService {
       case INVALID_STATE -> Failure.INVALID_STATE;
     };
   }
-
 
   /** Reconciles every durable custody row and active match on plugin startup. */
   public synchronized StartupRecoveryResult recoverStartup(
@@ -792,7 +903,8 @@ public final class MatchApplicationService {
       }
     } catch (RuntimeException ignored) {
       // A match repository outage must not prevent independent custody recovery. Keep every
-      // reservation with a durable binding rather than risking release when active IDs are unreadable.
+      // reservation with a durable binding rather than risking release when active IDs are
+      // unreadable.
       activeMatchesLoadFailed = true;
       matchRepositoryFailure = Failure.DATABASE_ERROR;
     }
@@ -819,22 +931,29 @@ public final class MatchApplicationService {
         Optional<OperationStatus> status = custody.operationStatus(operationId);
         Optional<org.aincraft.mobmatrix.domain.MatchId> binding =
             custody.operationMatchId(operationId);
-        Optional<CardCustodyPort.OperationBinding> detailedBinding = binding.isEmpty()
-            ? custody.operationBinding(operationId) : Optional.empty();
-        Optional<OperationStatus> durableStatus = status.isPresent()
-            ? status
-            : detailedBinding.map(CardCustodyPort.OperationBinding::status);
-        boolean hasBinding = binding.isPresent()
-            || detailedBinding.map(CardCustodyPort.OperationBinding::matchId).isPresent();
-        boolean boundToActiveMatch = binding.map(activeMatchIds::contains).orElse(false)
-            || detailedBinding.map(CardCustodyPort.OperationBinding::matchId)
-                .map(activeMatchIds::contains).orElse(false);
+        Optional<CardCustodyPort.OperationBinding> detailedBinding =
+            binding.isEmpty() ? custody.operationBinding(operationId) : Optional.empty();
+        Optional<OperationStatus> durableStatus =
+            status.isPresent()
+                ? status
+                : detailedBinding.map(CardCustodyPort.OperationBinding::status);
+        boolean hasBinding =
+            binding.isPresent()
+                || detailedBinding.map(CardCustodyPort.OperationBinding::matchId).isPresent();
+        boolean boundToActiveMatch =
+            binding.map(activeMatchIds::contains).orElse(false)
+                || detailedBinding
+                    .map(CardCustodyPort.OperationBinding::matchId)
+                    .map(activeMatchIds::contains)
+                    .orElse(false);
 
         // An open operation without a durable binding cannot be classified as an orphan while
         // active matches are known. Likewise, an unreadable status cannot prove that the row is
         // terminal. Preserve custody and report an unknown result rather than releasing cards.
-        if (!hasBinding && (activeMatchesLoadFailed || durableStatus.isEmpty()
-            || !isTerminal(durableStatus.get()))) {
+        if (!hasBinding
+            && (activeMatchesLoadFailed
+                || durableStatus.isEmpty()
+                || !isTerminal(durableStatus.get()))) {
           recoveries.add(recoveryFailure(startupEntry));
         } else if (boundToActiveMatch || (activeMatchesLoadFailed && hasBinding)) {
           if (durableStatus.isEmpty() || !isTerminal(durableStatus.get())) {
@@ -865,11 +984,15 @@ public final class MatchApplicationService {
         }
         MatchState current = loaded.get();
         if (!current.isFinished() && !now.isBefore(current.turnDeadline())) {
-          UUID timeoutId = UUID.nameUUIDFromBytes(
-              (current.matchId().value() + ":timeout:" + current.revision()).getBytes(
-                  java.nio.charset.StandardCharsets.UTF_8));
-          ApplyResult timeout = apply(current, new MatchCommand.Timeout(current.currentSeat(),
-              current.revision(), timeoutId, now));
+          UUID timeoutId =
+              UUID.nameUUIDFromBytes(
+                  (current.matchId().value() + ":timeout:" + current.revision())
+                      .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+          ApplyResult timeout =
+              apply(
+                  current,
+                  new MatchCommand.Timeout(
+                      current.currentSeat(), current.revision(), timeoutId, now));
           if (!timeout.accepted()) {
             matchFailures.add(new MatchFailure(snapshot.matchId(), timeout.failure()));
             continue;
@@ -883,8 +1006,8 @@ public final class MatchApplicationService {
         matchFailures.add(new MatchFailure(snapshot.matchId(), Failure.DATABASE_ERROR));
       }
     }
-    return new StartupRecoveryResult(states, recoveries, custodyEnumerationFailure,
-        matchRepositoryFailure, matchFailures);
+    return new StartupRecoveryResult(
+        states, recoveries, custodyEnumerationFailure, matchRepositoryFailure, matchFailures);
   }
 
   public StartupRecoveryResult recoverStartup(Function<String, CardCatalog> catalogResolver) {
@@ -898,19 +1021,26 @@ public final class MatchApplicationService {
     }
   }
 
-  public record StartupRecoveryResult(List<MatchState> matches, List<RecoveryResult> recoveries,
-      Failure custodyFailure, Failure matchFailure, List<MatchFailure> matchFailures) {
+  public record StartupRecoveryResult(
+      List<MatchState> matches,
+      List<RecoveryResult> recoveries,
+      Failure custodyFailure,
+      Failure matchFailure,
+      List<MatchFailure> matchFailures) {
     public StartupRecoveryResult(List<MatchState> matches, List<RecoveryResult> recoveries) {
       this(matches, recoveries, Failure.NONE, Failure.NONE, List.of());
     }
 
-    public StartupRecoveryResult(List<MatchState> matches, List<RecoveryResult> recoveries,
-        Failure custodyFailure) {
+    public StartupRecoveryResult(
+        List<MatchState> matches, List<RecoveryResult> recoveries, Failure custodyFailure) {
       this(matches, recoveries, custodyFailure, Failure.NONE, List.of());
     }
 
-    public StartupRecoveryResult(List<MatchState> matches, List<RecoveryResult> recoveries,
-        Failure custodyFailure, Failure matchFailure) {
+    public StartupRecoveryResult(
+        List<MatchState> matches,
+        List<RecoveryResult> recoveries,
+        Failure custodyFailure,
+        Failure matchFailure) {
       this(matches, recoveries, custodyFailure, matchFailure, List.of());
     }
 
@@ -923,13 +1053,14 @@ public final class MatchApplicationService {
     }
   }
 
-
-
   private static List<CardCopyId> exactDeck(List<CardCopyId> copyIds) {
     Objects.requireNonNull(copyIds, "copy ids are required");
-    if (copyIds.size() != 5) throw new IllegalArgumentException("a deck must contain exactly five copies");
+    if (copyIds.size() != 5)
+      throw new IllegalArgumentException("a deck must contain exactly five copies");
     Set<CardCopyId> unique = new HashSet<>();
-    for (CardCopyId copy : copyIds) if (copy == null || !unique.add(copy)) throw new IllegalArgumentException("duplicate copy id");
+    for (CardCopyId copy : copyIds)
+      if (copy == null || !unique.add(copy))
+        throw new IllegalArgumentException("duplicate copy id");
     return List.copyOf(copyIds);
   }
 
@@ -937,13 +1068,18 @@ public final class MatchApplicationService {
    * Pure request for a deterministic player-versus-house match. The house seat is represented by
    * five house-owned cards in {@link #match()} and has no physical custody selection.
    */
-  public record BotStartMatchRequest(MatchEngine.StartMatch match, CopyOwner playerOwner,
-      List<CardCopyId> playerCopies, UUID playerOperationId, UUID houseOperationId) {
+  public record BotStartMatchRequest(
+      MatchEngine.StartMatch match,
+      CopyOwner playerOwner,
+      List<CardCopyId> playerCopies,
+      UUID playerOperationId,
+      UUID houseOperationId) {
     public BotStartMatchRequest {
       Objects.requireNonNull(match, "match is required");
       Objects.requireNonNull(playerOwner, "player owner is required");
       if (!playerOwner.isPlayer()) throw new IllegalArgumentException("player owner is required");
-      playerCopies = List.copyOf(Objects.requireNonNull(playerCopies, "player copies are required"));
+      playerCopies =
+          List.copyOf(Objects.requireNonNull(playerCopies, "player copies are required"));
       Objects.requireNonNull(playerOperationId, "player operation is required");
       Objects.requireNonNull(houseOperationId, "house operation is required");
       if (playerOperationId.equals(houseOperationId)) {
@@ -952,24 +1088,40 @@ public final class MatchApplicationService {
     }
 
     private StartMatchRequest asStartMatchRequest() {
-      return new StartMatchRequest(match, playerOwner, playerCopies, playerOperationId,
-          CopyOwner.house(), List.of(), houseOperationId);
-    }
-  }
-  public record StartMatchRequest(MatchEngine.StartMatch match, CopyOwner oneOwner,
-      List<CardCopyId> oneCopies, UUID oneOperationId, CopyOwner twoOwner,
-      List<CardCopyId> twoCopies, UUID twoOperationId) {
-    public StartMatchRequest {
-      Objects.requireNonNull(match); Objects.requireNonNull(oneOwner); Objects.requireNonNull(twoOwner);
-      oneCopies = List.copyOf(Objects.requireNonNull(oneCopies));
-      twoCopies = List.copyOf(Objects.requireNonNull(twoCopies));
-      Objects.requireNonNull(oneOperationId); Objects.requireNonNull(twoOperationId);
-      if (oneOperationId.equals(twoOperationId)) throw new IllegalArgumentException("operations must differ");
+      return new StartMatchRequest(
+          match,
+          playerOwner,
+          playerCopies,
+          playerOperationId,
+          CopyOwner.house(),
+          List.of(),
+          houseOperationId);
     }
   }
 
-  private record CleanupSummary(List<CardCopyId> pendingRecoveryCopyIds,
-      List<CardCopyId> missingCopyIds) {
+  public record StartMatchRequest(
+      MatchEngine.StartMatch match,
+      CopyOwner oneOwner,
+      List<CardCopyId> oneCopies,
+      UUID oneOperationId,
+      CopyOwner twoOwner,
+      List<CardCopyId> twoCopies,
+      UUID twoOperationId) {
+    public StartMatchRequest {
+      Objects.requireNonNull(match);
+      Objects.requireNonNull(oneOwner);
+      Objects.requireNonNull(twoOwner);
+      oneCopies = List.copyOf(Objects.requireNonNull(oneCopies));
+      twoCopies = List.copyOf(Objects.requireNonNull(twoCopies));
+      Objects.requireNonNull(oneOperationId);
+      Objects.requireNonNull(twoOperationId);
+      if (oneOperationId.equals(twoOperationId))
+        throw new IllegalArgumentException("operations must differ");
+    }
+  }
+
+  private record CleanupSummary(
+      List<CardCopyId> pendingRecoveryCopyIds, List<CardCopyId> missingCopyIds) {
     private CleanupSummary {
       pendingRecoveryCopyIds = List.copyOf(pendingRecoveryCopyIds);
       missingCopyIds = List.copyOf(missingCopyIds);
@@ -984,11 +1136,18 @@ public final class MatchApplicationService {
     }
   }
 
-  public record MatchStartResult(org.aincraft.mobmatrix.domain.MatchId matchId,
-      MatchState state, boolean active, Failure failure, List<CardCopyId> pendingRecoveryCopyIds,
+  public record MatchStartResult(
+      org.aincraft.mobmatrix.domain.MatchId matchId,
+      MatchState state,
+      boolean active,
+      Failure failure,
+      List<CardCopyId> pendingRecoveryCopyIds,
       List<CardCopyId> missingCopyIds) {
-    public MatchStartResult(org.aincraft.mobmatrix.domain.MatchId matchId, MatchState state,
-        boolean active, Failure failure) {
+    public MatchStartResult(
+        org.aincraft.mobmatrix.domain.MatchId matchId,
+        MatchState state,
+        boolean active,
+        Failure failure) {
       this(matchId, state, active, failure, List.of(), List.of());
     }
 
@@ -1007,36 +1166,49 @@ public final class MatchApplicationService {
       return rejected(id, failure, new CleanupSummary(List.of(), List.of()));
     }
 
-    static MatchStartResult rejected(org.aincraft.mobmatrix.domain.MatchId id, Failure failure,
-        CleanupSummary cleanup) {
-      return new MatchStartResult(id, null, false, failure, cleanup.pendingRecoveryCopyIds(),
-          cleanup.missingCopyIds());
+    static MatchStartResult rejected(
+        org.aincraft.mobmatrix.domain.MatchId id, Failure failure, CleanupSummary cleanup) {
+      return new MatchStartResult(
+          id, null, false, failure, cleanup.pendingRecoveryCopyIds(), cleanup.missingCopyIds());
     }
 
-    public boolean accepted() { return active; }
+    public boolean accepted() {
+      return active;
+    }
   }
 
-  public record StartResult(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
-      boolean escrowed, Failure failure) {
+  public record StartResult(
+      UUID operationId,
+      CopyOwner owner,
+      List<CardCopyId> copyIds,
+      boolean escrowed,
+      Failure failure) {
     public StartResult {
-      Objects.requireNonNull(operationId); Objects.requireNonNull(owner);
-      copyIds = List.copyOf(copyIds); Objects.requireNonNull(failure);
+      Objects.requireNonNull(operationId);
+      Objects.requireNonNull(owner);
+      copyIds = List.copyOf(copyIds);
+      Objects.requireNonNull(failure);
     }
 
     public static StartResult escrowed(UUID operationId, CopyOwner owner, List<CardCopyId> copies) {
       return new StartResult(operationId, owner, copies, true, Failure.NONE);
     }
 
-    public static StartResult rejected(UUID operationId, CopyOwner owner, List<CardCopyId> copies,
-        Failure failure) {
+    public static StartResult rejected(
+        UUID operationId, CopyOwner owner, List<CardCopyId> copies, Failure failure) {
       return new StartResult(operationId, owner, copies, false, failure);
     }
-    public boolean accepted() { return escrowed; }
+
+    public boolean accepted() {
+      return escrowed;
+    }
   }
 
-  public record ApplyResult(MatchEngine.MatchTransition transition, Failure failure, long currentRevision) {
+  public record ApplyResult(
+      MatchEngine.MatchTransition transition, Failure failure, long currentRevision) {
     public ApplyResult {
-      Objects.requireNonNull(transition); Objects.requireNonNull(failure);
+      Objects.requireNonNull(transition);
+      Objects.requireNonNull(failure);
     }
 
     static ApplyResult accepted(MatchEngine.MatchTransition transition) {
@@ -1044,13 +1216,19 @@ public final class MatchApplicationService {
     }
 
     static ApplyResult rejected(MatchEngine.MatchTransition transition) {
-      return new ApplyResult(transition, Failure.INVALID_STATE,
+      return new ApplyResult(
+          transition,
+          Failure.INVALID_STATE,
           transition.state() == null ? -1 : transition.state().revision());
     }
 
     static ApplyResult unavailable(MatchState callerState) {
-      MatchEngine.MatchTransition transition = new MatchEngine.MatchTransition(callerState, List.of(),
-          new MatchRejection(MatchErrorCode.INVALID_COMMAND, "canonical match state unavailable"));
+      MatchEngine.MatchTransition transition =
+          new MatchEngine.MatchTransition(
+              callerState,
+              List.of(),
+              new MatchRejection(
+                  MatchErrorCode.INVALID_COMMAND, "canonical match state unavailable"));
       return new ApplyResult(transition, Failure.INVALID_STATE, callerState.revision());
     }
 
@@ -1058,6 +1236,8 @@ public final class MatchApplicationService {
       return new ApplyResult(transition, Failure.STALE_REVISION, revision);
     }
 
-    public boolean accepted() { return failure == Failure.NONE; }
+    public boolean accepted() {
+      return failure == Failure.NONE;
+    }
   }
 }

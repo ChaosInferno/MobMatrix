@@ -6,8 +6,13 @@ import org.aincraft.mobmatrix.domain.CardId;
 import org.aincraft.mobmatrix.domain.CopyOwner;
 
 /** Validated identity and generated display metadata read from one Paper item. */
-public record CardItemData(CardId catalogId, CardCopyId copyId, CopyOwner owner, int schemaVersion,
-    String integrityMarker, String displayName) {
+public record CardItemData(
+    CardId catalogId,
+    CardCopyId copyId,
+    CopyOwner owner,
+    int schemaVersion,
+    String integrityMarker,
+    String displayName) {
   public CardItemData {
     Objects.requireNonNull(catalogId, "catalog id is required");
     Objects.requireNonNull(copyId, "copy id is required");

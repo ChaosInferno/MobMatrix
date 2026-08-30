@@ -33,23 +33,43 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   public SqliteCardRepository(Connection connection) {
     this.connection = Objects.requireNonNull(connection, "connection is required");
   }
+
   @Override
   public Optional<CardCustodyJournal.Entry> find(UUID operationId) {
-    return findReservation(operationId).map(reservation -> new CardCustodyJournal.Entry(
-        reservation.operationId(), reservation.owner(), reservation.copyIds(), reservation.snapshots(),
-        reservation.status(), Set.copyOf(reservation.restoredCopyIds()), reservation.matchId()));
+    return findReservation(operationId)
+        .map(
+            reservation ->
+                new CardCustodyJournal.Entry(
+                    reservation.operationId(),
+                    reservation.owner(),
+                    reservation.copyIds(),
+                    reservation.snapshots(),
+                    reservation.status(),
+                    Set.copyOf(reservation.restoredCopyIds()),
+                    reservation.matchId()));
   }
 
   @Override
   public List<CardCustodyJournal.Entry> openEntries() {
-    return findOpenReservations().stream().map(reservation -> new CardCustodyJournal.Entry(
-        reservation.operationId(), reservation.owner(), reservation.copyIds(), reservation.snapshots(),
-        reservation.status(), Set.copyOf(reservation.restoredCopyIds()), reservation.matchId())).toList();
+    return findOpenReservations().stream()
+        .map(
+            reservation ->
+                new CardCustodyJournal.Entry(
+                    reservation.operationId(),
+                    reservation.owner(),
+                    reservation.copyIds(),
+                    reservation.snapshots(),
+                    reservation.status(),
+                    Set.copyOf(reservation.restoredCopyIds()),
+                    reservation.matchId()))
+        .toList();
   }
 
   @Override
   public List<UUID> openOperationIds() {
-    try (var query = connection.prepareStatement("""
+    try (var query =
+        connection.prepareStatement(
+            """
         SELECT operation_id FROM reservations
         ORDER BY created_at
         """)) {
@@ -70,19 +90,22 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       throw failure(exception);
     }
   }
+
   @Override
   public List<CardCustodyPort.StartupEntry> startupEntries() {
     try {
       List<StartupBuilder> entries = new ArrayList<>();
       Map<String, List<StartupBuilder>> byOperation = new java.util.LinkedHashMap<>();
-      try (var query = connection.prepareStatement(
-          "SELECT operation_id FROM reservations ORDER BY created_at, rowid");
+      try (var query =
+              connection.prepareStatement(
+                  "SELECT operation_id FROM reservations ORDER BY created_at, rowid");
           var rows = query.executeQuery()) {
         while (rows.next()) {
           String rawOperationId = rows.getString(1);
           StartupBuilder entry = StartupBuilder.parent(rawOperationId);
           entries.add(entry);
-          byOperation.computeIfAbsent(operationKey(rawOperationId), ignored -> new ArrayList<>())
+          byOperation
+              .computeIfAbsent(operationKey(rawOperationId), ignored -> new ArrayList<>())
               .add(entry);
         }
       }
@@ -92,10 +115,11 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         }
       }
 
-      for (String table : List.of("reservation_copies", "escrow_items",
-          "reservation_restored", "recovery_rows")) {
-        try (var query = connection.prepareStatement(
-            "SELECT operation_id, copy_uuid FROM " + table + " ORDER BY rowid");
+      for (String table :
+          List.of("reservation_copies", "escrow_items", "reservation_restored", "recovery_rows")) {
+        try (var query =
+                connection.prepareStatement(
+                    "SELECT operation_id, copy_uuid FROM " + table + " ORDER BY rowid");
             var rows = query.executeQuery()) {
           while (rows.next()) {
             String rawOperationId = rows.getString(1);
@@ -103,13 +127,15 @@ public final class SqliteCardRepository implements CardCustodyJournal {
             if (matches == null || matches.isEmpty()) {
               StartupBuilder orphan = StartupBuilder.orphan(rawOperationId);
               entries.add(orphan);
-              byOperation.computeIfAbsent(operationKey(rawOperationId),
-                  ignored -> new ArrayList<>()).add(orphan);
+              byOperation
+                  .computeIfAbsent(operationKey(rawOperationId), ignored -> new ArrayList<>())
+                  .add(orphan);
               matches = List.of(orphan);
             }
             CardCopyId copy = parseCopyId(rows.getString(2));
             for (StartupBuilder entry : matches) {
-              if (!Objects.equals(entry.rawOperationId, rawOperationId)) entry.integrityFailure = true;
+              if (!Objects.equals(entry.rawOperationId, rawOperationId))
+                entry.integrityFailure = true;
               if (copy == null) {
                 entry.integrityFailure = true;
               } else if (!entry.copyIds.contains(copy)) {
@@ -150,12 +176,14 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   private IdentityScan scanReservationIdentities() throws SQLException {
     Map<String, ReservationRow> reservations = new HashMap<>();
     Set<String> duplicateOperations = new HashSet<>();
-    try (var query = connection.prepareStatement(
-        "SELECT operation_id, owner_kind, owner_uuid, status FROM reservations ORDER BY rowid");
+    try (var query =
+            connection.prepareStatement(
+                "SELECT operation_id, owner_kind, owner_uuid, status FROM reservations ORDER BY rowid");
         var rows = query.executeQuery()) {
       while (rows.next()) {
-        ReservationRow row = new ReservationRow(rows.getString(1), rows.getString(2),
-            rows.getString(3), rows.getString(4));
+        ReservationRow row =
+            new ReservationRow(
+                rows.getString(1), rows.getString(2), rows.getString(3), rows.getString(4));
         String key = operationKey(row.operationId());
         if (reservations.putIfAbsent(key, row) != null) duplicateOperations.add(key);
       }
@@ -165,39 +193,53 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     Map<String, Boolean> terminal = new HashMap<>();
     for (ReservationRow row : reservations.values()) {
       String key = operationKey(row.operationId());
-      boolean proven = !duplicateOperations.contains(key)
-          && isUuid(row.operationId())
-          && provenTerminal(row.operationId(), row.ownerKind(), row.ownerUuid(), row.status());
+      boolean proven =
+          !duplicateOperations.contains(key)
+              && isUuid(row.operationId())
+              && provenTerminal(row.operationId(), row.ownerKind(), row.ownerUuid(), row.status());
       terminal.put(key, proven);
       if (!proven) unresolved = true;
     }
-    unresolved |= scanRawChildTable("reservation_copies", reservations, duplicateOperations, terminal,
-        copies, true);
-    unresolved |= scanRawChildTable("escrow_items", reservations, duplicateOperations, terminal,
-        copies, false);
-    unresolved |= scanRawChildTable("reservation_restored", reservations, duplicateOperations,
-        terminal, copies, false);
-    unresolved |= scanRawChildTable("recovery_rows", reservations, duplicateOperations, terminal,
-        copies, false);
+    unresolved |=
+        scanRawChildTable(
+            "reservation_copies", reservations, duplicateOperations, terminal, copies, true);
+    unresolved |=
+        scanRawChildTable(
+            "escrow_items", reservations, duplicateOperations, terminal, copies, false);
+    unresolved |=
+        scanRawChildTable(
+            "reservation_restored", reservations, duplicateOperations, terminal, copies, false);
+    unresolved |=
+        scanRawChildTable(
+            "recovery_rows", reservations, duplicateOperations, terminal, copies, false);
     return new IdentityScan(Set.copyOf(copies), unresolved);
   }
 
-  private boolean scanRawChildTable(String table, Map<String, ReservationRow> reservations,
-      Set<String> duplicateOperations, Map<String, Boolean> terminal, Set<CardCopyId> copies,
-      boolean reservationCopies) throws SQLException {
+  private boolean scanRawChildTable(
+      String table,
+      Map<String, ReservationRow> reservations,
+      Set<String> duplicateOperations,
+      Map<String, Boolean> terminal,
+      Set<CardCopyId> copies,
+      boolean reservationCopies)
+      throws SQLException {
     boolean unresolved = false;
-    try (var query = connection.prepareStatement(
-        "SELECT operation_id, copy_uuid FROM " + table + " ORDER BY rowid");
+    try (var query =
+            connection.prepareStatement(
+                "SELECT operation_id, copy_uuid FROM " + table + " ORDER BY rowid");
         var rows = query.executeQuery()) {
       while (rows.next()) {
         String rawOperationId = rows.getString(1);
         String rawCopyId = rows.getString(2);
         String key = operationKey(rawOperationId);
         ReservationRow parent = reservations.get(key);
-        boolean linked = parent != null
-            && (reservationCopies || hasReservationCopy(rawOperationId, rawCopyId));
-        boolean proven = linked && !duplicateOperations.contains(key) && terminal.getOrDefault(key, false)
-            && isUuid(rawOperationId);
+        boolean linked =
+            parent != null && (reservationCopies || hasReservationCopy(rawOperationId, rawCopyId));
+        boolean proven =
+            linked
+                && !duplicateOperations.contains(key)
+                && terminal.getOrDefault(key, false)
+                && isUuid(rawOperationId);
         CardCopyId copy = parseCopyId(rawCopyId);
         if (copy != null && !proven) copies.add(copy);
         if (!isUuid(rawOperationId) || copy == null || !linked) unresolved = true;
@@ -210,10 +252,11 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     return rawOperationId != null
         && operationKey(operationId.toString()).equals(operationKey(rawOperationId));
   }
+
   private int semanticReservationCount(UUID operationId) throws SQLException {
     int count = 0;
-    try (var query = connection.prepareStatement(
-        "SELECT operation_id FROM reservations ORDER BY rowid");
+    try (var query =
+            connection.prepareStatement("SELECT operation_id FROM reservations ORDER BY rowid");
         var rows = query.executeQuery()) {
       while (rows.next()) {
         if (operationMatches(operationId, rows.getString(1))) count++;
@@ -229,8 +272,9 @@ public final class SqliteCardRepository implements CardCustodyJournal {
 
   private boolean hasReservationCopy(String operationId, String copyId) throws SQLException {
     if (operationId == null || copyId == null) return false;
-    try (var query = connection.prepareStatement(
-        "SELECT operation_id, copy_uuid FROM reservation_copies ORDER BY rowid")) {
+    try (var query =
+        connection.prepareStatement(
+            "SELECT operation_id, copy_uuid FROM reservation_copies ORDER BY rowid")) {
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
           if (operationKey(operationId).equals(operationKey(rows.getString(1)))
@@ -260,6 +304,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     }
     return parsed;
   }
+
   private static UUID parseStoredCanonicalUuid(String value, String message) {
     try {
       return parseCanonicalUuid(value);
@@ -284,14 +329,15 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       return null;
     }
   }
+
   private static final class StartupBuilder {
     private final String rawOperationId;
     private final Optional<UUID> operationId;
     private final List<CardCopyId> copyIds = new ArrayList<>();
     private boolean integrityFailure;
 
-    private StartupBuilder(String rawOperationId, Optional<UUID> operationId,
-        boolean integrityFailure) {
+    private StartupBuilder(
+        String rawOperationId, Optional<UUID> operationId, boolean integrityFailure) {
       this.rawOperationId = rawOperationId == null ? "<null>" : rawOperationId;
       this.operationId = operationId;
       this.integrityFailure = integrityFailure;
@@ -316,8 +362,8 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     }
 
     private CardCustodyPort.StartupEntry build() {
-      return new CardCustodyPort.StartupEntry(rawOperationId, operationId, copyIds,
-          integrityFailure);
+      return new CardCustodyPort.StartupEntry(
+          rawOperationId, operationId, copyIds, integrityFailure);
     }
   }
 
@@ -326,72 +372,163 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     if (!copies.contains(copy)) copies.add(copy);
   }
 
-
-  private record ReservationRow(String operationId, String ownerKind, String ownerUuid,
-      String status) {}
+  private record ReservationRow(
+      String operationId, String ownerKind, String ownerUuid, String status) {}
 
   private record IdentityScan(Set<CardCopyId> copyIds, boolean unresolved) {}
 
-
-
   public void saveCopy(StoredCardCopy copy) {
     Objects.requireNonNull(copy, "copy is required");
-    inTransaction(() -> {
-      try (var existing = connection.prepareStatement(
-          "SELECT copy_uuid, catalog_id, owner_kind, owner_uuid FROM card_copies "
-              + "WHERE lower(copy_uuid) = lower(?)")) {
-        existing.setString(1, copy.copyId().value().toString());
-        try (var rows = existing.executeQuery()) {
-          if (rows.next()) {
-            String rawCopyId = rows.getString(1);
-            if (!copy.copyId().value().equals(parseStoredCanonicalUuid(rawCopyId,
-                "invalid stored card-copy UUID"))) {
-              throw new IllegalStateException("stored card-copy UUID does not match requested identity");
-            }
-            int catalogId = rows.getInt(2);
-            CopyOwner owner = readOwner(rows.getString(3), rows.getString(4));
-            if (rows.next()) {
-              throw new IllegalStateException("duplicate card-copy UUID: " + copy.copyId());
-            }
-            if (catalogId != copy.catalogId().value() || !owner.equals(copy.owner())) {
-              throw new IllegalStateException("copy UUID already belongs to another card or owner");
+    inTransaction(() -> saveCopyInternal(copy));
+  }
+
+  /**
+   * Persists a minted copy and its exact item bytes before inventory insertion. Repeating the same
+   * payload is idempotent; a changed payload for one UUID is rejected.
+   */
+  public void saveIssuance(CardIssuance issuance) {
+    Objects.requireNonNull(issuance, "issuance is required");
+    inTransaction(
+        () -> {
+          saveCopyInternal(
+              new StoredCardCopy(issuance.copyId(), issuance.catalogId(), issuance.owner()));
+          CardIssuance existing = findIssuanceInternal(issuance.copyId());
+          if (existing != null) {
+            if (!existing.catalogId().equals(issuance.catalogId())
+                || !existing.owner().equals(issuance.owner())
+                || !Arrays.equals(existing.itemBytes(), issuance.itemBytes())) {
+              throw new IllegalStateException("card issuance identity already has different data");
             }
             return;
           }
+          try (var insert =
+              connection.prepareStatement(
+                  """
+          INSERT INTO card_issuances(copy_uuid, catalog_id, owner_kind, owner_uuid, item_bytes,
+            status, created_at, updated_at)
+          VALUES (?, ?, ?, ?, ?, 'PENDING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          """)) {
+            insert.setString(1, issuance.copyId().value().toString());
+            insert.setInt(2, issuance.catalogId().value());
+            writeOwner(insert, 3, 4, issuance.owner());
+            insert.setBytes(5, issuance.itemBytes());
+            insert.executeUpdate();
+          }
+        });
+  }
+
+  public List<CardIssuance> pendingIssuances(CopyOwner owner) {
+    Objects.requireNonNull(owner, "owner is required");
+    try (var query =
+        connection.prepareStatement(
+            """
+        SELECT copy_uuid, catalog_id, owner_kind, owner_uuid, item_bytes
+        FROM card_issuances
+        WHERE status = 'PENDING' AND owner_kind = ? AND
+          ((owner_kind = 'HOUSE' AND owner_uuid IS NULL) OR owner_uuid = ?)
+        ORDER BY created_at, rowid
+        """)) {
+      query.setString(1, owner.kind().name());
+      query.setString(2, owner.playerId() == null ? "" : owner.playerId().toString());
+      List<CardIssuance> result = new ArrayList<>();
+      try (var rows = query.executeQuery()) {
+        while (rows.next()) {
+          CardCopyId copyId =
+              new CardCopyId(
+                  parseStoredCanonicalUuid(rows.getString(1), "invalid stored issuance copy UUID"));
+          CopyOwner rowOwner = readOwner(rows.getString(3), rows.getString(4));
+          if (!rowOwner.equals(owner)) throw new IllegalStateException("issuance owner mismatch");
+          byte[] bytes = rows.getBytes(5);
+          result.add(new CardIssuance(copyId, new CardId(rows.getInt(2)), rowOwner, bytes));
         }
       }
-      try (var insert = connection.prepareStatement(
-          "INSERT INTO card_copies(copy_uuid, catalog_id, owner_kind, owner_uuid, created_at) VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)")) {
-        insert.setString(1, copy.copyId().value().toString());
-        insert.setInt(2, copy.catalogId().value());
-        writeOwner(insert, 3, 4, copy.owner());
-        insert.executeUpdate();
-      }
-    });
+      return List.copyOf(result);
+    } catch (SQLException exception) {
+      throw failure(exception);
+    }
   }
-  public void saveCatalogSnapshot(CatalogSnapshot snapshot,
-      java.util.Collection<CardDefinition> definitions) {
+
+  public void markIssuanceDelivered(CardCopyId copyId) {
+    Objects.requireNonNull(copyId, "copy id is required");
+    inTransaction(
+        () -> {
+          CardIssuance existing = findIssuanceInternal(copyId);
+          if (existing == null) throw new IllegalStateException("unknown card issuance: " + copyId);
+          try (var update =
+              connection.prepareStatement(
+                  "UPDATE card_issuances SET status = 'DELIVERED', updated_at = CURRENT_TIMESTAMP "
+                      + "WHERE lower(copy_uuid) = lower(?)")) {
+            update.setString(1, copyId.value().toString());
+            update.executeUpdate();
+          }
+        });
+  }
+
+  private void saveCopyInternal(StoredCardCopy copy) throws SQLException {
+    try (var existing =
+        connection.prepareStatement(
+            "SELECT copy_uuid, catalog_id, owner_kind, owner_uuid FROM card_copies "
+                + "WHERE lower(copy_uuid) = lower(?)")) {
+      existing.setString(1, copy.copyId().value().toString());
+      try (var rows = existing.executeQuery()) {
+        if (rows.next()) {
+          String rawCopyId = rows.getString(1);
+          if (!copy.copyId()
+              .value()
+              .equals(parseStoredCanonicalUuid(rawCopyId, "invalid stored card-copy UUID"))) {
+            throw new IllegalStateException(
+                "stored card-copy UUID does not match requested identity");
+          }
+          int catalogId = rows.getInt(2);
+          CopyOwner owner = readOwner(rows.getString(3), rows.getString(4));
+          if (rows.next())
+            throw new IllegalStateException("duplicate card-copy UUID: " + copy.copyId());
+          if (catalogId != copy.catalogId().value() || !owner.equals(copy.owner())) {
+            throw new IllegalStateException("copy UUID already belongs to another card or owner");
+          }
+          return;
+        }
+      }
+    }
+    try (var insert =
+        connection.prepareStatement(
+            "INSERT INTO card_copies(copy_uuid, catalog_id, owner_kind, owner_uuid, created_at) "
+                + "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)")) {
+      insert.setString(1, copy.copyId().value().toString());
+      insert.setInt(2, copy.catalogId().value());
+      writeOwner(insert, 3, 4, copy.owner());
+      insert.executeUpdate();
+    }
+  }
+
+  public void saveCatalogSnapshot(
+      CatalogSnapshot snapshot, java.util.Collection<CardDefinition> definitions) {
     Objects.requireNonNull(snapshot, "snapshot is required");
     Objects.requireNonNull(definitions, "definitions are required");
     inTransaction(() -> persistCatalogSnapshot(connection, snapshot, definitions));
   }
 
   /**
-   * Persists a catalog snapshot only when its complete definition set is new or identical.
-   * The caller owns the transaction so match revision-0 state and catalog rows can commit
-   * atomically.
+   * Persists a catalog snapshot only when its complete definition set is new or identical. The
+   * caller owns the transaction so match revision-0 state and catalog rows can commit atomically.
    */
-  static void persistCatalogSnapshot(Connection connection, CatalogSnapshot snapshot,
-      java.util.Collection<CardDefinition> definitions) throws SQLException {
-    List<CardDefinition> expected = Objects.requireNonNull(definitions, "definitions are required")
-        .stream().sorted(java.util.Comparator.comparingInt(definition -> definition.id().value())).toList();
+  static void persistCatalogSnapshot(
+      Connection connection,
+      CatalogSnapshot snapshot,
+      java.util.Collection<CardDefinition> definitions)
+      throws SQLException {
+    List<CardDefinition> expected =
+        Objects.requireNonNull(definitions, "definitions are required").stream()
+            .sorted(java.util.Comparator.comparingInt(definition -> definition.id().value()))
+            .toList();
     Objects.requireNonNull(snapshot, "snapshot is required");
     boolean exists;
     String persistedSource = null;
     String persistedDigest = null;
     String persistedMetadataJson = null;
-    try (var query = connection.prepareStatement(
-        "SELECT source, digest, metadata_json FROM catalog_snapshots WHERE snapshot_id = ?")) {
+    try (var query =
+        connection.prepareStatement(
+            "SELECT source, digest, metadata_json FROM catalog_snapshots WHERE snapshot_id = ?")) {
       query.setString(1, snapshot.snapshotId());
       try (var rows = query.executeQuery()) {
         exists = rows.next();
@@ -406,15 +543,19 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       if (!snapshot.source().equals(persistedSource)
           || !snapshot.digest().equals(persistedDigest)
           || !snapshot.metadataJson().equals(persistedMetadataJson)) {
-        throw new IllegalArgumentException("catalog snapshot metadata already exists with different values");
+        throw new IllegalArgumentException(
+            "catalog snapshot metadata already exists with different values");
       }
       List<CardDefinition> persisted = readDefinitions(connection, snapshot.snapshotId());
       if (!persisted.equals(expected)) {
-        throw new IllegalArgumentException("catalog definitions already exist with different values");
+        throw new IllegalArgumentException(
+            "catalog definitions already exist with different values");
       }
       return;
     }
-    try (var insert = connection.prepareStatement("""
+    try (var insert =
+        connection.prepareStatement(
+            """
         INSERT INTO catalog_snapshots(snapshot_id, source, digest, created_at, metadata_json)
         VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?)
         """)) {
@@ -424,7 +565,9 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       insert.setString(4, snapshot.metadataJson());
       insert.executeUpdate();
     }
-    try (var cardInsert = connection.prepareStatement("""
+    try (var cardInsert =
+        connection.prepareStatement(
+            """
         INSERT INTO card_definitions(snapshot_id, catalog_id, public_number, name, stars, type,
           top_value, right_value, bottom_value, left_value, sale_price)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -446,14 +589,18 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       cardInsert.executeBatch();
     }
   }
-  static void persistCatalogSnapshotForMatch(Connection connection, String snapshotId,
-      java.util.Collection<CardDefinition> definitions) throws SQLException {
+
+  static void persistCatalogSnapshotForMatch(
+      Connection connection, String snapshotId, java.util.Collection<CardDefinition> definitions)
+      throws SQLException {
     Objects.requireNonNull(snapshotId, "snapshot id is required");
-    List<CardDefinition> expected = Objects.requireNonNull(definitions, "definitions are required")
-        .stream().sorted(java.util.Comparator.comparingInt(definition -> definition.id().value())).toList();
+    List<CardDefinition> expected =
+        Objects.requireNonNull(definitions, "definitions are required").stream()
+            .sorted(java.util.Comparator.comparingInt(definition -> definition.id().value()))
+            .toList();
     boolean exists;
-    try (var query = connection.prepareStatement(
-        "SELECT 1 FROM catalog_snapshots WHERE snapshot_id = ?")) {
+    try (var query =
+        connection.prepareStatement("SELECT 1 FROM catalog_snapshots WHERE snapshot_id = ?")) {
       query.setString(1, snapshotId);
       try (var rows = query.executeQuery()) {
         exists = rows.next();
@@ -461,18 +608,23 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     }
     if (exists) {
       if (!readDefinitions(connection, snapshotId).equals(expected)) {
-        throw new IllegalArgumentException("catalog definitions already exist with different values");
+        throw new IllegalArgumentException(
+            "catalog definitions already exist with different values");
       }
       return;
     }
-    persistCatalogSnapshot(connection,
-        new CatalogSnapshot(snapshotId, "match-state", "catalog-" + snapshotId, "{}"), expected);
+    persistCatalogSnapshot(
+        connection,
+        new CatalogSnapshot(snapshotId, "match-state", "catalog-" + snapshotId, "{}"),
+        expected);
   }
 
   private static List<CardDefinition> readDefinitions(Connection connection, String snapshotId)
       throws SQLException {
     List<CardDefinition> definitions = new ArrayList<>();
-    try (var query = connection.prepareStatement("""
+    try (var query =
+        connection.prepareStatement(
+            """
         SELECT catalog_id, public_number, name, stars, type, top_value, right_value,
           bottom_value, left_value, sale_price
         FROM card_definitions WHERE snapshot_id = ? ORDER BY catalog_id
@@ -480,29 +632,39 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       query.setString(1, snapshotId);
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
-          definitions.add(new CardDefinition(new CardId(rows.getInt(1)), rows.getString(2),
-              rows.getString(3), rows.getInt(4), CardType.valueOf(rows.getString(5)),
-              rows.getInt(6), rows.getInt(7), rows.getInt(8), rows.getInt(9), rows.getInt(10)));
+          definitions.add(
+              new CardDefinition(
+                  new CardId(rows.getInt(1)),
+                  rows.getString(2),
+                  rows.getString(3),
+                  rows.getInt(4),
+                  CardType.valueOf(rows.getString(5)),
+                  rows.getInt(6),
+                  rows.getInt(7),
+                  rows.getInt(8),
+                  rows.getInt(9),
+                  rows.getInt(10)));
         }
       }
     }
     return List.copyOf(definitions);
   }
 
-
   public Optional<CatalogSnapshot> findCatalogSnapshot(String snapshotId) {
-    try (var query = connection.prepareStatement(
-        "SELECT source, digest, metadata_json FROM catalog_snapshots WHERE snapshot_id = ?")) {
+    try (var query =
+        connection.prepareStatement(
+            "SELECT source, digest, metadata_json FROM catalog_snapshots WHERE snapshot_id = ?")) {
       query.setString(1, Objects.requireNonNull(snapshotId));
       try (var rows = query.executeQuery()) {
         if (!rows.next()) return Optional.empty();
-        return Optional.of(new CatalogSnapshot(snapshotId, rows.getString(1), rows.getString(2), rows.getString(3)));
+        return Optional.of(
+            new CatalogSnapshot(
+                snapshotId, rows.getString(1), rows.getString(2), rows.getString(3)));
       }
     } catch (SQLException exception) {
       throw failure(exception);
     }
   }
-
 
   public Optional<StoredCardCopy> findCopy(CardCopyId copyId) {
     Objects.requireNonNull(copyId, "copy id is required");
@@ -514,14 +676,21 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   }
 
   @Override
-  public void prepare(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
+  public void prepare(
+      UUID operationId,
+      CopyOwner owner,
+      List<CardCopyId> copyIds,
       List<SerializedItemSnapshot> snapshots) {
     prepare(operationId, owner, copyIds, snapshots, null);
   }
 
   @Override
-  public void prepare(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
-      List<SerializedItemSnapshot> snapshots, String matchId) {
+  public void prepare(
+      UUID operationId,
+      CopyOwner owner,
+      List<CardCopyId> copyIds,
+      List<SerializedItemSnapshot> snapshots,
+      String matchId) {
     Objects.requireNonNull(operationId, "operation id is required");
     Objects.requireNonNull(owner, "owner is required");
     List<CardCopyId> copies = copyList(copyIds);
@@ -535,113 +704,130 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         throw new IllegalArgumentException("snapshot copy does not match reservation");
       }
     }
-    if (matchId != null && matchId.isBlank()) throw new IllegalArgumentException("match id cannot be blank");
-    inTransaction(() -> {
-      Reservation existing = findReservationInternal(operationId);
-      if (existing != null) {
-        if (!existing.owner().equals(owner) || !existing.copyIds().equals(copies)
-            || !Objects.equals(existing.matchId(), matchId)) {
-          throw new IllegalStateException("operation does not match existing reservation");
-        }
-        return;
-      }
-      if (hasUnprovenTerminalReservation()) {
-        throw new CustodyIntegrityException(operationId, copies,
-            "terminal reservation lacks complete custody proof", null);
-      }
-      java.util.Map<CardCopyId, String> storedCopyIds = new java.util.HashMap<>();
-      for (CardCopyId copy : copies) {
-        StoredCardCopy ledger;
-        try {
-          ledger = findCopyInternal(copy);
-          if (ledger != null) storedCopyIds.put(copy, findStoredCopyUuidInternal(copy));
-        } catch (RuntimeException exception) {
-          throw new CustodyIntegrityException(operationId, List.of(copy),
-              "invalid card-copy owner integrity data", exception);
-        }
-        if (ledger == null) throw new IllegalStateException("unknown card copy: " + copy);
-        if (!ledger.owner().equals(owner)) throw new IllegalStateException("copy owner mismatch");
-      }
-      for (CardCopyId copy : copies) {
-        validateCopyReuse(operationId, owner, copy);
-      }
-      try (var insert = connection.prepareStatement(
-          "INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status, created_at, updated_at) "
-              + "VALUES (?, ?, ?, ?, 'PREPARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")) {
-        insert.setString(1, operationId.toString());
-        writeOwner(insert, 2, 3, owner);
-        insert.setString(4, matchId);
-        insert.executeUpdate();
-      }
-      try (var insert = connection.prepareStatement(
-          "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES (?, ?)")) {
-        for (CardCopyId copy : copies) {
-          insert.setString(1, operationId.toString());
-          insert.setString(2, storedCopyIds.get(copy));
-          insert.addBatch();
-        }
-        insert.executeBatch();
-      }
-      saveSnapshotsInternal(operationId, exactSnapshots);
-    });
+    if (matchId != null && matchId.isBlank())
+      throw new IllegalArgumentException("match id cannot be blank");
+    inTransaction(
+        () -> {
+          Reservation existing = findReservationInternal(operationId);
+          if (existing != null) {
+            if (!existing.owner().equals(owner)
+                || !existing.copyIds().equals(copies)
+                || !Objects.equals(existing.matchId(), matchId)) {
+              throw new IllegalStateException("operation does not match existing reservation");
+            }
+            return;
+          }
+          if (hasUnprovenTerminalReservation()) {
+            throw new CustodyIntegrityException(
+                operationId, copies, "terminal reservation lacks complete custody proof", null);
+          }
+          java.util.Map<CardCopyId, String> storedCopyIds = new java.util.HashMap<>();
+          for (CardCopyId copy : copies) {
+            StoredCardCopy ledger;
+            try {
+              ledger = findCopyInternal(copy);
+              if (ledger != null) storedCopyIds.put(copy, findStoredCopyUuidInternal(copy));
+            } catch (RuntimeException exception) {
+              throw new CustodyIntegrityException(
+                  operationId, List.of(copy), "invalid card-copy owner integrity data", exception);
+            }
+            if (ledger == null) throw new IllegalStateException("unknown card copy: " + copy);
+            if (!ledger.owner().equals(owner))
+              throw new IllegalStateException("copy owner mismatch");
+          }
+          for (CardCopyId copy : copies) {
+            validateCopyReuse(operationId, owner, copy);
+          }
+          try (var insert =
+              connection.prepareStatement(
+                  "INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status, "
+                      + "created_at, updated_at) VALUES (?, ?, ?, ?, 'PREPARED', CURRENT_TIMESTAMP, "
+                      + "CURRENT_TIMESTAMP)")) {
+            insert.setString(1, operationId.toString());
+            writeOwner(insert, 2, 3, owner);
+            insert.setString(4, matchId);
+            insert.executeUpdate();
+          }
+          try (var insert =
+              connection.prepareStatement(
+                  "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES (?, ?)")) {
+            for (CardCopyId copy : copies) {
+              insert.setString(1, operationId.toString());
+              insert.setString(2, storedCopyIds.get(copy));
+              insert.addBatch();
+            }
+            insert.executeBatch();
+          }
+          saveSnapshotsInternal(operationId, exactSnapshots);
+        });
   }
 
   public void saveSnapshots(UUID operationId, List<SerializedItemSnapshot> snapshots) {
     Objects.requireNonNull(operationId, "operation id is required");
-    inTransaction(() -> saveSnapshotsInternal(operationId, List.copyOf(Objects.requireNonNull(snapshots))));
+    inTransaction(
+        () -> saveSnapshotsInternal(operationId, List.copyOf(Objects.requireNonNull(snapshots))));
   }
+
   @Override
   public void transition(UUID operationId, OperationStatus target) {
     Objects.requireNonNull(operationId, "operation id is required");
     Objects.requireNonNull(target, "target status is required");
-    inTransaction(() -> {
-      Reservation reservation = findReservationInternal(operationId);
-      if (reservation == null) throw new IllegalStateException("unknown operation: " + operationId);
-      if (reservation.status() == OperationStatus.ABORTED
-          && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
-        throw new IllegalStateException("cannot abort custody with unresolved copies");
-      }
-      if (reservation.status() == OperationStatus.ABORTED
-          && !hasExactSnapshots(reservation)) {
-        throw new IllegalStateException("aborted custody is missing exact snapshots");
-      }
-      if (reservation.status() == OperationStatus.RETURNED
-          && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
-        throw new IllegalStateException("cannot return custody with unresolved copies");
-      }
-      if (target == OperationStatus.ABORTED
-          && !hasExactSnapshots(reservation)) {
-        throw new CustodyIntegrityException(operationId, reservation.copyIds(),
-            "aborted custody is missing exact snapshots");
-      }
-      if (reservation.status() == target) return;
-      if (target == OperationStatus.RETURNED
-          && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
-        throw new IllegalStateException("cannot return custody with unresolved copies");
-      }
-      if (target == OperationStatus.ABORTED
-          && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
-        throw new IllegalStateException("cannot abort custody with unresolved copies");
-      }
+    inTransaction(
+        () -> {
+          Reservation reservation = findReservationInternal(operationId);
+          if (reservation == null)
+            throw new IllegalStateException("unknown operation: " + operationId);
+          if (reservation.status() == OperationStatus.ABORTED
+              && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
+            throw new IllegalStateException("cannot abort custody with unresolved copies");
+          }
+          if (reservation.status() == OperationStatus.ABORTED && !hasExactSnapshots(reservation)) {
+            throw new IllegalStateException("aborted custody is missing exact snapshots");
+          }
+          if (reservation.status() == OperationStatus.RETURNED
+              && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
+            throw new IllegalStateException("cannot return custody with unresolved copies");
+          }
+          if (target == OperationStatus.ABORTED && !hasExactSnapshots(reservation)) {
+            throw new CustodyIntegrityException(
+                operationId, reservation.copyIds(), "aborted custody is missing exact snapshots");
+          }
+          if (reservation.status() == target) return;
+          if (target == OperationStatus.RETURNED
+              && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
+            throw new IllegalStateException("cannot return custody with unresolved copies");
+          }
+          if (target == OperationStatus.ABORTED
+              && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
+            throw new IllegalStateException("cannot abort custody with unresolved copies");
+          }
 
-      if ((target == OperationStatus.RETURNED || target == OperationStatus.ABORTED)
-          && (!hasValidRecoveryRows(operationId, reservation.owner(), reservation.copyIds(),
-              reservation.snapshots()) || hasPendingRecovery(operationId))) {
-        throw new CustodyIntegrityException(operationId, reservation.copyIds(),
-            "terminal custody is missing complete recovery proof");
-      }
+          if ((target == OperationStatus.RETURNED || target == OperationStatus.ABORTED)
+              && (!hasValidRecoveryRows(
+                      operationId,
+                      reservation.owner(),
+                      reservation.copyIds(),
+                      reservation.snapshots())
+                  || hasPendingRecovery(operationId))) {
+            throw new CustodyIntegrityException(
+                operationId,
+                reservation.copyIds(),
+                "terminal custody is missing complete recovery proof");
+          }
 
-      if (!allowed(reservation.status(), target)) {
-        throw new IllegalStateException("invalid custody transition " + reservation.status() + " -> " + target);
-      }
-      try (var update = connection.prepareStatement(
-          "UPDATE reservations SET status = ?, updated_at = CURRENT_TIMESTAMP "
-              + "WHERE lower(operation_id) = lower(?)")) {
-        update.setString(1, target.name());
-        update.setString(2, operationId.toString());
-        update.executeUpdate();
-      }
-    });
+          if (!allowed(reservation.status(), target)) {
+            throw new IllegalStateException(
+                "invalid custody transition " + reservation.status() + " -> " + target);
+          }
+          try (var update =
+              connection.prepareStatement(
+                  "UPDATE reservations SET status = ?, updated_at = CURRENT_TIMESTAMP "
+                      + "WHERE lower(operation_id) = lower(?)")) {
+            update.setString(1, target.name());
+            update.setString(2, operationId.toString());
+            update.executeUpdate();
+          }
+        });
   }
 
   public Optional<Reservation> findReservation(UUID operationId) {
@@ -670,50 +856,62 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       throw failure(exception);
     }
   }
+
   @Override
   public void addRecovery(UUID operationId, CopyOwner owner, SerializedItemSnapshot snapshot) {
     Objects.requireNonNull(operationId, "operation id is required");
     Objects.requireNonNull(owner, "owner is required");
     Objects.requireNonNull(snapshot, "snapshot is required");
-    inTransaction(() -> {
-      Reservation reservation = findReservationInternal(operationId);
-      if (reservation == null || !reservation.owner().equals(owner)
-          || !reservation.copyIds().contains(snapshot.copyId())) {
-        throw new IllegalStateException("recovery row does not match reservation");
-      }
-      SerializedItemSnapshot expected = reservation.snapshots().stream()
-          .filter(value -> value.copyId().equals(snapshot.copyId())).findFirst().orElse(null);
-      if (expected == null || !java.util.Arrays.equals(expected.bytes(), snapshot.bytes())) {
-        throw new IllegalStateException("recovery snapshot does not match escrow snapshot");
-      }
-      try (var restored = connection.prepareStatement(
-          "SELECT 1 FROM reservation_restored "
-              + "WHERE lower(operation_id) = lower(?) AND lower(copy_uuid) = lower(?)")) {
-        restored.setString(1, operationId.toString());
-        restored.setString(2, snapshot.copyId().value().toString());
-        try (var rows = restored.executeQuery()) {
-          if (rows.next()) return;
-        }
-      }
-      String storedOperationId = findStoredReservationOperationIdInternal(operationId);
-      String storedCopyId = findStoredReservationCopyUuidInternal(operationId, snapshot.copyId());
-      try (var insert = connection.prepareStatement("""
+    inTransaction(
+        () -> {
+          Reservation reservation = findReservationInternal(operationId);
+          if (reservation == null
+              || !reservation.owner().equals(owner)
+              || !reservation.copyIds().contains(snapshot.copyId())) {
+            throw new IllegalStateException("recovery row does not match reservation");
+          }
+          SerializedItemSnapshot expected =
+              reservation.snapshots().stream()
+                  .filter(value -> value.copyId().equals(snapshot.copyId()))
+                  .findFirst()
+                  .orElse(null);
+          if (expected == null || !java.util.Arrays.equals(expected.bytes(), snapshot.bytes())) {
+            throw new IllegalStateException("recovery snapshot does not match escrow snapshot");
+          }
+          try (var restored =
+              connection.prepareStatement(
+                  "SELECT 1 FROM reservation_restored "
+                      + "WHERE lower(operation_id) = lower(?) AND lower(copy_uuid) = lower(?)")) {
+            restored.setString(1, operationId.toString());
+            restored.setString(2, snapshot.copyId().value().toString());
+            try (var rows = restored.executeQuery()) {
+              if (rows.next()) return;
+            }
+          }
+          String storedOperationId = findStoredReservationOperationIdInternal(operationId);
+          String storedCopyId =
+              findStoredReservationCopyUuidInternal(operationId, snapshot.copyId());
+          try (var insert =
+              connection.prepareStatement(
+                  """
           INSERT INTO recovery_rows(operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status)
           VALUES (?, ?, ?, ?, ?, 'PENDING')
           ON CONFLICT(operation_id, copy_uuid) DO UPDATE SET item_bytes = excluded.item_bytes,
             status = CASE WHEN recovery_rows.status = 'RESTORED' THEN 'RESTORED' ELSE 'PENDING' END
           """)) {
-        insert.setString(1, storedOperationId);
-        insert.setString(2, storedCopyId);
-        writeOwner(insert, 3, 4, owner);
-        insert.setBytes(5, snapshot.bytes());
-        insert.executeUpdate();
-      }
-    });
+            insert.setString(1, storedOperationId);
+            insert.setString(2, storedCopyId);
+            writeOwner(insert, 3, 4, owner);
+            insert.setBytes(5, snapshot.bytes());
+            insert.executeUpdate();
+          }
+        });
   }
 
   public List<RecoveryRow> pendingRecovery() {
-    try (var query = connection.prepareStatement("""
+    try (var query =
+        connection.prepareStatement(
+            """
         SELECT operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes
         FROM recovery_rows WHERE status = 'PENDING' ORDER BY recovery_id
         """)) {
@@ -732,21 +930,32 @@ public final class SqliteCardRepository implements CardCustodyJournal {
           try {
             owner = readOwner(rows.getString(3), rows.getString(4));
           } catch (RuntimeException exception) {
-            throw new CustodyIntegrityException(operationId, List.of(copyId),
-                "invalid recovery owner integrity data", exception);
+            throw new CustodyIntegrityException(
+                operationId, List.of(copyId), "invalid recovery owner integrity data", exception);
           }
           Reservation reservation = findReservationInternal(operationId);
-          SerializedItemSnapshot expected = reservation == null ? null : reservation.snapshots().stream()
-              .filter(snapshot -> snapshot.copyId().equals(copyId)).findFirst().orElse(null);
+          SerializedItemSnapshot expected =
+              reservation == null
+                  ? null
+                  : reservation.snapshots().stream()
+                      .filter(snapshot -> snapshot.copyId().equals(copyId))
+                      .findFirst()
+                      .orElse(null);
           byte[] bytes = rows.getBytes(5);
-          if (reservation == null || !reservation.owner().equals(owner) || expected == null
-              || bytes == null || bytes.length == 0 || !Arrays.equals(expected.bytes(), bytes)) {
-            throw new CustodyIntegrityException(operationId,
+          if (reservation == null
+              || !reservation.owner().equals(owner)
+              || expected == null
+              || bytes == null
+              || bytes.length == 0
+              || !Arrays.equals(expected.bytes(), bytes)) {
+            throw new CustodyIntegrityException(
+                operationId,
                 reservation == null ? List.of(copyId) : reservation.copyIds(),
                 "recovery row does not match reservation");
           }
-          result.add(new RecoveryRow(operationId, copyId, owner,
-              new SerializedItemSnapshot(copyId, bytes)));
+          result.add(
+              new RecoveryRow(
+                  operationId, copyId, owner, new SerializedItemSnapshot(copyId, bytes)));
         }
       }
       return List.copyOf(result);
@@ -759,56 +968,66 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   public void markRestored(UUID operationId, CardCopyId copyId) {
     Objects.requireNonNull(operationId, "operation id is required");
     Objects.requireNonNull(copyId, "copy id is required");
-    inTransaction(() -> {
-      Reservation reservation = findReservationInternal(operationId);
-      if (reservation == null || !reservation.copyIds().contains(copyId)) {
-        throw new IllegalStateException("copy is not reserved by operation");
-      }
-      String storedOperationId = findStoredReservationOperationIdInternal(operationId);
-      String storedCopyId = findStoredReservationCopyUuidInternal(operationId, copyId);
-      SerializedItemSnapshot snapshot = reservation.snapshots().stream()
-          .filter(value -> value.copyId().equals(copyId)).findFirst().orElse(null);
-      if (snapshot == null || snapshot.bytes().length == 0) {
-        throw new CustodyIntegrityException(operationId, List.of(copyId),
-            "missing exact escrow snapshot");
-      }
-      try (var insert = connection.prepareStatement("""
+    inTransaction(
+        () -> {
+          Reservation reservation = findReservationInternal(operationId);
+          if (reservation == null || !reservation.copyIds().contains(copyId)) {
+            throw new IllegalStateException("copy is not reserved by operation");
+          }
+          String storedOperationId = findStoredReservationOperationIdInternal(operationId);
+          String storedCopyId = findStoredReservationCopyUuidInternal(operationId, copyId);
+          SerializedItemSnapshot snapshot =
+              reservation.snapshots().stream()
+                  .filter(value -> value.copyId().equals(copyId))
+                  .findFirst()
+                  .orElse(null);
+          if (snapshot == null || snapshot.bytes().length == 0) {
+            throw new CustodyIntegrityException(
+                operationId, List.of(copyId), "missing exact escrow snapshot");
+          }
+          try (var insert =
+              connection.prepareStatement(
+                  """
           INSERT INTO recovery_rows(operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status)
           VALUES (?, ?, ?, ?, ?, 'RESTORED')
           ON CONFLICT(operation_id, copy_uuid) DO UPDATE SET owner_kind = excluded.owner_kind,
             owner_uuid = excluded.owner_uuid, item_bytes = excluded.item_bytes, status = 'RESTORED'
           """)) {
-        insert.setString(1, storedOperationId);
-        insert.setString(2, storedCopyId);
-        writeOwner(insert, 3, 4, reservation.owner());
-        insert.setBytes(5, snapshot.bytes());
-        insert.executeUpdate();
-      }
+            insert.setString(1, storedOperationId);
+            insert.setString(2, storedCopyId);
+            writeOwner(insert, 3, 4, reservation.owner());
+            insert.setBytes(5, snapshot.bytes());
+            insert.executeUpdate();
+          }
 
-      try (var insert = connection.prepareStatement(
-          "INSERT INTO reservation_restored(operation_id, copy_uuid) VALUES (?, ?) "
-              + "ON CONFLICT(operation_id, copy_uuid) DO NOTHING")) {
-        insert.setString(1, storedOperationId);
-        insert.setString(2, storedCopyId);
-        insert.executeUpdate();
-      }
-      try (var update = connection.prepareStatement(
-          "UPDATE recovery_rows SET status = 'RESTORED' "
-              + "WHERE lower(operation_id) = lower(?) AND lower(copy_uuid) = lower(?)")) {
-        update.setString(1, operationId.toString());
-        update.setString(2, copyId.value().toString());
-        update.executeUpdate();
-      }
-    });
+          try (var insert =
+              connection.prepareStatement(
+                  "INSERT INTO reservation_restored(operation_id, copy_uuid) VALUES (?, ?) "
+                      + "ON CONFLICT(operation_id, copy_uuid) DO NOTHING")) {
+            insert.setString(1, storedOperationId);
+            insert.setString(2, storedCopyId);
+            insert.executeUpdate();
+          }
+          try (var update =
+              connection.prepareStatement(
+                  "UPDATE recovery_rows SET status = 'RESTORED' "
+                      + "WHERE lower(operation_id) = lower(?) AND lower(copy_uuid) = lower(?)")) {
+            update.setString(1, operationId.toString());
+            update.setString(2, copyId.value().toString());
+            update.executeUpdate();
+          }
+        });
   }
+
   private boolean hasUnprovenTerminalReservation() throws SQLException {
-    try (var query = connection.prepareStatement(
-        "SELECT operation_id, owner_kind, owner_uuid, status FROM reservations "
-            + "WHERE status IN ('RETURNED', 'ABORTED') ORDER BY rowid");
+    try (var query =
+            connection.prepareStatement(
+                "SELECT operation_id, owner_kind, owner_uuid, status FROM reservations "
+                    + "WHERE status IN ('RETURNED', 'ABORTED') ORDER BY rowid");
         var rows = query.executeQuery()) {
       while (rows.next()) {
-        if (!provenTerminal(rows.getString(1), rows.getString(2), rows.getString(3),
-            rows.getString(4))) {
+        if (!provenTerminal(
+            rows.getString(1), rows.getString(2), rows.getString(3), rows.getString(4))) {
           return true;
         }
       }
@@ -819,10 +1038,12 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   private void validateCopyReuse(UUID operationId, CopyOwner owner, CardCopyId copy)
       throws SQLException {
     if (hasUnprovenTerminalReservation()) {
-      throw new CustodyIntegrityException(operationId, List.of(copy),
-          "terminal reservation lacks complete custody proof", null);
+      throw new CustodyIntegrityException(
+          operationId, List.of(copy), "terminal reservation lacks complete custody proof", null);
     }
-    try (var query = connection.prepareStatement("""
+    try (var query =
+        connection.prepareStatement(
+            """
         SELECT operation_id, copy_uuid FROM reservation_copies
         UNION ALL
         SELECT operation_id, copy_uuid FROM escrow_items
@@ -837,11 +1058,15 @@ public final class SqliteCardRepository implements CardCustodyJournal {
           if (!copyMatches(copy, rows.getString(2))) continue;
           String rawOperationId = rows.getString(1);
           String operationKey = operationKey(rawOperationId);
-          String previousSpelling = seenOperationSpellings.putIfAbsent(operationKey, rawOperationId);
+          String previousSpelling =
+              seenOperationSpellings.putIfAbsent(operationKey, rawOperationId);
           if (previousSpelling != null) {
             if (!previousSpelling.equals(rawOperationId)) {
-              throw new CustodyIntegrityException(operationId, List.of(copy),
-                  "ambiguous case-variant custody operation identity", null);
+              throw new CustodyIntegrityException(
+                  operationId,
+                  List.of(copy),
+                  "ambiguous case-variant custody operation identity",
+                  null);
             }
             continue;
           }
@@ -849,12 +1074,15 @@ public final class SqliteCardRepository implements CardCustodyJournal {
           try {
             existingOperation = parseCanonicalUuid(rawOperationId);
           } catch (RuntimeException exception) {
-            throw new CustodyIntegrityException(operationId, List.of(copy),
-                "invalid existing custody operation identity", exception);
+            throw new CustodyIntegrityException(
+                operationId,
+                List.of(copy),
+                "invalid existing custody operation identity",
+                exception);
           }
           if (existingOperation.equals(operationId)) {
-            throw new CustodyIntegrityException(operationId, List.of(copy),
-                "copy has an existing custody identity", null);
+            throw new CustodyIntegrityException(
+                operationId, List.of(copy), "copy has an existing custody identity", null);
           }
           Reservation existing = findReservationInternal(existingOperation);
           if (existing == null) {
@@ -867,19 +1095,22 @@ public final class SqliteCardRepository implements CardCustodyJournal {
               && existing.status() != OperationStatus.ABORTED) {
             throw new IllegalStateException("copy is not proven reusable");
           }
-          if (!hasValidRecoveryRows(existingOperation, existing.owner(), existing.copyIds(),
-              existing.snapshots()) || hasPendingRecovery(existingOperation)) {
+          if (!hasValidRecoveryRows(
+                  existingOperation, existing.owner(), existing.copyIds(), existing.snapshots())
+              || hasPendingRecovery(existingOperation)) {
             throw new IllegalStateException("copy is not proven reusable");
           }
         }
       }
     }
   }
+
   private Reservation findReservationInternal(UUID operationId) throws SQLException {
     boolean duplicateOperationIdentity = semanticReservationCount(operationId) > 1;
-    try (var query = connection.prepareStatement(
-        "SELECT operation_id, owner_kind, owner_uuid, match_id, status FROM reservations "
-            + "ORDER BY rowid")) {
+    try (var query =
+        connection.prepareStatement(
+            "SELECT operation_id, owner_kind, owner_uuid, match_id, status FROM reservations "
+                + "ORDER BY rowid")) {
       try (var rows = query.executeQuery()) {
         boolean foundParent = false;
         while (rows.next()) {
@@ -899,7 +1130,8 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         RuntimeException decodeFailure = null;
         try {
           if (!operationId.equals(parseCanonicalUuid(rawParentOperationId))) {
-            throw new IllegalArgumentException("parent operation identity does not match requested");
+            throw new IllegalArgumentException(
+                "parent operation identity does not match requested");
           }
         } catch (RuntimeException exception) {
           decodeFailure = exception;
@@ -907,14 +1139,16 @@ public final class SqliteCardRepository implements CardCustodyJournal {
 
         // Scan every reservation-copy row even when one identity is malformed. The parseable
         // physical UUIDs are the only identities that can be retained for fail-closed recovery.
-        try (var copyQuery = connection.prepareStatement(
-            "SELECT operation_id, copy_uuid FROM reservation_copies ORDER BY rowid")) {
+        try (var copyQuery =
+            connection.prepareStatement(
+                "SELECT operation_id, copy_uuid FROM reservation_copies ORDER BY rowid")) {
           try (var copyRows = copyQuery.executeQuery()) {
             while (copyRows.next()) {
               if (!operationMatches(operationId, copyRows.getString(1))) continue;
               try {
                 if (!operationId.equals(parseCanonicalUuid(copyRows.getString(1)))) {
-                  throw new IllegalArgumentException("child operation identity does not match parent");
+                  throw new IllegalArgumentException(
+                      "child operation identity does not match parent");
                 }
               } catch (RuntimeException exception) {
                 if (decodeFailure == null) decodeFailure = exception;
@@ -931,14 +1165,16 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         }
 
         List<SerializedItemSnapshot> snapshots = new ArrayList<>();
-        try (var snapshotQuery = connection.prepareStatement(
-            "SELECT operation_id, copy_uuid, item_bytes FROM escrow_items ORDER BY rowid")) {
+        try (var snapshotQuery =
+            connection.prepareStatement(
+                "SELECT operation_id, copy_uuid, item_bytes FROM escrow_items ORDER BY rowid")) {
           try (var snapshotRows = snapshotQuery.executeQuery()) {
             while (snapshotRows.next()) {
               if (!operationMatches(operationId, snapshotRows.getString(1))) continue;
               try {
                 if (!operationId.equals(parseCanonicalUuid(snapshotRows.getString(1)))) {
-                  throw new IllegalArgumentException("child operation identity does not match parent");
+                  throw new IllegalArgumentException(
+                      "child operation identity does not match parent");
                 }
               } catch (RuntimeException exception) {
                 if (decodeFailure == null) decodeFailure = exception;
@@ -946,7 +1182,8 @@ public final class SqliteCardRepository implements CardCustodyJournal {
               try {
                 UUID copyUuid = parseCanonicalUuid(snapshotRows.getString(2));
                 addCopyId(copies, copyUuid);
-                snapshots.add(new SerializedItemSnapshot(new CardCopyId(copyUuid), snapshotRows.getBytes(3)));
+                snapshots.add(
+                    new SerializedItemSnapshot(new CardCopyId(copyUuid), snapshotRows.getBytes(3)));
               } catch (RuntimeException exception) {
                 if (decodeFailure == null) decodeFailure = exception;
               }
@@ -955,14 +1192,16 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         }
 
         List<CardCopyId> restored = new ArrayList<>();
-        try (var restoredQuery = connection.prepareStatement(
-            "SELECT operation_id, copy_uuid FROM reservation_restored ORDER BY rowid")) {
+        try (var restoredQuery =
+            connection.prepareStatement(
+                "SELECT operation_id, copy_uuid FROM reservation_restored ORDER BY rowid")) {
           try (var restoredRows = restoredQuery.executeQuery()) {
             while (restoredRows.next()) {
               if (!operationMatches(operationId, restoredRows.getString(1))) continue;
               try {
                 if (!operationId.equals(parseCanonicalUuid(restoredRows.getString(1)))) {
-                  throw new IllegalArgumentException("child operation identity does not match parent");
+                  throw new IllegalArgumentException(
+                      "child operation identity does not match parent");
                 }
               } catch (RuntimeException exception) {
                 if (decodeFailure == null) decodeFailure = exception;
@@ -977,14 +1216,16 @@ public final class SqliteCardRepository implements CardCustodyJournal {
             }
           }
         }
-        try (var recoveryQuery = connection.prepareStatement(
-            "SELECT operation_id, copy_uuid FROM recovery_rows ORDER BY rowid")) {
+        try (var recoveryQuery =
+            connection.prepareStatement(
+                "SELECT operation_id, copy_uuid FROM recovery_rows ORDER BY rowid")) {
           try (var recoveryRows = recoveryQuery.executeQuery()) {
             while (recoveryRows.next()) {
               if (!operationMatches(operationId, recoveryRows.getString(1))) continue;
               try {
                 if (!operationId.equals(parseCanonicalUuid(recoveryRows.getString(1)))) {
-                  throw new IllegalArgumentException("child operation identity does not match parent");
+                  throw new IllegalArgumentException(
+                      "child operation identity does not match parent");
                 }
               } catch (RuntimeException exception) {
                 if (decodeFailure == null) decodeFailure = exception;
@@ -998,49 +1239,65 @@ public final class SqliteCardRepository implements CardCustodyJournal {
           }
         }
         if (duplicateOperationIdentity || decodeFailure != null) {
-          throw new CustodyIntegrityException(operationId, copies,
-              duplicateOperationIdentity ? "duplicate case-variant reservation operation identity"
-                  : "invalid reservation identity data", decodeFailure);
+          throw new CustodyIntegrityException(
+              operationId,
+              copies,
+              duplicateOperationIdentity
+                  ? "duplicate case-variant reservation operation identity"
+                  : "invalid reservation identity data",
+              decodeFailure);
         }
         try {
           CopyOwner owner = readOwner(ownerKind, ownerUuid);
           OperationStatus status = OperationStatus.valueOf(rawStatus);
           if (!hasExactSnapshots(reservationCopies, snapshots)) {
-            throw new CustodyIntegrityException(operationId, copies,
-                "reservation is missing exact escrow snapshots");
+            throw new CustodyIntegrityException(
+                operationId, copies, "reservation is missing exact escrow snapshots");
           }
           if (status == OperationStatus.RETURNED
               && !new HashSet<>(restored).containsAll(reservationCopies)) {
-            throw new IllegalStateException("cannot hydrate returned custody with unresolved copies");
+            throw new IllegalStateException(
+                "cannot hydrate returned custody with unresolved copies");
           }
           if (status == OperationStatus.ABORTED
               && !new HashSet<>(restored).containsAll(reservationCopies)) {
-            throw new IllegalStateException("cannot hydrate aborted custody with unresolved copies");
+            throw new IllegalStateException(
+                "cannot hydrate aborted custody with unresolved copies");
           }
           if (status == OperationStatus.RETURNED || status == OperationStatus.ABORTED) {
             if (!hasValidRecoveryRows(operationId, owner, reservationCopies, snapshots)
                 || hasPendingRecovery(operationId)) {
-              throw new CustodyIntegrityException(operationId, copies,
-                  "reservation has invalid recovery row identity");
+              throw new CustodyIntegrityException(
+                  operationId, copies, "reservation has invalid recovery row identity");
             }
           }
-          return new Reservation(operationId, owner, reservationCopies, snapshots, status, restored, matchId);
+          return new Reservation(
+              operationId, owner, reservationCopies, snapshots, status, restored, matchId);
         } catch (CustodyIntegrityException exception) {
           throw exception;
         } catch (RuntimeException exception) {
-          throw new CustodyIntegrityException(operationId, copies,
-              "invalid reservation integrity data", exception);
+          throw new CustodyIntegrityException(
+              operationId, copies, "invalid reservation integrity data", exception);
         }
       }
     }
   }
-  private boolean hasValidRecoveryRows(UUID operationId, CopyOwner owner,
-      List<CardCopyId> copies, List<SerializedItemSnapshot> snapshots) throws SQLException {
+
+  private boolean hasValidRecoveryRows(
+      UUID operationId,
+      CopyOwner owner,
+      List<CardCopyId> copies,
+      List<SerializedItemSnapshot> snapshots)
+      throws SQLException {
     return hasValidRecoveryRows(operationId.toString(), owner, copies, snapshots);
   }
 
-  private boolean hasValidRecoveryRows(String rawOperationId, CopyOwner owner,
-      List<CardCopyId> copies, List<SerializedItemSnapshot> snapshots) throws SQLException {
+  private boolean hasValidRecoveryRows(
+      String rawOperationId,
+      CopyOwner owner,
+      List<CardCopyId> copies,
+      List<SerializedItemSnapshot> snapshots)
+      throws SQLException {
     if (copies.isEmpty() || snapshots.isEmpty()) return false;
     UUID expectedOperation;
     try {
@@ -1049,9 +1306,12 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       return false;
     }
     java.util.Map<CardCopyId, byte[]> expected = new java.util.HashMap<>();
-    for (SerializedItemSnapshot snapshot : snapshots) expected.put(snapshot.copyId(), snapshot.bytes());
+    for (SerializedItemSnapshot snapshot : snapshots)
+      expected.put(snapshot.copyId(), snapshot.bytes());
     Set<CardCopyId> seen = new HashSet<>();
-    try (var query = connection.prepareStatement("""
+    try (var query =
+        connection.prepareStatement(
+            """
         SELECT operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status
         FROM recovery_rows
         """)) {
@@ -1089,6 +1349,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   private boolean hasPendingRecovery(UUID operationId) throws SQLException {
     return hasPendingRecovery(operationId.toString());
   }
+
   private boolean hasPendingRecovery(String rawOperationId) throws SQLException {
     UUID expectedOperation;
     try {
@@ -1096,8 +1357,8 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     } catch (RuntimeException exception) {
       return true;
     }
-    try (var query = connection.prepareStatement(
-        "SELECT operation_id, status FROM recovery_rows")) {
+    try (var query =
+        connection.prepareStatement("SELECT operation_id, status FROM recovery_rows")) {
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
           if (!operationKey(rawOperationId).equals(operationKey(rows.getString(1)))) continue;
@@ -1113,37 +1374,9 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     return false;
   }
 
-  private boolean provenTerminal(String rawOperationId) throws SQLException {
-    if (rawOperationId == null) return false;
-    String ownerKind = null;
-    String ownerUuid = null;
-    String status = null;
-    try (var query = connection.prepareStatement(
-        "SELECT operation_id, owner_kind, owner_uuid, status FROM reservations "
-            + "WHERE lower(operation_id) = lower(?)")) {
-      query.setString(1, rawOperationId);
-      try (var rows = query.executeQuery()) {
-        if (!rows.next()) return false;
-        String storedOperationId = rows.getString(1);
-        try {
-          if (!parseCanonicalUuid(storedOperationId).toString().equals(storedOperationId)
-              || !storedOperationId.equals(rawOperationId)) {
-            return false;
-          }
-        } catch (RuntimeException exception) {
-          return false;
-        }
-        ownerKind = rows.getString(2);
-        ownerUuid = rows.getString(3);
-        status = rows.getString(4);
-        if (rows.next()) return false;
-      }
-    }
-    return provenTerminal(rawOperationId, ownerKind, ownerUuid, status);
-  }
-
-  private boolean provenTerminal(String rawOperationId, String ownerKind, String ownerUuid,
-      String rawStatus) throws SQLException {
+  private boolean provenTerminal(
+      String rawOperationId, String ownerKind, String ownerUuid, String rawStatus)
+      throws SQLException {
     UUID expectedOperation;
     try {
       expectedOperation = parseCanonicalUuid(rawOperationId);
@@ -1158,8 +1391,9 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       return false;
     }
     List<CardCopyId> copies = new ArrayList<>();
-    try (var query = connection.prepareStatement(
-        "SELECT operation_id, copy_uuid FROM reservation_copies ORDER BY rowid")) {
+    try (var query =
+        connection.prepareStatement(
+            "SELECT operation_id, copy_uuid FROM reservation_copies ORDER BY rowid")) {
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
           if (!operationKey(rawOperationId).equals(operationKey(rows.getString(1)))) continue;
@@ -1185,8 +1419,9 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     }
     List<SerializedItemSnapshot> snapshots = new ArrayList<>();
     Set<CardCopyId> snapshotIds = new HashSet<>();
-    try (var query = connection.prepareStatement(
-        "SELECT operation_id, copy_uuid, item_bytes FROM escrow_items ORDER BY rowid")) {
+    try (var query =
+        connection.prepareStatement(
+            "SELECT operation_id, copy_uuid, item_bytes FROM escrow_items ORDER BY rowid")) {
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
           if (!operationKey(rawOperationId).equals(operationKey(rows.getString(1)))) continue;
@@ -1204,8 +1439,9 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     }
     if (!hasExactSnapshots(copies, snapshots)) return false;
     Set<CardCopyId> restored = new HashSet<>();
-    try (var query = connection.prepareStatement(
-        "SELECT operation_id, copy_uuid FROM reservation_restored ORDER BY rowid")) {
+    try (var query =
+        connection.prepareStatement(
+            "SELECT operation_id, copy_uuid FROM reservation_restored ORDER BY rowid")) {
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
           if (!operationKey(rawOperationId).equals(operationKey(rows.getString(1)))) continue;
@@ -1225,17 +1461,52 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     return true;
   }
 
+  private CardIssuance findIssuanceInternal(CardCopyId copyId) throws SQLException {
+    try (var query =
+        connection.prepareStatement(
+            """
+        SELECT copy_uuid, catalog_id, owner_kind, owner_uuid, item_bytes
+        FROM card_issuances WHERE lower(copy_uuid) = lower(?) ORDER BY rowid
+        """)) {
+      query.setString(1, copyId.value().toString());
+      CardIssuance found = null;
+      try (var rows = query.executeQuery()) {
+        while (rows.next()) {
+          CardCopyId storedCopy =
+              new CardCopyId(
+                  parseStoredCanonicalUuid(rows.getString(1), "invalid stored issuance copy UUID"));
+          if (!storedCopy.equals(copyId)) {
+            throw new IllegalStateException(
+                "stored issuance UUID does not match requested identity");
+          }
+          CardIssuance current =
+              new CardIssuance(
+                  storedCopy,
+                  new CardId(rows.getInt(2)),
+                  readOwner(rows.getString(3), rows.getString(4)),
+                  rows.getBytes(5));
+          if (found != null) throw new IllegalStateException("duplicate card issuance: " + copyId);
+          found = current;
+        }
+      }
+      return found;
+    }
+  }
+
   private String findStoredCopyUuidInternal(CardCopyId copyId) throws SQLException {
-    try (var query = connection.prepareStatement(
-        "SELECT copy_uuid FROM card_copies WHERE lower(copy_uuid) = lower(?)")) {
+    try (var query =
+        connection.prepareStatement(
+            "SELECT copy_uuid FROM card_copies WHERE lower(copy_uuid) = lower(?)")) {
       query.setString(1, copyId.value().toString());
       try (var rows = query.executeQuery()) {
         String stored = null;
         while (rows.next()) {
           String rawCopyId = rows.getString(1);
-          if (!copyId.value().equals(parseStoredCanonicalUuid(rawCopyId,
-              "invalid stored card-copy UUID"))) {
-            throw new IllegalStateException("stored card-copy UUID does not match requested identity");
+          if (!copyId
+              .value()
+              .equals(parseStoredCanonicalUuid(rawCopyId, "invalid stored card-copy UUID"))) {
+            throw new IllegalStateException(
+                "stored card-copy UUID does not match requested identity");
           }
           if (stored != null) {
             throw new IllegalStateException("duplicate card-copy UUID: " + copyId);
@@ -1249,16 +1520,18 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   }
 
   private String findStoredReservationOperationIdInternal(UUID operationId) throws SQLException {
-    try (var query = connection.prepareStatement(
-        "SELECT operation_id FROM reservations WHERE lower(operation_id) = lower(?)")) {
+    try (var query =
+        connection.prepareStatement(
+            "SELECT operation_id FROM reservations WHERE lower(operation_id) = lower(?)")) {
       query.setString(1, operationId.toString());
       try (var rows = query.executeQuery()) {
         String stored = null;
         while (rows.next()) {
           String rawOperationId = rows.getString(1);
-          if (!operationId.equals(parseStoredCanonicalUuid(rawOperationId,
-              "invalid stored operation UUID"))) {
-            throw new IllegalStateException("stored operation UUID does not match requested identity");
+          if (!operationId.equals(
+              parseStoredCanonicalUuid(rawOperationId, "invalid stored operation UUID"))) {
+            throw new IllegalStateException(
+                "stored operation UUID does not match requested identity");
           }
           if (stored != null) {
             throw new IllegalStateException("duplicate reservation operation UUID: " + operationId);
@@ -1270,21 +1543,24 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       }
     }
   }
+
   private String findStoredReservationCopyUuidInternal(UUID operationId, CardCopyId copyId)
       throws SQLException {
-    try (var query = connection.prepareStatement(
-        "SELECT operation_id, copy_uuid FROM reservation_copies ORDER BY rowid")) {
+    try (var query =
+        connection.prepareStatement(
+            "SELECT operation_id, copy_uuid FROM reservation_copies ORDER BY rowid")) {
       try (var rows = query.executeQuery()) {
         String stored = null;
         while (rows.next()) {
           String rawOperationId = rows.getString(1);
           String rawCopyId = rows.getString(2);
-          if (!operationMatches(operationId, rawOperationId)
-              || !copyMatches(copyId, rawCopyId)) continue;
-          if (!operationId.equals(parseStoredCanonicalUuid(rawOperationId,
-              "invalid stored operation UUID"))
-              || !copyId.value().equals(parseStoredCanonicalUuid(rawCopyId,
-                  "invalid stored card-copy UUID"))) {
+          if (!operationMatches(operationId, rawOperationId) || !copyMatches(copyId, rawCopyId))
+            continue;
+          if (!operationId.equals(
+                  parseStoredCanonicalUuid(rawOperationId, "invalid stored operation UUID"))
+              || !copyId
+                  .value()
+                  .equals(parseStoredCanonicalUuid(rawCopyId, "invalid stored card-copy UUID"))) {
             throw new IllegalStateException("stored reservation identity does not match request");
           }
           if (stored != null) {
@@ -1297,35 +1573,44 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       }
     }
   }
+
   private StoredCardCopy findCopyInternal(CardCopyId copyId) throws SQLException {
-    try (var query = connection.prepareStatement(
-        "SELECT copy_uuid, catalog_id, owner_kind, owner_uuid FROM card_copies "
-            + "WHERE lower(copy_uuid) = lower(?)")) {
+    try (var query =
+        connection.prepareStatement(
+            "SELECT copy_uuid, catalog_id, owner_kind, owner_uuid FROM card_copies "
+                + "WHERE lower(copy_uuid) = lower(?)")) {
       query.setString(1, copyId.value().toString());
       try (var rows = query.executeQuery()) {
         StoredCardCopy found = null;
         while (rows.next()) {
           String rawCopyId = rows.getString(1);
-          if (!copyId.value().equals(parseStoredCanonicalUuid(rawCopyId,
-              "invalid stored card-copy UUID"))) {
-            throw new IllegalStateException("stored card-copy UUID does not match requested identity");
+          if (!copyId
+              .value()
+              .equals(parseStoredCanonicalUuid(rawCopyId, "invalid stored card-copy UUID"))) {
+            throw new IllegalStateException(
+                "stored card-copy UUID does not match requested identity");
           }
           if (found != null) {
             throw new IllegalStateException("duplicate card-copy UUID: " + copyId);
           }
-          found = new StoredCardCopy(copyId, new CardId(rows.getInt(2)),
-              readOwner(rows.getString(3), rows.getString(4)));
+          found =
+              new StoredCardCopy(
+                  copyId,
+                  new CardId(rows.getInt(2)),
+                  readOwner(rows.getString(3), rows.getString(4)));
         }
         return found;
       }
     }
   }
+
   private void saveSnapshotsInternal(UUID operationId, List<SerializedItemSnapshot> snapshots)
       throws SQLException {
     String storedOperationId = findStoredReservationOperationIdInternal(operationId);
-    try (var insert = connection.prepareStatement(
-        "INSERT INTO escrow_items(operation_id, copy_uuid, item_bytes) VALUES (?, ?, ?) "
-            + "ON CONFLICT(operation_id, copy_uuid) DO UPDATE SET item_bytes = excluded.item_bytes")) {
+    try (var insert =
+        connection.prepareStatement(
+            "INSERT INTO escrow_items(operation_id, copy_uuid, item_bytes) VALUES (?, ?, ?) "
+                + "ON CONFLICT(operation_id, copy_uuid) DO UPDATE SET item_bytes = excluded.item_bytes")) {
       for (SerializedItemSnapshot snapshot : snapshots) {
         insert.setString(1, storedOperationId);
         insert.setString(2, findStoredReservationCopyUuidInternal(operationId, snapshot.copyId()));
@@ -1334,8 +1619,8 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       }
       insert.executeBatch();
     }
-
   }
+
   private void inTransaction(SqlAction action) {
     try {
       boolean autoCommit = connection.getAutoCommit();
@@ -1344,7 +1629,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         action.run();
         connection.commit();
       } catch (Exception exception) {
-        try { connection.rollback(); } catch (SQLException ignored) { }
+        try {
+          connection.rollback();
+        } catch (SQLException ignored) {
+        }
         if (exception instanceof RuntimeException runtime) throw runtime;
         throw new IllegalStateException(exception);
       } finally {
@@ -1359,16 +1647,18 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     Objects.requireNonNull(copies, "copy ids are required");
     Set<CardCopyId> unique = new HashSet<>();
     for (CardCopyId copy : copies) {
-      if (copy == null || !unique.add(copy)) throw new IllegalArgumentException("duplicate copy id");
+      if (copy == null || !unique.add(copy))
+        throw new IllegalArgumentException("duplicate copy id");
     }
     return List.copyOf(copies);
   }
+
   private static boolean hasExactSnapshots(Reservation reservation) {
     return hasExactSnapshots(reservation.copyIds(), reservation.snapshots());
   }
 
-  private static boolean hasExactSnapshots(List<CardCopyId> copies,
-      List<SerializedItemSnapshot> snapshots) {
+  private static boolean hasExactSnapshots(
+      List<CardCopyId> copies, List<SerializedItemSnapshot> snapshots) {
     if (copies.size() != new HashSet<>(copies).size() || snapshots.size() != copies.size()) {
       return false;
     }
@@ -1378,12 +1668,15 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     }
     return snapshotIds.equals(new HashSet<>(copies));
   }
+
   private static boolean allowed(OperationStatus from, OperationStatus to) {
-    return to == OperationStatus.ABORTED && (from == OperationStatus.PREPARED
-        || from == OperationStatus.ESCROWED || from == OperationStatus.RETURN_PENDING
-        || from == OperationStatus.RETURNED)
-        || from == OperationStatus.PREPARED && (to == OperationStatus.ESCROWED
-        || to == OperationStatus.RETURN_PENDING)
+    return to == OperationStatus.ABORTED
+            && (from == OperationStatus.PREPARED
+                || from == OperationStatus.ESCROWED
+                || from == OperationStatus.RETURN_PENDING
+                || from == OperationStatus.RETURNED)
+        || from == OperationStatus.PREPARED
+            && (to == OperationStatus.ESCROWED || to == OperationStatus.RETURN_PENDING)
         || from == OperationStatus.ESCROWED && to == OperationStatus.RETURN_PENDING
         || from == OperationStatus.RETURN_PENDING && to == OperationStatus.RETURNED;
   }
@@ -1400,8 +1693,9 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     throw new IllegalStateException("invalid owner in database");
   }
 
-  private static void writeOwner(java.sql.PreparedStatement statement, int kindIndex, int idIndex,
-      CopyOwner owner) throws SQLException {
+  private static void writeOwner(
+      java.sql.PreparedStatement statement, int kindIndex, int idIndex, CopyOwner owner)
+      throws SQLException {
     statement.setString(kindIndex, owner.kind().name());
     if (owner.playerId() == null) statement.setNull(idIndex, java.sql.Types.VARCHAR);
     else statement.setString(idIndex, owner.playerId().toString());
@@ -1412,24 +1706,26 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   }
 
   @FunctionalInterface
-  private interface SqlAction { void run() throws Exception; }
+  private interface SqlAction {
+    void run() throws Exception;
+  }
 
   public static final class CustodyIntegrityException extends IllegalStateException
       implements CardCustodyPort.CustodyIntegrityFailure {
     private final UUID operationId;
     private final List<CardCopyId> expectedCopyIds;
 
-    public CustodyIntegrityException(UUID operationId, List<CardCopyId> expectedCopyIds,
-        String message) {
+    public CustodyIntegrityException(
+        UUID operationId, List<CardCopyId> expectedCopyIds, String message) {
       this(operationId, expectedCopyIds, message, null);
     }
 
-    public CustodyIntegrityException(UUID operationId, List<CardCopyId> expectedCopyIds,
-        String message, Throwable cause) {
+    public CustodyIntegrityException(
+        UUID operationId, List<CardCopyId> expectedCopyIds, String message, Throwable cause) {
       super(message, cause);
       this.operationId = Objects.requireNonNull(operationId, "operation id is required");
-      this.expectedCopyIds = List.copyOf(Objects.requireNonNull(expectedCopyIds,
-          "expected copy ids are required"));
+      this.expectedCopyIds =
+          List.copyOf(Objects.requireNonNull(expectedCopyIds, "expected copy ids are required"));
     }
 
     @Override
@@ -1447,47 +1743,96 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     }
   }
 
-  public record StoredCardCopy(CardCopyId copyId, CardId catalogId, CopyOwner owner) {
-    public StoredCardCopy {
-      Objects.requireNonNull(copyId); Objects.requireNonNull(catalogId); Objects.requireNonNull(owner);
-    }
-  }
-  public record Reservation(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
-      List<SerializedItemSnapshot> snapshots, OperationStatus status, List<CardCopyId> restoredCopyIds,
-      String matchId) {
-    public Reservation {
-      Objects.requireNonNull(operationId); Objects.requireNonNull(owner);
-      copyIds = List.copyOf(copyIds); snapshots = List.copyOf(snapshots); Objects.requireNonNull(status);
-      restoredCopyIds = List.copyOf(Objects.requireNonNull(restoredCopyIds));
-      if (matchId != null && matchId.isBlank()) throw new IllegalArgumentException("match id cannot be blank");
-      if (!copyIds.containsAll(restoredCopyIds)) throw new IllegalArgumentException("restored copy is not reserved");
+  public record CardIssuance(
+      CardCopyId copyId, CardId catalogId, CopyOwner owner, byte[] itemBytes) {
+    public CardIssuance {
+      Objects.requireNonNull(copyId, "copy id is required");
+      Objects.requireNonNull(catalogId, "catalog id is required");
+      Objects.requireNonNull(owner, "owner is required");
+      if (itemBytes == null || itemBytes.length == 0) {
+        throw new IllegalArgumentException("item bytes are required");
+      }
+      itemBytes = itemBytes.clone();
     }
 
-    public Reservation(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
-        List<SerializedItemSnapshot> snapshots, OperationStatus status, List<CardCopyId> restoredCopyIds) {
+    @Override
+    public byte[] itemBytes() {
+      return itemBytes.clone();
+    }
+  }
+
+  public record StoredCardCopy(CardCopyId copyId, CardId catalogId, CopyOwner owner) {
+    public StoredCardCopy {
+      Objects.requireNonNull(copyId);
+      Objects.requireNonNull(catalogId);
+      Objects.requireNonNull(owner);
+    }
+  }
+
+  public record Reservation(
+      UUID operationId,
+      CopyOwner owner,
+      List<CardCopyId> copyIds,
+      List<SerializedItemSnapshot> snapshots,
+      OperationStatus status,
+      List<CardCopyId> restoredCopyIds,
+      String matchId) {
+    public Reservation {
+      Objects.requireNonNull(operationId);
+      Objects.requireNonNull(owner);
+      copyIds = List.copyOf(copyIds);
+      snapshots = List.copyOf(snapshots);
+      Objects.requireNonNull(status);
+      restoredCopyIds = List.copyOf(Objects.requireNonNull(restoredCopyIds));
+      if (matchId != null && matchId.isBlank())
+        throw new IllegalArgumentException("match id cannot be blank");
+      if (!copyIds.containsAll(restoredCopyIds))
+        throw new IllegalArgumentException("restored copy is not reserved");
+    }
+
+    public Reservation(
+        UUID operationId,
+        CopyOwner owner,
+        List<CardCopyId> copyIds,
+        List<SerializedItemSnapshot> snapshots,
+        OperationStatus status,
+        List<CardCopyId> restoredCopyIds) {
       this(operationId, owner, copyIds, snapshots, status, restoredCopyIds, null);
     }
 
-    public Reservation(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
-        List<SerializedItemSnapshot> snapshots, OperationStatus status) {
+    public Reservation(
+        UUID operationId,
+        CopyOwner owner,
+        List<CardCopyId> copyIds,
+        List<SerializedItemSnapshot> snapshots,
+        OperationStatus status) {
       this(operationId, owner, copyIds, snapshots, status, List.of(), null);
     }
 
-    public List<CardCopyId> expectedCopyIds() { return copyIds; }
-  }
-
-  public record RecoveryRow(UUID operationId, CardCopyId copyId, CopyOwner owner,
-      SerializedItemSnapshot snapshot) {
-    public RecoveryRow {
-      Objects.requireNonNull(operationId); Objects.requireNonNull(copyId);
-      Objects.requireNonNull(owner); Objects.requireNonNull(snapshot);
+    public List<CardCopyId> expectedCopyIds() {
+      return copyIds;
     }
   }
-  public record CatalogSnapshot(String snapshotId, String source, String digest, String metadataJson) {
+
+  public record RecoveryRow(
+      UUID operationId, CardCopyId copyId, CopyOwner owner, SerializedItemSnapshot snapshot) {
+    public RecoveryRow {
+      Objects.requireNonNull(operationId);
+      Objects.requireNonNull(copyId);
+      Objects.requireNonNull(owner);
+      Objects.requireNonNull(snapshot);
+    }
+  }
+
+  public record CatalogSnapshot(
+      String snapshotId, String source, String digest, String metadataJson) {
     public CatalogSnapshot {
-      if (snapshotId == null || snapshotId.isBlank()) throw new IllegalArgumentException("snapshot id is required");
-      if (source == null || source.isBlank()) throw new IllegalArgumentException("source is required");
-      if (digest == null || digest.isBlank()) throw new IllegalArgumentException("digest is required");
+      if (snapshotId == null || snapshotId.isBlank())
+        throw new IllegalArgumentException("snapshot id is required");
+      if (source == null || source.isBlank())
+        throw new IllegalArgumentException("source is required");
+      if (digest == null || digest.isBlank())
+        throw new IllegalArgumentException("digest is required");
       Objects.requireNonNull(metadataJson, "metadata is required");
     }
   }

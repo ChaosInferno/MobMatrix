@@ -18,10 +18,10 @@ import org.aincraft.mobmatrix.domain.Square;
 /**
  * Immutable application-facing match view.
  *
- * <p>The view is a stable adapter around one committed, player-specific {@link MatchProjection}.
- * It deliberately exposes no executable match state or mutation operation. MapGui and other
- * adapters should use {@link #from(MatchProjection)} (or the rules overload) after the application
- * service commits a transition.
+ * <p>The view is a stable adapter around one committed, player-specific {@link MatchProjection}. It
+ * deliberately exposes no executable match state or mutation operation. MapGui and other adapters
+ * should use {@link #from(MatchProjection)} (or the rules overload) after the application service
+ * commits a transition.
  */
 public final class MatchView {
   private final MatchProjection projection;

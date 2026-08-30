@@ -1,6 +1,9 @@
 package org.aincraft.mobmatrix.domain;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -11,8 +14,11 @@ final class RandomTranscriptTest {
     RandomTranscript source = new RandomTranscript(17L);
     int first = source.nextInt("first-seat", 2);
     int second = source.nextInt("open-card", 5);
-    assertEquals(List.of(new RandomTranscript.Decision("first-seat", 2, first),
-        new RandomTranscript.Decision("open-card", 5, second)), source.decisions());
+    assertEquals(
+        List.of(
+            new RandomTranscript.Decision("first-seat", 2, first),
+            new RandomTranscript.Decision("open-card", 5, second)),
+        source.decisions());
     RandomTranscript replay = RandomTranscript.replay(source.decisions());
     assertEquals(first, replay.nextInt("first-seat", 2));
     assertEquals(second, replay.nextInt("open-card", 5));
@@ -23,39 +29,64 @@ final class RandomTranscriptTest {
     RandomTranscript transcript = new RandomTranscript(1L);
     assertThrows(IllegalArgumentException.class, () -> transcript.nextInt("", 2));
     assertThrows(IllegalArgumentException.class, () -> transcript.nextInt("x", 0));
-    RandomTranscript replay = RandomTranscript.replay(List.of(new RandomTranscript.Decision("x", 2, 1)));
+    RandomTranscript replay =
+        RandomTranscript.replay(List.of(new RandomTranscript.Decision("x", 2, 1)));
     assertThrows(IllegalArgumentException.class, () -> replay.nextInt("y", 2));
     assertThrows(IllegalArgumentException.class, () -> replay.nextInt("x", 3));
     assertEquals(1, replay.nextInt("x", 2));
     assertThrows(IllegalStateException.class, () -> replay.nextInt("x", 2));
   }
+
   @Test
   void nonReplayRestoreRequiresConsumedDecisionCursor() {
-    List<RandomTranscript.Decision> decisions = List.of(
-        new RandomTranscript.Decision("x", 2, 1));
-    assertThrows(IllegalArgumentException.class,
-        () -> RandomTranscript.restore(1L, decisions, false, 0));
+    List<RandomTranscript.Decision> decisions = List.of(new RandomTranscript.Decision("x", 2, 1));
+    assertThrows(
+        IllegalArgumentException.class, () -> RandomTranscript.restore(1L, decisions, false, 0));
     assertDoesNotThrow(() -> RandomTranscript.restore(1L, decisions, false, decisions.size()));
   }
- 
+
   @Test
   void stateTransitionsForkTranscriptAndRejectedChaosDoesNotConsumeDecision() {
-    MatchEngine.StartMatch start = new MatchEngine.StartMatch(new MatchId("chaos"), MatchEngineStandardTest.deck(1),
-        MatchEngineStandardTest.deck(6), MatchEngineStandardTest.fixtureCatalog(), new RuleSet(Rule.CHAOS), 21L,
-        java.time.Instant.parse("2026-01-01T00:00:00Z"));
+    MatchEngine.StartMatch start =
+        new MatchEngine.StartMatch(
+            new MatchId("chaos"),
+            MatchEngineStandardTest.deck(1),
+            MatchEngineStandardTest.deck(6),
+            MatchEngineStandardTest.fixtureCatalog(),
+            new RuleSet(Rule.CHAOS),
+            21L,
+            java.time.Instant.parse("2026-01-01T00:00:00Z"));
     MatchState before = MatchEngine.start(start).state();
     List<RandomTranscript.Decision> beforeDecisions = before.randomDecisions();
     PlayerSeat actor = before.currentSeat();
     CardCopyId playable = before.chaosChoice(actor);
-    CardCopyId illegal = before.hand(actor).stream().filter(card -> !card.copyId().equals(playable))
-        .findFirst().orElseThrow().copyId();
-    MatchEngine.MatchTransition rejected = MatchEngine.apply(before,
-        new MatchCommand.PlaceCard(actor, illegal, Square.CENTER, before.revision(), java.util.UUID.randomUUID(),
-            before.turnStartedAt()));
+    CardCopyId illegal =
+        before.hand(actor).stream()
+            .filter(card -> !card.copyId().equals(playable))
+            .findFirst()
+            .orElseThrow()
+            .copyId();
+    MatchEngine.MatchTransition rejected =
+        MatchEngine.apply(
+            before,
+            new MatchCommand.PlaceCard(
+                actor,
+                illegal,
+                Square.CENTER,
+                before.revision(),
+                java.util.UUID.randomUUID(),
+                before.turnStartedAt()));
     assertEquals(beforeDecisions, before.randomDecisions());
-    MatchEngine.MatchTransition accepted = MatchEngine.apply(before,
-        new MatchCommand.PlaceCard(actor, playable, Square.CENTER, before.revision(), java.util.UUID.randomUUID(),
-            before.turnStartedAt()));
+    MatchEngine.MatchTransition accepted =
+        MatchEngine.apply(
+            before,
+            new MatchCommand.PlaceCard(
+                actor,
+                playable,
+                Square.CENTER,
+                before.revision(),
+                java.util.UUID.randomUUID(),
+                before.turnStartedAt()));
     assertEquals(beforeDecisions, before.randomDecisions());
     assertTrue(accepted.state().randomDecisions().size() >= beforeDecisions.size());
     assertEquals(before.randomDecisions(), rejected.state().randomDecisions());
@@ -65,15 +96,24 @@ final class RandomTranscriptTest {
   void timeoutSelectionsAreRecordedWithoutMutatingPredecessor() {
     MatchState before = MatchEngine.start(MatchEngineStandardTest.fixtureStart(31L)).state();
     List<RandomTranscript.Decision> beforeDecisions = before.randomDecisions();
-    MatchEngine.MatchTransition timeout = MatchEngine.apply(before,
-        new MatchCommand.Timeout(before.currentSeat(), before.revision(), java.util.UUID.randomUUID(),
-            before.turnDeadline()));
+    MatchEngine.MatchTransition timeout =
+        MatchEngine.apply(
+            before,
+            new MatchCommand.Timeout(
+                before.currentSeat(),
+                before.revision(),
+                java.util.UUID.randomUUID(),
+                before.turnDeadline()));
     assertTrue(timeout.accepted());
     assertEquals(beforeDecisions, before.randomDecisions());
-    assertTrue(timeout.state().randomDecisions().stream().anyMatch(d -> d.label().startsWith("timeout-card-")));
-    assertTrue(timeout.state().randomDecisions().stream().anyMatch(d -> d.label().startsWith("timeout-square-")));
+    assertTrue(
+        timeout.state().randomDecisions().stream()
+            .anyMatch(d -> d.label().startsWith("timeout-card-")));
+    assertTrue(
+        timeout.state().randomDecisions().stream()
+            .anyMatch(d -> d.label().startsWith("timeout-square-")));
   }
- 
+
   @Test
   void forkKeepsIndependentCursorAndRandomSequence() {
     RandomTranscript source = new RandomTranscript(41L);

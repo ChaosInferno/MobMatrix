@@ -40,12 +40,25 @@ public final class MatchState {
   private final Set<CardCopyId> houseOwnedCopies;
   private final Map<PlayerSeat, CardCopyId> chaosChoices;
 
-  MatchState(MatchId matchId, CardCatalog catalog, MatchRules rules, Board board,
-      Map<PlayerSeat, List<HandCard>> hands, PlayerSeat currentSeat, long revision,
-      MatchResult result, Map<PlayerSeat, Long> bankMillis, Instant turnStartedAt,
-      Instant graceDeadline, Instant turnDeadline, Set<UUID> commandIds, long seed,
-      RandomTranscript transcript, Map<PlayerSeat, Set<CardCopyId>> revealedCards,
-      Map<CardCopyId, PlayerSeat> originalOwners, int consecutiveDraws,
+  MatchState(
+      MatchId matchId,
+      CardCatalog catalog,
+      MatchRules rules,
+      Board board,
+      Map<PlayerSeat, List<HandCard>> hands,
+      PlayerSeat currentSeat,
+      long revision,
+      MatchResult result,
+      Map<PlayerSeat, Long> bankMillis,
+      Instant turnStartedAt,
+      Instant graceDeadline,
+      Instant turnDeadline,
+      Set<UUID> commandIds,
+      long seed,
+      RandomTranscript transcript,
+      Map<PlayerSeat, Set<CardCopyId>> revealedCards,
+      Map<CardCopyId, PlayerSeat> originalOwners,
+      int consecutiveDraws,
       Map<PlayerSeat, DraftOfferings.SeatOffers> draftOfferings,
       Map<PlayerSeat, DraftOfferings.Selection> draftSelections,
       Map<PlayerSeat, CardCopyId> chaosChoices) {
@@ -77,7 +90,8 @@ public final class MatchState {
 
     EnumMap<PlayerSeat, Set<CardCopyId>> revealedCopy = new EnumMap<>(PlayerSeat.class);
     for (PlayerSeat seat : PlayerSeat.values()) {
-      revealedCopy.put(seat, Set.copyOf(Objects.requireNonNull(revealedCards.getOrDefault(seat, Set.of()))));
+      revealedCopy.put(
+          seat, Set.copyOf(Objects.requireNonNull(revealedCards.getOrDefault(seat, Set.of()))));
     }
     this.revealedCards = Map.copyOf(revealedCopy);
     this.originalOwners = Map.copyOf(Objects.requireNonNull(originalOwners));
@@ -102,91 +116,248 @@ public final class MatchState {
     this.houseOwnedCopies = Set.copyOf(houseCopies);
     this.chaosChoices = Map.copyOf(Objects.requireNonNull(chaosChoices));
   }
+
   /**
-   * Rehydrates a complete executable state from a durable snapshot. Card definitions must have
-   * been resolved by the caller from the persisted catalog snapshot before invoking this method.
+   * Rehydrates a complete executable state from a durable snapshot. Card definitions must have been
+   * resolved by the caller from the persisted catalog snapshot before invoking this method.
    */
-  public static MatchState rehydrate(MatchId matchId, CardCatalog catalog, MatchRules rules, Board board,
-      Map<PlayerSeat, List<HandCard>> hands, PlayerSeat currentSeat, long revision,
-      MatchResult result, Map<PlayerSeat, Long> bankMillis, Instant turnStartedAt,
-      Instant graceDeadline, Instant turnDeadline, Set<UUID> commandIds, long seed,
-      RandomTranscript transcript, Map<PlayerSeat, Set<CardCopyId>> revealedCards,
-      Map<CardCopyId, PlayerSeat> originalOwners, int consecutiveDraws,
+  public static MatchState rehydrate(
+      MatchId matchId,
+      CardCatalog catalog,
+      MatchRules rules,
+      Board board,
+      Map<PlayerSeat, List<HandCard>> hands,
+      PlayerSeat currentSeat,
+      long revision,
+      MatchResult result,
+      Map<PlayerSeat, Long> bankMillis,
+      Instant turnStartedAt,
+      Instant graceDeadline,
+      Instant turnDeadline,
+      Set<UUID> commandIds,
+      long seed,
+      RandomTranscript transcript,
+      Map<PlayerSeat, Set<CardCopyId>> revealedCards,
+      Map<CardCopyId, PlayerSeat> originalOwners,
+      int consecutiveDraws,
       Map<PlayerSeat, DraftOfferings.SeatOffers> draftOfferings,
       Map<PlayerSeat, DraftOfferings.Selection> draftSelections,
       Map<PlayerSeat, CardCopyId> chaosChoices) {
     Objects.requireNonNull(bankMillis, "bank values are required");
-    return new MatchState(matchId, catalog, rules, board, hands, currentSeat, revision, result,
-        bankMillis, turnStartedAt, graceDeadline, turnDeadline, commandIds, seed, transcript,
-        revealedCards, originalOwners, consecutiveDraws, draftOfferings, draftSelections, chaosChoices);
+    return new MatchState(
+        matchId,
+        catalog,
+        rules,
+        board,
+        hands,
+        currentSeat,
+        revision,
+        result,
+        bankMillis,
+        turnStartedAt,
+        graceDeadline,
+        turnDeadline,
+        commandIds,
+        seed,
+        transcript,
+        revealedCards,
+        originalOwners,
+        consecutiveDraws,
+        draftOfferings,
+        draftSelections,
+        chaosChoices);
   }
 
-  static MatchState initial(MatchId id, CardCatalog catalog, MatchRules rules,
-      Map<PlayerSeat, List<HandCard>> hands, PlayerSeat firstSeat, Instant start, long seed) {
+  static MatchState initial(
+      MatchId id,
+      CardCatalog catalog,
+      MatchRules rules,
+      Map<PlayerSeat, List<HandCard>> hands,
+      PlayerSeat firstSeat,
+      Instant start,
+      long seed) {
     return initial(id, catalog, rules, hands, firstSeat, start, seed, new RandomTranscript(seed));
   }
 
-  static MatchState initial(MatchId id, CardCatalog catalog, MatchRules rules,
-      Map<PlayerSeat, List<HandCard>> hands, PlayerSeat firstSeat, Instant start, long seed,
+  static MatchState initial(
+      MatchId id,
+      CardCatalog catalog,
+      MatchRules rules,
+      Map<PlayerSeat, List<HandCard>> hands,
+      PlayerSeat firstSeat,
+      Instant start,
+      long seed,
       RandomTranscript transcript) {
     return initial(id, catalog, rules, hands, firstSeat, start, seed, transcript, Map.of());
   }
 
-  static MatchState initial(MatchId id, CardCatalog catalog, MatchRules rules,
-      Map<PlayerSeat, List<HandCard>> hands, PlayerSeat firstSeat, Instant start, long seed,
-      RandomTranscript transcript, Map<PlayerSeat, Set<CardCopyId>> revealedCards) {
-    return initial(id, catalog, rules, hands, firstSeat, start, seed, transcript, revealedCards,
-        Map.of(), Map.of(), Map.of(), Map.of());
+  static MatchState initial(
+      MatchId id,
+      CardCatalog catalog,
+      MatchRules rules,
+      Map<PlayerSeat, List<HandCard>> hands,
+      PlayerSeat firstSeat,
+      Instant start,
+      long seed,
+      RandomTranscript transcript,
+      Map<PlayerSeat, Set<CardCopyId>> revealedCards) {
+    return initial(
+        id,
+        catalog,
+        rules,
+        hands,
+        firstSeat,
+        start,
+        seed,
+        transcript,
+        revealedCards,
+        Map.of(),
+        Map.of(),
+        Map.of(),
+        Map.of());
   }
 
-  static MatchState initial(MatchId id, CardCatalog catalog, MatchRules rules,
-      Map<PlayerSeat, List<HandCard>> hands, PlayerSeat firstSeat, Instant start, long seed,
-      RandomTranscript transcript, Map<PlayerSeat, Set<CardCopyId>> revealedCards,
+  static MatchState initial(
+      MatchId id,
+      CardCatalog catalog,
+      MatchRules rules,
+      Map<PlayerSeat, List<HandCard>> hands,
+      PlayerSeat firstSeat,
+      Instant start,
+      long seed,
+      RandomTranscript transcript,
+      Map<PlayerSeat, Set<CardCopyId>> revealedCards,
       Map<CardCopyId, PlayerSeat> temporarySwapOwners) {
-    return initial(id, catalog, rules, hands, firstSeat, start, seed, transcript, revealedCards,
-        temporarySwapOwners, Map.of(), Map.of(), Map.of());
+    return initial(
+        id,
+        catalog,
+        rules,
+        hands,
+        firstSeat,
+        start,
+        seed,
+        transcript,
+        revealedCards,
+        temporarySwapOwners,
+        Map.of(),
+        Map.of(),
+        Map.of());
   }
 
-  static MatchState initial(MatchId id, CardCatalog catalog, MatchRules rules,
-      Map<PlayerSeat, List<HandCard>> hands, PlayerSeat firstSeat, Instant start, long seed,
-      RandomTranscript transcript, Map<PlayerSeat, Set<CardCopyId>> revealedCards,
+  static MatchState initial(
+      MatchId id,
+      CardCatalog catalog,
+      MatchRules rules,
+      Map<PlayerSeat, List<HandCard>> hands,
+      PlayerSeat firstSeat,
+      Instant start,
+      long seed,
+      RandomTranscript transcript,
+      Map<PlayerSeat, Set<CardCopyId>> revealedCards,
       Map<CardCopyId, PlayerSeat> temporarySwapOwners,
       Map<PlayerSeat, DraftOfferings.SeatOffers> draftOfferings,
       Map<PlayerSeat, DraftOfferings.Selection> draftSelections,
       Map<PlayerSeat, CardCopyId> chaosChoices) {
-    return new MatchState(id, catalog, rules, Board.empty(), hands, firstSeat, 0, null,
+    return new MatchState(
+        id,
+        catalog,
+        rules,
+        Board.empty(),
+        hands,
+        firstSeat,
+        0,
+        null,
         Map.of(PlayerSeat.ONE, INITIAL_BANK_MILLIS, PlayerSeat.TWO, INITIAL_BANK_MILLIS),
-        start, start.plusMillis(GRACE_MILLIS), start.plusMillis(GRACE_MILLIS + INITIAL_BANK_MILLIS),
-        Set.of(), seed, transcript, revealedCards, temporarySwapOwners, 0,
-        draftOfferings, draftSelections, chaosChoices);
+        start,
+        start.plusMillis(GRACE_MILLIS),
+        start.plusMillis(GRACE_MILLIS + INITIAL_BANK_MILLIS),
+        Set.of(),
+        seed,
+        transcript,
+        revealedCards,
+        temporarySwapOwners,
+        0,
+        draftOfferings,
+        draftSelections,
+        chaosChoices);
   }
 
-  public MatchId matchId() { return matchId; }
-  public MatchId id() { return matchId; }
-  public CardCatalog catalog() { return catalog; }
-  public MatchRules rules() { return rules; }
-  public RuleSet ruleSet() { return ruleSet; }
-  public List<RandomTranscript.Decision> randomDecisions() { return transcript.decisions(); }
-  public RandomTranscript transcript() { return transcript.fork(); }
-  public Board board() { return board; }
-  public Map<PlayerSeat, Set<CardCopyId>> revealedCardsMap() { return revealedCards; }
+  public MatchId matchId() {
+    return matchId;
+  }
+
+  public MatchId id() {
+    return matchId;
+  }
+
+  public CardCatalog catalog() {
+    return catalog;
+  }
+
+  public MatchRules rules() {
+    return rules;
+  }
+
+  public RuleSet ruleSet() {
+    return ruleSet;
+  }
+
+  public List<RandomTranscript.Decision> randomDecisions() {
+    return transcript.decisions();
+  }
+
+  public RandomTranscript transcript() {
+    return transcript.fork();
+  }
+
+  public Board board() {
+    return board;
+  }
+
+  public Map<PlayerSeat, Set<CardCopyId>> revealedCardsMap() {
+    return revealedCards;
+  }
+
   public Set<CardCopyId> revealedCards(PlayerSeat seat) {
     return revealedCards.get(Objects.requireNonNull(seat));
   }
-  public Map<CardCopyId, PlayerSeat> originalOwners() { return originalOwners; }
+
+  public Map<CardCopyId, PlayerSeat> originalOwners() {
+    return originalOwners;
+  }
+
   /** Compatibility view retained for callers that used the pre-settlement name. */
-  public Map<CardCopyId, PlayerSeat> temporarySwapOwners() { return originalOwners; }
-  public Map<PlayerSeat, DraftOfferings.SeatOffers> draftOfferings() { return draftOfferings; }
+  public Map<CardCopyId, PlayerSeat> temporarySwapOwners() {
+    return originalOwners;
+  }
+
+  public Map<PlayerSeat, DraftOfferings.SeatOffers> draftOfferings() {
+    return draftOfferings;
+  }
+
   public DraftOfferings.SeatOffers draftOfferings(PlayerSeat seat) {
     return draftOfferings.get(Objects.requireNonNull(seat));
   }
-  public Map<PlayerSeat, DraftOfferings.Selection> draftSelections() { return draftSelections; }
+
+  public Map<PlayerSeat, DraftOfferings.Selection> draftSelections() {
+    return draftSelections;
+  }
+
   public DraftOfferings.Selection draftSelection(PlayerSeat seat) {
     return draftSelections.get(Objects.requireNonNull(seat));
   }
-  public Set<CardCopyId> houseOwnedCopies() { return houseOwnedCopies; }
-  public Map<PlayerSeat, CardCopyId> chaosChoices() { return chaosChoices; }
-  public CardCopyId chaosChoice(PlayerSeat seat) { return chaosChoices.get(Objects.requireNonNull(seat)); }
+
+  public Set<CardCopyId> houseOwnedCopies() {
+    return houseOwnedCopies;
+  }
+
+  public Map<PlayerSeat, CardCopyId> chaosChoices() {
+    return chaosChoices;
+  }
+
+  public CardCopyId chaosChoice(PlayerSeat seat) {
+    return chaosChoices.get(Objects.requireNonNull(seat));
+  }
 
   public Map<PlayerSeat, List<CardCopy>> settlementCopies() {
     EnumMap<PlayerSeat, List<CardCopy>> result = new EnumMap<>(PlayerSeat.class);
@@ -198,24 +369,56 @@ public final class MatchState {
         }
       }
     }
-    for (Board.Cell cell : board.cells()) if (cell != null && !houseOwnedCopies.contains(cell.copy().copyId())) {
-      result.get(originalOwners.getOrDefault(cell.copy().copyId(), cell.owner())).add(cell.copy());
-    }
+    for (Board.Cell cell : board.cells())
+      if (cell != null && !houseOwnedCopies.contains(cell.copy().copyId())) {
+        result
+            .get(originalOwners.getOrDefault(cell.copy().copyId(), cell.owner()))
+            .add(cell.copy());
+      }
     EnumMap<PlayerSeat, List<CardCopy>> immutable = new EnumMap<>(PlayerSeat.class);
     for (PlayerSeat seat : PlayerSeat.values()) immutable.put(seat, List.copyOf(result.get(seat)));
     return Map.copyOf(immutable);
   }
 
-  public List<HandCard> hand(PlayerSeat seat) { return hands.get(Objects.requireNonNull(seat)); }
-  public List<HandCard> handCards(PlayerSeat seat) { return hand(seat); }
-  public List<HandCard> availableCards(PlayerSeat seat) { return hand(seat); }
-  public Map<PlayerSeat, List<HandCard>> hands() { return hands; }
-  public PlayerSeat currentSeat() { return currentSeat; }
-  public long revision() { return revision; }
-  public MatchResult result() { return result; }
-  public boolean isFinished() { return result != null; }
-  public int consecutiveDraws() { return consecutiveDraws; }
-  public Map<PlayerSeat, Long> bankMillis() { return bankMillis; }
+  public List<HandCard> hand(PlayerSeat seat) {
+    return hands.get(Objects.requireNonNull(seat));
+  }
+
+  public List<HandCard> handCards(PlayerSeat seat) {
+    return hand(seat);
+  }
+
+  public List<HandCard> availableCards(PlayerSeat seat) {
+    return hand(seat);
+  }
+
+  public Map<PlayerSeat, List<HandCard>> hands() {
+    return hands;
+  }
+
+  public PlayerSeat currentSeat() {
+    return currentSeat;
+  }
+
+  public long revision() {
+    return revision;
+  }
+
+  public MatchResult result() {
+    return result;
+  }
+
+  public boolean isFinished() {
+    return result != null;
+  }
+
+  public int consecutiveDraws() {
+    return consecutiveDraws;
+  }
+
+  public Map<PlayerSeat, Long> bankMillis() {
+    return bankMillis;
+  }
 
   public long remainingBankMillis(PlayerSeat seat, Instant now) {
     Objects.requireNonNull(seat, "seat is required");
@@ -246,9 +449,17 @@ public final class MatchState {
     return Duration.between(now, turnDeadline).toMillis();
   }
 
-  public Instant turnStartedAt() { return turnStartedAt; }
-  public Instant graceDeadline() { return graceDeadline; }
-  public Instant turnDeadline() { return turnDeadline; }
+  public Instant turnStartedAt() {
+    return turnStartedAt;
+  }
+
+  public Instant graceDeadline() {
+    return graceDeadline;
+  }
+
+  public Instant turnDeadline() {
+    return turnDeadline;
+  }
 
   boolean isTurnExpired(Instant now) {
     Objects.requireNonNull(now, "time is required");
@@ -259,50 +470,159 @@ public final class MatchState {
     return Math.max(0L, Duration.between(start, end).toMillis());
   }
 
-  public boolean hasCommand(UUID id) { return commandIds.contains(id); }
-  public long seed() { return seed; }
-  public Set<UUID> commandIds() { return commandIds; }
+  public boolean hasCommand(UUID id) {
+    return commandIds.contains(id);
+  }
+
+  public long seed() {
+    return seed;
+  }
+
+  public Set<UUID> commandIds() {
+    return commandIds;
+  }
 
   public MatchState withCurrentSeat(PlayerSeat seat) {
-    return new MatchState(matchId, catalog, rules, board, hands, seat, revision, result, bankMillis,
-        turnStartedAt, graceDeadline, turnDeadline, commandIds, seed, transcript, revealedCards,
-        originalOwners, consecutiveDraws, draftOfferings, draftSelections, chaosChoices);
+    return new MatchState(
+        matchId,
+        catalog,
+        rules,
+        board,
+        hands,
+        seat,
+        revision,
+        result,
+        bankMillis,
+        turnStartedAt,
+        graceDeadline,
+        turnDeadline,
+        commandIds,
+        seed,
+        transcript,
+        revealedCards,
+        originalOwners,
+        consecutiveDraws,
+        draftOfferings,
+        draftSelections,
+        chaosChoices);
   }
 
-  MatchState next(Board nextBoard, Map<PlayerSeat, List<HandCard>> nextHands, PlayerSeat nextSeat,
-      long nextRevision, MatchResult nextResult, Map<PlayerSeat, Long> nextBanks,
-      Instant nextStarted, Set<UUID> nextCommands, RandomTranscript nextTranscript,
-      Map<PlayerSeat, Set<CardCopyId>> nextRevealed, Map<PlayerSeat, CardCopyId> nextChaos,
+  MatchState next(
+      Board nextBoard,
+      Map<PlayerSeat, List<HandCard>> nextHands,
+      PlayerSeat nextSeat,
+      long nextRevision,
+      MatchResult nextResult,
+      Map<PlayerSeat, Long> nextBanks,
+      Instant nextStarted,
+      Set<UUID> nextCommands,
+      RandomTranscript nextTranscript,
+      Map<PlayerSeat, Set<CardCopyId>> nextRevealed,
+      Map<PlayerSeat, CardCopyId> nextChaos,
       int nextConsecutiveDraws) {
-    return new MatchState(matchId, catalog, rules, nextBoard, nextHands, nextSeat, nextRevision,
-        nextResult, nextBanks, nextStarted, nextStarted.plusMillis(GRACE_MILLIS),
-        nextStarted.plusMillis(GRACE_MILLIS + nextBanks.get(nextSeat)), nextCommands, seed,
-        nextTranscript, nextRevealed, originalOwners, nextConsecutiveDraws,
-        draftOfferings, draftSelections, nextChaos);
+    return new MatchState(
+        matchId,
+        catalog,
+        rules,
+        nextBoard,
+        nextHands,
+        nextSeat,
+        nextRevision,
+        nextResult,
+        nextBanks,
+        nextStarted,
+        nextStarted.plusMillis(GRACE_MILLIS),
+        nextStarted.plusMillis(GRACE_MILLIS + nextBanks.get(nextSeat)),
+        nextCommands,
+        seed,
+        nextTranscript,
+        nextRevealed,
+        originalOwners,
+        nextConsecutiveDraws,
+        draftOfferings,
+        draftSelections,
+        nextChaos);
   }
 
-  MatchState next(Board nextBoard, Map<PlayerSeat, List<HandCard>> nextHands, PlayerSeat nextSeat,
-      long nextRevision, MatchResult nextResult, Map<PlayerSeat, Long> nextBanks,
-      Instant nextStarted, Set<UUID> nextCommands, RandomTranscript nextTranscript,
-      Map<PlayerSeat, Set<CardCopyId>> nextRevealed, Map<PlayerSeat, CardCopyId> nextChaos) {
-    return next(nextBoard, nextHands, nextSeat, nextRevision, nextResult, nextBanks, nextStarted,
-        nextCommands, nextTranscript, nextRevealed, nextChaos, consecutiveDraws);
+  MatchState next(
+      Board nextBoard,
+      Map<PlayerSeat, List<HandCard>> nextHands,
+      PlayerSeat nextSeat,
+      long nextRevision,
+      MatchResult nextResult,
+      Map<PlayerSeat, Long> nextBanks,
+      Instant nextStarted,
+      Set<UUID> nextCommands,
+      RandomTranscript nextTranscript,
+      Map<PlayerSeat, Set<CardCopyId>> nextRevealed,
+      Map<PlayerSeat, CardCopyId> nextChaos) {
+    return next(
+        nextBoard,
+        nextHands,
+        nextSeat,
+        nextRevision,
+        nextResult,
+        nextBanks,
+        nextStarted,
+        nextCommands,
+        nextTranscript,
+        nextRevealed,
+        nextChaos,
+        consecutiveDraws);
   }
 
-  MatchState next(Board nextBoard, Map<PlayerSeat, List<HandCard>> nextHands, PlayerSeat nextSeat,
-      long nextRevision, MatchResult nextResult, Map<PlayerSeat, Long> nextBanks,
-      Instant nextStarted, Set<UUID> nextCommands) {
-    return next(nextBoard, nextHands, nextSeat, nextRevision, nextResult, nextBanks, nextStarted,
-        nextCommands, transcript, revealedCards, chaosChoices);
+  MatchState next(
+      Board nextBoard,
+      Map<PlayerSeat, List<HandCard>> nextHands,
+      PlayerSeat nextSeat,
+      long nextRevision,
+      MatchResult nextResult,
+      Map<PlayerSeat, Long> nextBanks,
+      Instant nextStarted,
+      Set<UUID> nextCommands) {
+    return next(
+        nextBoard,
+        nextHands,
+        nextSeat,
+        nextRevision,
+        nextResult,
+        nextBanks,
+        nextStarted,
+        nextCommands,
+        transcript,
+        revealedCards,
+        chaosChoices);
   }
 
-  MatchState restartAfterDraw(Map<PlayerSeat, List<HandCard>> freshHands, PlayerSeat firstSeat,
-      Instant start, Set<UUID> nextCommands, RandomTranscript nextTranscript,
-      Map<PlayerSeat, Set<CardCopyId>> nextRevealed, Map<PlayerSeat, CardCopyId> nextChaos) {
-    return new MatchState(matchId, catalog, rules, Board.empty(), freshHands, firstSeat, revision + 1,
-        null, Map.of(PlayerSeat.ONE, INITIAL_BANK_MILLIS, PlayerSeat.TWO, INITIAL_BANK_MILLIS), start,
-        start.plusMillis(GRACE_MILLIS), start.plusMillis(GRACE_MILLIS + INITIAL_BANK_MILLIS),
-        nextCommands, seed, nextTranscript, nextRevealed, originalOwners,
-        consecutiveDraws + 1, draftOfferings, draftSelections, nextChaos);
+  MatchState restartAfterDraw(
+      Map<PlayerSeat, List<HandCard>> freshHands,
+      PlayerSeat firstSeat,
+      Instant start,
+      Set<UUID> nextCommands,
+      RandomTranscript nextTranscript,
+      Map<PlayerSeat, Set<CardCopyId>> nextRevealed,
+      Map<PlayerSeat, CardCopyId> nextChaos) {
+    return new MatchState(
+        matchId,
+        catalog,
+        rules,
+        Board.empty(),
+        freshHands,
+        firstSeat,
+        revision + 1,
+        null,
+        Map.of(PlayerSeat.ONE, INITIAL_BANK_MILLIS, PlayerSeat.TWO, INITIAL_BANK_MILLIS),
+        start,
+        start.plusMillis(GRACE_MILLIS),
+        start.plusMillis(GRACE_MILLIS + INITIAL_BANK_MILLIS),
+        nextCommands,
+        seed,
+        nextTranscript,
+        nextRevealed,
+        originalOwners,
+        consecutiveDraws + 1,
+        draftOfferings,
+        draftSelections,
+        nextChaos);
   }
 }

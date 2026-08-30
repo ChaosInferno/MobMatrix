@@ -19,14 +19,21 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
   private final Map<UUID, MutableEntry> entries = new HashMap<>();
 
   @Override
-  public synchronized void prepare(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
+  public synchronized void prepare(
+      UUID operationId,
+      CopyOwner owner,
+      List<CardCopyId> copyIds,
       List<SerializedItemSnapshot> snapshots) {
     prepare(operationId, owner, copyIds, snapshots, null);
   }
 
   @Override
-  public synchronized void prepare(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
-      List<SerializedItemSnapshot> snapshots, String matchId) {
+  public synchronized void prepare(
+      UUID operationId,
+      CopyOwner owner,
+      List<CardCopyId> copyIds,
+      List<SerializedItemSnapshot> snapshots,
+      String matchId) {
     List<CardCopyId> copies = List.copyOf(copyIds);
     List<SerializedItemSnapshot> exactSnapshots = List.copyOf(snapshots);
     if (!hasExactSnapshots(copies, exactSnapshots)) {
@@ -34,7 +41,8 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
     }
     MutableEntry existing = entries.get(operationId);
     if (existing != null) {
-      if (!existing.owner.equals(owner) || !existing.copyIds.equals(copies)
+      if (!existing.owner.equals(owner)
+          || !existing.copyIds.equals(copies)
           || !java.util.Objects.equals(existing.matchId, matchId)) {
         throw new IllegalStateException("operation does not match existing reservation");
       }
@@ -42,14 +50,21 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
     }
     for (MutableEntry other : entries.values()) {
       if ((other.status == CardCustodyPort.OperationStatus.PREPARED
-          || other.status == CardCustodyPort.OperationStatus.ESCROWED
-          || other.status == CardCustodyPort.OperationStatus.RETURN_PENDING)
+              || other.status == CardCustodyPort.OperationStatus.ESCROWED
+              || other.status == CardCustodyPort.OperationStatus.RETURN_PENDING)
           && other.copyIds.stream().anyMatch(copies::contains)) {
         throw new IllegalStateException("copy is already reserved");
       }
     }
-    entries.put(operationId, new MutableEntry(operationId, owner, copies,
-        exactSnapshots, CardCustodyPort.OperationStatus.PREPARED, matchId));
+    entries.put(
+        operationId,
+        new MutableEntry(
+            operationId,
+            owner,
+            copies,
+            exactSnapshots,
+            CardCustodyPort.OperationStatus.PREPARED,
+            matchId));
   }
 
   @Override
@@ -70,6 +85,7 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
     }
     return List.copyOf(result);
   }
+
   @Override
   public synchronized Set<CardCopyId> reservedCopyIds() {
     Set<CardCopyId> result = new HashSet<>();
@@ -134,16 +150,16 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
   }
 
   @Override
-  public synchronized void addRecovery(UUID operationId, CopyOwner owner,
-      SerializedItemSnapshot snapshot) {
+  public synchronized void addRecovery(
+      UUID operationId, CopyOwner owner, SerializedItemSnapshot snapshot) {
     MutableEntry entry = require(operationId);
     if (!entry.owner.equals(owner) || !entry.copyIds.contains(snapshot.copyId())) {
       throw new IllegalStateException("recovery row does not match reservation");
     }
   }
 
-  private static boolean hasExactSnapshots(List<CardCopyId> copies,
-      List<SerializedItemSnapshot> snapshots) {
+  private static boolean hasExactSnapshots(
+      List<CardCopyId> copies, List<SerializedItemSnapshot> snapshots) {
     if (copies.size() != new HashSet<>(copies).size() || snapshots.size() != copies.size()) {
       return false;
     }
@@ -169,8 +185,12 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
     private final String matchId;
     private CardCustodyPort.OperationStatus status;
 
-    private MutableEntry(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
-        List<SerializedItemSnapshot> snapshots, CardCustodyPort.OperationStatus status,
+    private MutableEntry(
+        UUID operationId,
+        CopyOwner owner,
+        List<CardCopyId> copyIds,
+        List<SerializedItemSnapshot> snapshots,
+        CardCustodyPort.OperationStatus status,
         String matchId) {
       this.operationId = operationId;
       this.owner = owner;

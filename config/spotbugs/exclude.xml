@@ -1,3 +1,49 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <FindBugsFilter>
+  <!-- These aggregate accessors expose immutable values; SpotBugs cannot infer their value semantics. -->
+  <Match>
+    <Class name="org.aincraft.mobmatrix.domain.MatchEngine$MatchTransition"/>
+    <Bug code="EI"/>
+  </Match>
+  <Match>
+    <Class name="org.aincraft.mobmatrix.domain.MatchEngine$MatchTransition"/>
+    <Bug code="EI2"/>
+  </Match>
+  <Match>
+    <Class name="org.aincraft.mobmatrix.domain.MatchEngine$StartMatch"/>
+    <Bug code="EI"/>
+  </Match>
+  <Match>
+    <Class name="org.aincraft.mobmatrix.domain.MatchEngine$StartMatch"/>
+    <Bug code="EI2"/>
+  </Match>
+  <Match>
+    <Class name="org.aincraft.mobmatrix.domain.PlacementResolver$Resolution"/>
+    <Bug code="EI"/>
+  </Match>
+  <Match>
+    <Class name="org.aincraft.mobmatrix.domain.PlacementResolver$Resolution"/>
+    <Bug code="EI2"/>
+  </Match>
+  <Match>
+    <Class name="org.aincraft.mobmatrix.domain.MatchState"/>
+    <Bug code="EI"/>
+  </Match>
+  <Match>
+    <Class name="org.aincraft.mobmatrix.application.MatchApplicationService$MatchStartResult"/>
+    <Bug code="EI"/>
+  </Match>
+  <Match>
+    <Class name="org.aincraft.mobmatrix.application.MatchApplicationService$MatchStartResult"/>
+    <Bug code="EI2"/>
+  </Match>
+  <Match>
+    <Class name="org.aincraft.mobmatrix.storage.Database"/>
+    <Bug code="EI"/>
+  </Match>
+  <!-- Multiline SQL is deliberately passed to String.formatted; platform line endings are irrelevant. -->
+  <Match>
+    <Class name="org.aincraft.mobmatrix.storage.SchemaMigrator"/>
+    <Bug code="FS"/>
+  </Match>
 </FindBugsFilter>

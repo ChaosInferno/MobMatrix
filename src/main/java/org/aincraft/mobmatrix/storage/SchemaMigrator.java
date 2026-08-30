@@ -10,7 +10,7 @@ import java.util.Set;
 
 /** Explicit, repeatable schema migrations for custody and active-match state. */
 public final class SchemaMigrator {
-  public static final int CURRENT_VERSION = 8;
+  public static final int CURRENT_VERSION = 9;
 
   private SchemaMigrator() {}
 
@@ -22,14 +22,14 @@ public final class SchemaMigrator {
     for (int next = version + 1; next <= CURRENT_VERSION; next++) {
       applyMigration(connection, next);
     }
-    if (CURRENT_VERSION >= 7) applyV7(connection);
-    if (CURRENT_VERSION >= 8) applyV8(connection);
+    if (CURRENT_VERSION >= 9) applyV9(connection);
     validateSchema(connection);
   }
 
   private static void ensureMigrationTable(Connection connection) throws SQLException {
     try (var statement = connection.createStatement()) {
-      statement.execute("""
+      statement.execute(
+          """
           CREATE TABLE IF NOT EXISTS schema_migrations (
             version INTEGER PRIMARY KEY,
             applied_at TEXT NOT NULL
@@ -51,24 +51,32 @@ public final class SchemaMigrator {
         case 6 -> applyV6(connection);
         case 7 -> applyV7(connection);
         case 8 -> applyV8(connection);
+        case 9 -> applyV9(connection);
+        default -> throw new IllegalArgumentException("unsupported schema migration: " + version);
       }
-      try (var insert = connection.prepareStatement(
-          "INSERT INTO schema_migrations(version, applied_at) VALUES (?, CURRENT_TIMESTAMP)")) {
+      try (var insert =
+          connection.prepareStatement(
+              "INSERT INTO schema_migrations(version, applied_at) VALUES (?, CURRENT_TIMESTAMP)")) {
         insert.setInt(1, version);
         insert.executeUpdate();
       }
       connection.commit();
     } catch (SQLException | RuntimeException exception) {
-      try { connection.rollback(); } catch (SQLException ignored) { }
+      try {
+        connection.rollback();
+      } catch (SQLException ignored) {
+      }
       if (exception instanceof SQLException sql) throw sql;
       throw exception;
     } finally {
       connection.setAutoCommit(autoCommit);
     }
   }
+
   private static void ensureStartBindings(Connection connection) throws SQLException {
     try (var statement = connection.createStatement()) {
-      statement.execute("""
+      statement.execute(
+          """
           CREATE TABLE IF NOT EXISTS match_start_bindings (
             match_id TEXT PRIMARY KEY REFERENCES matches(match_id) ON DELETE CASCADE,
             binding_version INTEGER NOT NULL CHECK (binding_version > 0),
@@ -89,7 +97,6 @@ public final class SchemaMigrator {
           """);
     }
   }
-
 
   public static int currentVersion(Connection connection) throws SQLException {
     Objects.requireNonNull(connection, "connection is required");
@@ -121,22 +128,80 @@ public final class SchemaMigrator {
 
   private static void validateSchema(Connection connection) throws SQLException {
     String[][] required = {
-        {"catalog_snapshots", "snapshot_id", "source", "digest", "created_at", "metadata_json"},
-        {"card_definitions", "snapshot_id", "catalog_id", "public_number", "name", "stars", "type",
-            "top_value", "right_value", "bottom_value", "left_value", "sale_price"},
-        {"card_copies", "copy_uuid", "catalog_id", "owner_kind", "owner_uuid", "created_at"},
-        {"reservations", "operation_id", "owner_kind", "owner_uuid", "match_id", "status",
-            "created_at", "updated_at"},
-        {"reservation_copies", "operation_id", "copy_uuid"},
-        {"escrow_items", "operation_id", "copy_uuid", "item_bytes"},
-        {"matches", "match_id", "revision", "status", "state_bytes", "state_digest",
-            "transcript_json", "updated_at"},
-        {"recovery_rows", "recovery_id", "operation_id", "copy_uuid", "owner_kind", "owner_uuid",
-            "item_bytes", "status"},
-        {"reservation_restored", "operation_id", "copy_uuid"},
-        {"match_start_bindings", "match_id", "binding_version", "request_identity",
-            "one_owner_kind", "one_owner_uuid", "one_operation_id", "one_copy_ids",
-            "two_owner_kind", "two_owner_uuid", "two_operation_id", "two_copy_ids"}
+      {"catalog_snapshots", "snapshot_id", "source", "digest", "created_at", "metadata_json"},
+      {
+        "card_definitions",
+        "snapshot_id",
+        "catalog_id",
+        "public_number",
+        "name",
+        "stars",
+        "type",
+        "top_value",
+        "right_value",
+        "bottom_value",
+        "left_value",
+        "sale_price"
+      },
+      {"card_copies", "copy_uuid", "catalog_id", "owner_kind", "owner_uuid", "created_at"},
+      {
+        "reservations",
+        "operation_id",
+        "owner_kind",
+        "owner_uuid",
+        "match_id",
+        "status",
+        "created_at",
+        "updated_at"
+      },
+      {"reservation_copies", "operation_id", "copy_uuid"},
+      {"escrow_items", "operation_id", "copy_uuid", "item_bytes"},
+      {
+        "matches",
+        "match_id",
+        "revision",
+        "status",
+        "state_bytes",
+        "state_digest",
+        "transcript_json",
+        "updated_at"
+      },
+      {
+        "recovery_rows",
+        "recovery_id",
+        "operation_id",
+        "copy_uuid",
+        "owner_kind",
+        "owner_uuid",
+        "item_bytes",
+        "status"
+      },
+      {"reservation_restored", "operation_id", "copy_uuid"},
+      {
+        "card_issuances",
+        "copy_uuid",
+        "catalog_id",
+        "owner_kind",
+        "owner_uuid",
+        "item_bytes",
+        "status",
+        "created_at",
+        "updated_at"
+      },
+      {
+        "match_start_bindings",
+        "match_id",
+        "binding_version",
+        "request_identity",
+        "one_owner_kind",
+        "one_owner_uuid",
+        "one_operation_id",
+        "one_copy_ids",
+        "two_owner_kind",
+        "two_owner_uuid",
+        "two_operation_id",
+        "two_copy_ids"
+      }
     };
     for (String[] table : required) {
       Set<String> columns = tableColumns(connection, table[0]);
@@ -145,19 +210,21 @@ public final class SchemaMigrator {
       }
       for (int index = 1; index < table.length; index++) {
         if (!columns.contains(table[index])) {
-          throw new SQLException("schema migration incomplete: missing column "
-              + table[0] + "." + table[index]);
+          throw new SQLException(
+              "schema migration incomplete: missing column " + table[0] + "." + table[index]);
         }
       }
     }
     if (!hasRequiredCopyUuidIndex(connection)) {
-      throw new SQLException("schema migration incomplete: missing case-insensitive card copy UUID index");
+      throw new SQLException(
+          "schema migration incomplete: missing case-insensitive card copy UUID index");
     }
   }
 
   private static Set<String> tableColumns(Connection connection, String table) throws SQLException {
     Set<String> columns = new HashSet<>();
-    try (var query = connection.createStatement().executeQuery("PRAGMA table_info(" + table + ")")) {
+    try (var statement = connection.createStatement();
+        var query = statement.executeQuery("PRAGMA table_info(" + table + ")")) {
       while (query.next()) columns.add(query.getString("name"));
     }
     return columns;
@@ -165,7 +232,8 @@ public final class SchemaMigrator {
 
   private static void applyV1(Connection connection) throws SQLException {
     try (var statement = connection.createStatement()) {
-      statement.execute("""
+      statement.execute(
+          """
           CREATE TABLE IF NOT EXISTS catalog_snapshots (
             snapshot_id TEXT PRIMARY KEY,
             source TEXT NOT NULL,
@@ -174,7 +242,8 @@ public final class SchemaMigrator {
             metadata_json TEXT NOT NULL
           )
           """);
-      statement.execute("""
+      statement.execute(
+          """
           CREATE TABLE IF NOT EXISTS card_definitions (
             snapshot_id TEXT NOT NULL REFERENCES catalog_snapshots(snapshot_id),
             catalog_id INTEGER NOT NULL,
@@ -191,7 +260,8 @@ public final class SchemaMigrator {
             UNIQUE (snapshot_id, public_number)
           )
           """);
-      statement.execute("""
+      statement.execute(
+          """
           CREATE TABLE IF NOT EXISTS card_copies (
             copy_uuid TEXT PRIMARY KEY,
             catalog_id INTEGER NOT NULL,
@@ -202,7 +272,8 @@ public final class SchemaMigrator {
                    (owner_kind = 'HOUSE' AND owner_uuid IS NULL))
           )
           """);
-      statement.execute("""
+      statement.execute(
+          """
           CREATE TABLE IF NOT EXISTS reservations (
             operation_id TEXT PRIMARY KEY,
             owner_kind TEXT NOT NULL CHECK (owner_kind IN ('PLAYER', 'HOUSE')),
@@ -214,14 +285,16 @@ public final class SchemaMigrator {
                    (owner_kind = 'HOUSE' AND owner_uuid IS NULL))
           )
           """);
-      statement.execute("""
+      statement.execute(
+          """
           CREATE TABLE IF NOT EXISTS reservation_copies (
             operation_id TEXT NOT NULL REFERENCES reservations(operation_id) ON DELETE CASCADE,
             copy_uuid TEXT NOT NULL REFERENCES card_copies(copy_uuid),
             PRIMARY KEY (operation_id, copy_uuid)
           )
           """);
-      statement.execute("""
+      statement.execute(
+          """
           CREATE TABLE IF NOT EXISTS escrow_items (
             operation_id TEXT NOT NULL REFERENCES reservations(operation_id) ON DELETE CASCADE,
             copy_uuid TEXT NOT NULL,
@@ -231,7 +304,8 @@ public final class SchemaMigrator {
               REFERENCES reservation_copies(operation_id, copy_uuid) ON DELETE CASCADE
           )
           """);
-      statement.execute("""
+      statement.execute(
+          """
           CREATE TABLE IF NOT EXISTS matches (
             match_id TEXT PRIMARY KEY,
             revision INTEGER NOT NULL CHECK (revision >= 0),
@@ -241,7 +315,8 @@ public final class SchemaMigrator {
             updated_at TEXT NOT NULL
           )
           """);
-      statement.execute("""
+      statement.execute(
+          """
           CREATE TABLE IF NOT EXISTS recovery_rows (
             recovery_id INTEGER PRIMARY KEY AUTOINCREMENT,
             operation_id TEXT NOT NULL,
@@ -258,7 +333,8 @@ public final class SchemaMigrator {
                    (owner_kind = 'HOUSE' AND owner_uuid IS NULL))
           )
           """);
-      statement.execute("""
+      statement.execute(
+          """
           CREATE TABLE IF NOT EXISTS reservation_restored (
             operation_id TEXT NOT NULL,
             copy_uuid TEXT NOT NULL,
@@ -267,7 +343,8 @@ public final class SchemaMigrator {
               REFERENCES reservation_copies(operation_id, copy_uuid) ON DELETE CASCADE
           )
           """);
-      statement.execute("""
+      statement.execute(
+          """
           CREATE TRIGGER IF NOT EXISTS active_copy_reservation_guard
           BEFORE INSERT ON reservation_copies
           WHEN EXISTS (
@@ -280,22 +357,32 @@ public final class SchemaMigrator {
             SELECT RAISE(ABORT, 'copy is already reserved');
           END
           """);
-      statement.execute("CREATE INDEX IF NOT EXISTS recovery_pending ON recovery_rows(status, owner_uuid)");
+      statement.execute(
+          "CREATE INDEX IF NOT EXISTS recovery_pending ON recovery_rows(status, owner_uuid)");
     }
   }
+
   private static void applyV2(Connection connection) throws SQLException {
     Map<Integer, Set<String>> foreignKeys = new HashMap<>();
-    try (var query = connection.createStatement().executeQuery("PRAGMA foreign_key_list(recovery_rows)")) {
+    try (var statement = connection.createStatement();
+        var query = statement.executeQuery("PRAGMA foreign_key_list(recovery_rows)")) {
       while (query.next()) {
-        foreignKeys.computeIfAbsent(query.getInt("id"), ignored -> new HashSet<>())
+        foreignKeys
+            .computeIfAbsent(query.getInt("id"), ignored -> new HashSet<>())
             .add(query.getString("from") + "->" + query.getString("to"));
       }
     }
-    boolean composite = foreignKeys.values().stream().anyMatch(keys -> keys.contains("operation_id->operation_id")
-        && keys.contains("copy_uuid->copy_uuid"));
+    boolean composite =
+        foreignKeys.values().stream()
+            .anyMatch(
+                keys ->
+                    keys.contains("operation_id->operation_id")
+                        && keys.contains("copy_uuid->copy_uuid"));
     try (var statement = connection.createStatement()) {
       if (!composite) {
-        try (var invalid = statement.executeQuery("""
+        try (var invalid =
+            statement.executeQuery(
+                """
             SELECT COUNT(*) FROM recovery_rows rr
             WHERE NOT EXISTS (
               SELECT 1 FROM reservations r
@@ -311,7 +398,8 @@ public final class SchemaMigrator {
         }
         statement.execute("ALTER TABLE recovery_rows RENAME TO recovery_rows_legacy");
         statement.execute("DROP INDEX IF EXISTS recovery_pending");
-        statement.execute("""
+        statement.execute(
+            """
             CREATE TABLE recovery_rows (
               recovery_id INTEGER PRIMARY KEY AUTOINCREMENT,
               operation_id TEXT NOT NULL,
@@ -328,14 +416,16 @@ public final class SchemaMigrator {
                      (owner_kind = 'HOUSE' AND owner_uuid IS NULL))
             )
             """);
-      statement.execute("""
+        statement.execute(
+            """
           INSERT INTO recovery_rows(recovery_id, operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status)
           SELECT recovery_id, operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status
           FROM recovery_rows_legacy
           """);
         statement.execute("DROP TABLE recovery_rows_legacy");
       }
-      statement.execute("""
+      statement.execute(
+          """
           CREATE TABLE IF NOT EXISTS reservation_restored (
             operation_id TEXT NOT NULL,
             copy_uuid TEXT NOT NULL,
@@ -344,9 +434,11 @@ public final class SchemaMigrator {
               REFERENCES reservation_copies(operation_id, copy_uuid) ON DELETE CASCADE
           )
           """);
-      statement.execute("CREATE INDEX IF NOT EXISTS recovery_pending ON recovery_rows(status, owner_uuid)");
+      statement.execute(
+          "CREATE INDEX IF NOT EXISTS recovery_pending ON recovery_rows(status, owner_uuid)");
     }
   }
+
   private static void applyV3(Connection connection) throws SQLException {
     if (!tableColumns(connection, "reservations").contains("match_id")) {
       try (var statement = connection.createStatement()) {
@@ -370,7 +462,8 @@ public final class SchemaMigrator {
   private static void applyV6(Connection connection) throws SQLException {
     try (var statement = connection.createStatement()) {
       statement.execute("DROP TRIGGER IF EXISTS active_copy_reservation_guard");
-      statement.execute("""
+      statement.execute(
+          """
           CREATE TRIGGER active_copy_reservation_guard
           BEFORE INSERT ON reservation_copies
           WHEN EXISTS (
@@ -665,13 +758,18 @@ public final class SchemaMigrator {
       String invalidLedgerOwner = canonicalUuidViolation("row.owner_uuid", true);
       String invalidReservationOperation = canonicalUuidViolation("row.operation_id", false);
       String invalidReservationOwner = canonicalUuidViolation("row.owner_uuid", true);
-      String invalidBindingOperation = canonicalUuidViolation("row.one_operation_id", false)
-          + " OR " + canonicalUuidViolation("row.two_operation_id", false);
-      String invalidBindingOwner = canonicalUuidViolation("row.one_owner_uuid", true)
-          + " OR " + canonicalUuidViolation("row.two_owner_uuid", true);
+      String invalidBindingOperation =
+          canonicalUuidViolation("row.one_operation_id", false)
+              + " OR "
+              + canonicalUuidViolation("row.two_operation_id", false);
+      String invalidBindingOwner =
+          canonicalUuidViolation("row.one_owner_uuid", true)
+              + " OR "
+              + canonicalUuidViolation("row.two_owner_uuid", true);
       String invalidChildOperation = canonicalUuidViolation("row.operation_id", false);
       String invalidChildCopy = canonicalUuidViolation("row.copy_uuid", false);
-      statement.execute("""
+      statement.execute(
+          """
           CREATE TRIGGER active_copy_identity_integrity_guard
           BEFORE INSERT ON reservation_copies
           WHEN %s
@@ -707,32 +805,35 @@ public final class SchemaMigrator {
           BEGIN
             SELECT RAISE(ABORT, 'custody identity is not canonical');
           END
-          """.formatted(
-          invalidNewOperation,
-          invalidNewCopy,
-          invalidLedgerCopy,
-          invalidLedgerOwner,
-          invalidReservationOperation,
-          invalidReservationOwner,
-          invalidChildOperation,
-          invalidChildCopy,
-          invalidChildOperation,
-          invalidChildCopy,
-          invalidChildOperation,
-          invalidChildCopy,
-          invalidBindingOperation,
-          invalidBindingOwner,
-          invalidChildOperation,
-          invalidChildCopy,
-          invalidReservationOwner));
+          """
+              .formatted(
+                  invalidNewOperation,
+                  invalidNewCopy,
+                  invalidLedgerCopy,
+                  invalidLedgerOwner,
+                  invalidReservationOperation,
+                  invalidReservationOwner,
+                  invalidChildOperation,
+                  invalidChildCopy,
+                  invalidChildOperation,
+                  invalidChildCopy,
+                  invalidChildOperation,
+                  invalidChildCopy,
+                  invalidBindingOperation,
+                  invalidBindingOwner,
+                  invalidChildOperation,
+                  invalidChildCopy,
+                  invalidReservationOwner));
     }
   }
+
   /** Reinstalls the reservation guard for databases already marked through V6. */
   private static void applyV7(Connection connection) throws SQLException {
     applyV6(connection);
     try (var statement = connection.createStatement()) {
       statement.execute("DROP TRIGGER IF EXISTS active_reservation_terminal_guard");
-      statement.execute("""
+      statement.execute(
+          """
           CREATE TRIGGER active_reservation_terminal_guard
           BEFORE INSERT ON reservations
           WHEN EXISTS (
@@ -753,9 +854,11 @@ public final class SchemaMigrator {
   }
 
   private static boolean hasRequiredCopyUuidIndex(Connection connection) throws SQLException {
-    try (var query = connection.createStatement().executeQuery("PRAGMA index_list(card_copies)")) {
+    try (var statement = connection.createStatement();
+        var query = statement.executeQuery("PRAGMA index_list(card_copies)")) {
       while (query.next()) {
-        if ("card_copies_copy_uuid_ci".equals(query.getString("name")) && query.getInt("unique") == 1) {
+        if ("card_copies_copy_uuid_ci".equals(query.getString("name"))
+            && query.getInt("unique") == 1) {
           return true;
         }
       }
@@ -766,27 +869,59 @@ public final class SchemaMigrator {
   private record IdentityColumn(String table, String column, boolean nullable) {}
 
   private static String canonicalUuidViolation(String column, boolean nullable) {
-    String violation = "(" + column + " IS NULL"
-        + " OR length(" + column + ") <> 36"
-        + " OR substr(" + column + ", 9, 1) <> '-'"
-        + " OR substr(" + column + ", 14, 1) <> '-'"
-        + " OR substr(" + column + ", 19, 1) <> '-'"
-        + " OR substr(" + column + ", 24, 1) <> '-'"
-        + " OR length(replace(" + column + ", '-', '')) <> 32"
-        + " OR replace(" + column + ", '-', '') GLOB '*[^0-9a-f]*'"
-        + " OR " + column + " <> lower(" + column + "))";
+    String violation =
+        "("
+            + column
+            + " IS NULL"
+            + " OR length("
+            + column
+            + ") <> 36"
+            + " OR substr("
+            + column
+            + ", 9, 1) <> '-'"
+            + " OR substr("
+            + column
+            + ", 14, 1) <> '-'"
+            + " OR substr("
+            + column
+            + ", 19, 1) <> '-'"
+            + " OR substr("
+            + column
+            + ", 24, 1) <> '-'"
+            + " OR length(replace("
+            + column
+            + ", '-', '')) <> 32"
+            + " OR replace("
+            + column
+            + ", '-', '') GLOB '*[^0-9a-f]*'"
+            + " OR "
+            + column
+            + " <> lower("
+            + column
+            + "))";
     return nullable ? "(" + column + " IS NOT NULL AND " + violation + ")" : violation;
   }
 
   private static void rejectInvalidUuidColumns(Connection connection, IdentityColumn... columns)
       throws SQLException {
     for (IdentityColumn identity : columns) {
-      String sql = "SELECT " + identity.column() + " FROM " + identity.table()
-          + " WHERE " + canonicalUuidViolation(identity.column(), identity.nullable());
-      try (var query = connection.createStatement(); var rows = query.executeQuery(sql)) {
+      String sql =
+          "SELECT "
+              + identity.column()
+              + " FROM "
+              + identity.table()
+              + " WHERE "
+              + canonicalUuidViolation(identity.column(), identity.nullable());
+      try (var query = connection.createStatement();
+          var rows = query.executeQuery(sql)) {
         if (rows.next()) {
-          throw new SQLException("noncanonical " + identity.table() + "." + identity.column()
-              + " UUID: " + rows.getString(1));
+          throw new SQLException(
+              "noncanonical "
+                  + identity.table()
+                  + "."
+                  + identity.column()
+                  + " UUID: "
+                  + rows.getString(1));
         }
       }
     }
@@ -795,8 +930,10 @@ public final class SchemaMigrator {
   private static void rejectInvalidCopyListColumns(Connection connection, String... columns)
       throws SQLException {
     for (String column : columns) {
-      try (var query = connection.createStatement().executeQuery(
-          "SELECT " + column + " FROM match_start_bindings")) {
+      try (var query =
+          connection
+              .createStatement()
+              .executeQuery("SELECT " + column + " FROM match_start_bindings")) {
         while (query.next()) {
           String raw = query.getString(1);
           if (raw == null || raw.isEmpty()) continue;
@@ -804,8 +941,8 @@ public final class SchemaMigrator {
             try {
               SqliteCardRepository.parseCanonicalUuid(copy);
             } catch (RuntimeException exception) {
-              throw new SQLException("noncanonical match_start_bindings." + column
-                  + " copy UUID: " + copy, exception);
+              throw new SQLException(
+                  "noncanonical match_start_bindings." + column + " copy UUID: " + copy, exception);
             }
           }
         }
@@ -814,7 +951,8 @@ public final class SchemaMigrator {
   }
 
   private static void applyV8(Connection connection) throws SQLException {
-    rejectInvalidUuidColumns(connection,
+    rejectInvalidUuidColumns(
+        connection,
         new IdentityColumn("card_copies", "copy_uuid", false),
         new IdentityColumn("card_copies", "owner_uuid", true),
         new IdentityColumn("reservations", "operation_id", false),
@@ -833,7 +971,10 @@ public final class SchemaMigrator {
         new IdentityColumn("match_start_bindings", "two_owner_uuid", true),
         new IdentityColumn("match_start_bindings", "two_operation_id", false));
     rejectInvalidCopyListColumns(connection, "one_copy_ids", "two_copy_ids");
-    try (var query = connection.createStatement().executeQuery("""
+    try (var statement = connection.createStatement();
+        var query =
+            statement.executeQuery(
+                """
         SELECT lower(copy_uuid), COUNT(*)
         FROM card_copies
         GROUP BY lower(copy_uuid)
@@ -844,10 +985,41 @@ public final class SchemaMigrator {
       }
     }
     try (var statement = connection.createStatement()) {
-      statement.execute("""
+      statement.execute(
+          """
           CREATE UNIQUE INDEX IF NOT EXISTS card_copies_copy_uuid_ci
           ON card_copies(lower(copy_uuid))
           """);
+    }
+  }
+
+  private static void applyV9(Connection connection) throws SQLException {
+    try (var statement = connection.createStatement()) {
+      statement.execute(
+          """
+          CREATE TABLE IF NOT EXISTS card_issuances (
+            copy_uuid TEXT PRIMARY KEY REFERENCES card_copies(copy_uuid) ON DELETE CASCADE,
+            catalog_id INTEGER NOT NULL,
+            owner_kind TEXT NOT NULL CHECK (owner_kind IN ('PLAYER', 'HOUSE')),
+            owner_uuid TEXT,
+            item_bytes BLOB NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('PENDING', 'DELIVERED')),
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            CHECK ((owner_kind = 'PLAYER' AND owner_uuid IS NOT NULL) OR
+                   (owner_kind = 'HOUSE' AND owner_uuid IS NULL))
+          )
+          """);
+      rejectInvalidUuidColumns(
+          connection,
+          new IdentityColumn("card_issuances", "copy_uuid", false),
+          new IdentityColumn("card_issuances", "owner_uuid", true));
+      statement.execute(
+          "CREATE UNIQUE INDEX IF NOT EXISTS card_issuances_copy_uuid_ci "
+              + "ON card_issuances(lower(copy_uuid))");
+      statement.execute(
+          "CREATE INDEX IF NOT EXISTS card_issuances_pending_owner "
+              + "ON card_issuances(status, owner_uuid)");
     }
   }
 }

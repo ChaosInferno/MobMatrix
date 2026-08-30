@@ -12,11 +12,25 @@ import java.util.Set;
 
 /** Pure implementation of the approved placement precedence and capture rules. */
 public final class PlacementResolver {
-  public enum CaptureSource { STANDARD, SAME, PLUS, COMBO }
-  public enum Direction { NORMAL, REVERSE }
-  public record Capture(Square square, PlayerSeat from, PlayerSeat to, CaptureSource source,
-      Direction direction) {}
-  public record Resolution(Board board, List<Capture> captures, List<String> events,
+  public enum CaptureSource {
+    STANDARD,
+    SAME,
+    PLUS,
+    COMBO
+  }
+
+  public enum Direction {
+    NORMAL,
+    REVERSE
+  }
+
+  public record Capture(
+      Square square, PlayerSeat from, PlayerSeat to, CaptureSource source, Direction direction) {}
+
+  public record Resolution(
+      Board board,
+      List<Capture> captures,
+      List<String> events,
       Map<Side, Integer> effectiveValues) {
     public Resolution {
       Objects.requireNonNull(board);
@@ -24,13 +38,21 @@ public final class PlacementResolver {
       events = List.copyOf(events);
       effectiveValues = Map.copyOf(effectiveValues);
     }
-    public List<Square> capturedSquares() { return captures.stream().map(Capture::square).toList(); }
+
+    public List<Square> capturedSquares() {
+      return captures.stream().map(Capture::square).toList();
+    }
   }
 
   private PlacementResolver() {}
 
-  public static Resolution resolve(Board board, CardCatalog catalog, RuleSet rules,
-      CardCopy placed, PlayerSeat owner, Square square) {
+  public static Resolution resolve(
+      Board board,
+      CardCatalog catalog,
+      RuleSet rules,
+      CardCopy placed,
+      PlayerSeat owner,
+      Square square) {
     Objects.requireNonNull(board);
     Objects.requireNonNull(catalog);
     Objects.requireNonNull(rules);
@@ -42,7 +64,8 @@ public final class PlacementResolver {
     CardDefinition placedDefinition = catalog.require(placed.cardId());
     int sameType = 0;
     for (Board.Cell cell : board.cells()) {
-      if (cell != null && catalog.require(cell.cardId()).type() == placedDefinition.type()) sameType++;
+      if (cell != null && catalog.require(cell.cardId()).type() == placedDefinition.type())
+        sameType++;
     }
     Map<Side, Integer> values = new java.util.EnumMap<>(Side.class);
     for (Side side : Side.values()) {
@@ -53,17 +76,22 @@ public final class PlacementResolver {
     }
 
     Board placedBoard = board.place(square, placed, owner, values);
-    List<Board.Adjacent> snapshot = placedBoard.adjacent(square).stream()
-        .filter(adjacent -> adjacent.cell() != null)
-        .sorted(Comparator.comparingInt(adjacent -> adjacent.square().index()))
-        .toList();
+    List<Board.Adjacent> snapshot =
+        placedBoard.adjacent(square).stream()
+            .filter(adjacent -> adjacent.cell() != null)
+            .sorted(Comparator.comparingInt(adjacent -> adjacent.square().index()))
+            .toList();
 
     Set<Square> sameTargets = new HashSet<>();
     if (rules.has(Rule.SAME)) {
-      List<Board.Adjacent> matching = snapshot.stream()
-          .filter(adjacent -> values.get(adjacent.facingSide())
-              .equals(effective(adjacent.cell(), adjacent.adjacentSide(), catalog)))
-          .toList();
+      List<Board.Adjacent> matching =
+          snapshot.stream()
+              .filter(
+                  adjacent ->
+                      values
+                          .get(adjacent.facingSide())
+                          .equals(effective(adjacent.cell(), adjacent.adjacentSide(), catalog)))
+              .toList();
       if (matching.size() >= 2) matching.forEach(adjacent -> sameTargets.add(adjacent.square()));
     }
 
@@ -71,12 +99,15 @@ public final class PlacementResolver {
     if (rules.has(Rule.PLUS)) {
       Map<Integer, List<Board.Adjacent>> bySum = new HashMap<>();
       for (Board.Adjacent adjacent : snapshot) {
-        int sum = values.get(adjacent.facingSide())
-            + effective(adjacent.cell(), adjacent.adjacentSide(), catalog);
+        int sum =
+            values.get(adjacent.facingSide())
+                + effective(adjacent.cell(), adjacent.adjacentSide(), catalog);
         bySum.computeIfAbsent(sum, ignored -> new ArrayList<>()).add(adjacent);
       }
-      bySum.values().stream().filter(group -> group.size() >= 2)
-          .flatMap(List::stream).forEach(adjacent -> plusTargets.add(adjacent.square()));
+      bySum.values().stream()
+          .filter(group -> group.size() >= 2)
+          .flatMap(List::stream)
+          .forEach(adjacent -> plusTargets.add(adjacent.square()));
     }
 
     Board resultBoard = placedBoard;
@@ -92,30 +123,40 @@ public final class PlacementResolver {
     List<String> events = new ArrayList<>();
     for (Board.Adjacent adjacent : snapshot) {
       if (adjacent.cell().owner() == owner) continue;
-      CaptureSource source = sameTargets.contains(adjacent.square()) ? CaptureSource.SAME
-          : plusTargets.contains(adjacent.square()) ? CaptureSource.PLUS : null;
+      CaptureSource source =
+          sameTargets.contains(adjacent.square())
+              ? CaptureSource.SAME
+              : plusTargets.contains(adjacent.square()) ? CaptureSource.PLUS : null;
       int adjacentValue = effective(adjacent.cell(), adjacent.adjacentSide(), catalog);
-      if (source == null && !ordinary(values.get(adjacent.facingSide()), adjacentValue, rules)) continue;
+      if (source == null && !ordinary(values.get(adjacent.facingSide()), adjacentValue, rules))
+        continue;
       if (source == null) source = CaptureSource.STANDARD;
       PlayerSeat oldOwner = adjacent.cell().owner();
       resultBoard = resultBoard.withOwner(adjacent.square(), owner);
-      captures.add(new Capture(adjacent.square(), owner, oldOwner, source,
-          rules.has(Rule.REVERSE) ? Direction.REVERSE : Direction.NORMAL));
+      captures.add(
+          new Capture(
+              adjacent.square(),
+              owner,
+              oldOwner,
+              source,
+              rules.has(Rule.REVERSE) ? Direction.REVERSE : Direction.NORMAL));
       events.add(source.name());
     }
 
     if (rules.has(Rule.COMBO) && !special.isEmpty()) {
-      ArrayDeque<Square> queue = new ArrayDeque<>(
-          special.stream().sorted(Comparator.comparingInt(Square::index)).toList());
+      ArrayDeque<Square> queue =
+          new ArrayDeque<>(
+              special.stream().sorted(Comparator.comparingInt(Square::index)).toList());
       Set<Square> seen = new HashSet<>(special);
       while (!queue.isEmpty()) {
         Square sourceSquare = queue.remove();
         Board.Cell sourceCell = resultBoard.cellAt(sourceSquare);
         if (sourceCell == null) continue;
-        for (Board.Adjacent adjacent : resultBoard.adjacent(sourceSquare).stream()
-            .filter(item -> item.cell() != null)
-            .sorted(Comparator.comparingInt(item -> item.square().index()))
-            .toList()) {
+        for (Board.Adjacent adjacent :
+            resultBoard.adjacent(sourceSquare).stream()
+                .filter(item -> item.cell() != null)
+                .sorted(Comparator.comparingInt(item -> item.square().index()))
+                .toList()) {
           if (adjacent.cell().owner() == owner || seen.contains(adjacent.square())) continue;
           int sourceValue = effective(sourceCell, adjacent.facingSide(), catalog);
           int adjacentValue = effective(adjacent.cell(), adjacent.adjacentSide(), catalog);
@@ -124,8 +165,13 @@ public final class PlacementResolver {
           resultBoard = resultBoard.withOwner(adjacent.square(), owner);
           seen.add(adjacent.square());
           queue.add(adjacent.square());
-          captures.add(new Capture(adjacent.square(), owner, oldOwner, CaptureSource.COMBO,
-              rules.has(Rule.REVERSE) ? Direction.REVERSE : Direction.NORMAL));
+          captures.add(
+              new Capture(
+                  adjacent.square(),
+                  owner,
+                  oldOwner,
+                  CaptureSource.COMBO,
+                  rules.has(Rule.REVERSE) ? Direction.REVERSE : Direction.NORMAL));
           events.add(CaptureSource.COMBO.name());
         }
       }
@@ -136,8 +182,13 @@ public final class PlacementResolver {
     return new Resolution(resultBoard, captures, events, values);
   }
 
-  public static Resolution resolve(Board board, CardCatalog catalog, MatchRules rules,
-      CardCopy placed, PlayerSeat owner, Square square) {
+  public static Resolution resolve(
+      Board board,
+      CardCatalog catalog,
+      MatchRules rules,
+      CardCopy placed,
+      PlayerSeat owner,
+      Square square) {
     return resolve(board, catalog, rules.asRuleSet(), placed, owner, square);
   }
 

@@ -15,8 +15,14 @@ public final class RandomTranscript {
       if (bound <= 0) throw new IllegalArgumentException("bound must be positive");
       if (value < 0 || value >= bound) throw new IllegalArgumentException("value outside bound");
     }
-    public String label() { return decision; }
-    public int selected() { return value; }
+
+    public String label() {
+      return decision;
+    }
+
+    public int selected() {
+      return value;
+    }
   }
 
   private final long seed;
@@ -36,7 +42,8 @@ public final class RandomTranscript {
   private RandomTranscript(long seed, List<Decision> decisions, boolean replay, int cursor) {
     this.seed = seed;
     this.random = new SplittableRandom(seed);
-    this.decisions = new ArrayList<>(List.copyOf(Objects.requireNonNull(decisions, "decisions are required")));
+    this.decisions =
+        new ArrayList<>(List.copyOf(Objects.requireNonNull(decisions, "decisions are required")));
     this.replay = replay;
     this.cursor = cursor;
     if (!replay) {
@@ -48,24 +55,29 @@ public final class RandomTranscript {
   private RandomTranscript(List<Decision> decisions) {
     this.seed = 0L;
     this.random = null;
-    this.decisions = new ArrayList<>(List.copyOf(Objects.requireNonNull(decisions, "decisions are required")));
+    this.decisions =
+        new ArrayList<>(List.copyOf(Objects.requireNonNull(decisions, "decisions are required")));
     this.replay = true;
     this.cursor = 0;
   }
 
-  public static RandomTranscript replay(List<Decision> decisions) { return new RandomTranscript(decisions); }
-  public static RandomTranscript from(List<Decision> decisions) { return replay(decisions); }
+  public static RandomTranscript replay(List<Decision> decisions) {
+    return new RandomTranscript(decisions);
+  }
+
+  public static RandomTranscript from(List<Decision> decisions) {
+    return replay(decisions);
+  }
+
   /** Reconstructs a transcript cursor exactly as it was persisted. */
-  public static RandomTranscript restore(long seed, List<Decision> decisions,
-      boolean replay, int cursor) {
+  public static RandomTranscript restore(
+      long seed, List<Decision> decisions, boolean replay, int cursor) {
     Objects.requireNonNull(decisions, "decisions are required");
-    if (cursor < 0 || cursor > decisions.size()
-        || (!replay && cursor != decisions.size())) {
+    if (cursor < 0 || cursor > decisions.size() || (!replay && cursor != decisions.size())) {
       throw new IllegalArgumentException("invalid transcript cursor");
     }
     return new RandomTranscript(seed, decisions, replay, cursor);
   }
-
 
   /** Returns an independent random cursor/list fork for an accepted successor state. */
   public synchronized RandomTranscript fork() {
@@ -103,14 +115,32 @@ public final class RandomTranscript {
   }
 
   private static void validate(String decision, int bound) {
-    if (decision == null || decision.isBlank()) throw new IllegalArgumentException("decision label is required");
+    if (decision == null || decision.isBlank())
+      throw new IllegalArgumentException("decision label is required");
     if (bound <= 0) throw new IllegalArgumentException("bound must be positive");
   }
 
-  public synchronized List<Decision> decisions() { return List.copyOf(decisions); }
-  public synchronized List<Decision> recordedDecisions() { return decisions(); }
-  public synchronized boolean exhausted() { return replay && cursor == decisions.size(); }
-  public synchronized long seed() { return seed; }
-  public synchronized int cursor() { return cursor; }
-  public synchronized boolean replayMode() { return replay; }
+  public synchronized List<Decision> decisions() {
+    return List.copyOf(decisions);
+  }
+
+  public synchronized List<Decision> recordedDecisions() {
+    return decisions();
+  }
+
+  public synchronized boolean exhausted() {
+    return replay && cursor == decisions.size();
+  }
+
+  public synchronized long seed() {
+    return seed;
+  }
+
+  public synchronized int cursor() {
+    return cursor;
+  }
+
+  public synchronized boolean replayMode() {
+    return replay;
+  }
 }

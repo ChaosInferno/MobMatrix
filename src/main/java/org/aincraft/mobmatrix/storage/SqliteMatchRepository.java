@@ -4,28 +4,23 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
-import java.sql.Connection;
-import java.sql.SQLException;
 import java.security.GeneralSecurityException;
 import java.security.MessageDigest;
-import javax.crypto.Mac;
-import javax.crypto.spec.SecretKeySpec;
-import java.time.Instant;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
 import org.aincraft.mobmatrix.application.MatchRepository;
-import org.aincraft.mobmatrix.domain.Board;
-import org.aincraft.mobmatrix.domain.CardCopy;
-import org.aincraft.mobmatrix.domain.MatchState;
 import org.aincraft.mobmatrix.domain.CardCatalog;
 import org.aincraft.mobmatrix.domain.CardDefinition;
 import org.aincraft.mobmatrix.domain.CardType;
-import org.aincraft.mobmatrix.domain.PlayerSeat;
-import org.aincraft.mobmatrix.domain.Side;
 import org.aincraft.mobmatrix.domain.MatchId;
+import org.aincraft.mobmatrix.domain.MatchState;
 
 /** Optimistic-CAS repository for immutable active match snapshots and random transcripts. */
 public final class SqliteMatchRepository implements MatchRepository {
@@ -48,6 +43,7 @@ public final class SqliteMatchRepository implements MatchRepository {
     this.connection = Objects.requireNonNull(connection, "connection is required");
     this.serverSecret = requireSecret(serverSecret).getBytes(StandardCharsets.UTF_8);
   }
+
   /** Production constructor; secret is read from explicit process configuration. */
   public SqliteMatchRepository(Connection connection) {
     this(connection, configuredSecret());
@@ -71,7 +67,9 @@ public final class SqliteMatchRepository implements MatchRepository {
             return new SaveResult(false, -1, Failure.INVALID_STATE);
           }
           persistCatalogSnapshot(connection, state.catalog());
-          try (var insert = connection.prepareStatement("""
+          try (var insert =
+              connection.prepareStatement(
+                  """
               INSERT INTO matches(match_id, revision, status, state_bytes, state_digest, transcript_json, updated_at)
               VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
               """)) {
@@ -79,7 +77,8 @@ public final class SqliteMatchRepository implements MatchRepository {
             insert.setLong(2, state.revision());
             insert.setString(3, status);
             insert.setBytes(4, stateBytes);
-            insert.setString(5, digest(state.matchId(), state.revision(), status, stateBytes, transcript));
+            insert.setString(
+                5, digest(state.matchId(), state.revision(), status, stateBytes, transcript));
             insert.setString(6, transcript);
             insert.executeUpdate();
           }
@@ -102,14 +101,17 @@ public final class SqliteMatchRepository implements MatchRepository {
           return SaveResult.stale(current.revision());
         }
         persistCatalogSnapshot(connection, state.catalog());
-        try (var update = connection.prepareStatement("""
+        try (var update =
+            connection.prepareStatement(
+                """
             UPDATE matches SET revision = ?, status = ?, state_bytes = ?, state_digest = ?,
               transcript_json = ?, updated_at = CURRENT_TIMESTAMP WHERE match_id = ? AND revision = ?
             """)) {
           update.setLong(1, state.revision());
           update.setString(2, status);
           update.setBytes(3, stateBytes);
-          update.setString(4, digest(state.matchId(), state.revision(), status, stateBytes, transcript));
+          update.setString(
+              4, digest(state.matchId(), state.revision(), status, stateBytes, transcript));
           update.setString(5, transcript);
           update.setString(6, state.matchId().value());
           update.setLong(7, expectedRevision);
@@ -121,9 +123,13 @@ public final class SqliteMatchRepository implements MatchRepository {
         connection.commit();
         return SaveResult.success(state.revision());
       } catch (SQLException | RuntimeException exception) {
-        try { connection.rollback(); } catch (SQLException ignored) { }
+        try {
+          connection.rollback();
+        } catch (SQLException ignored) {
+        }
         if (exception instanceof SQLException sql
-            && sql.getMessage() != null && sql.getMessage().contains("matches.match_id")) {
+            && sql.getMessage() != null
+            && sql.getMessage().contains("matches.match_id")) {
           return new SaveResult(false, -1L, Failure.INVALID_STATE);
         }
         if (exception instanceof RuntimeException runtime) throw runtime;
@@ -135,9 +141,8 @@ public final class SqliteMatchRepository implements MatchRepository {
       throw new IllegalStateException("SQLite match save failed", exception);
     }
   }
-  /**
-   * Inserts the revision-0 match and its durable start identity in one SQLite transaction.
-   */
+
+  /** Inserts the revision-0 match and its durable start identity in one SQLite transaction. */
   @Override
   public SaveResult saveInitial(MatchState state, StartBinding binding) {
     Objects.requireNonNull(state, "state is required");
@@ -158,14 +163,17 @@ public final class SqliteMatchRepository implements MatchRepository {
           return SaveResult.stale(current.get().revision());
         }
         persistCatalogSnapshot(connection, state.catalog());
-        try (var insert = connection.prepareStatement("""
+        try (var insert =
+            connection.prepareStatement(
+                """
             INSERT INTO matches(match_id, revision, status, state_bytes, state_digest, transcript_json, updated_at)
             VALUES (?, 0, ?, ?, ?, ?, CURRENT_TIMESTAMP)
             """)) {
           insert.setString(1, state.matchId().value());
           insert.setString(2, status);
           insert.setBytes(3, stateBytes);
-          insert.setString(4, digest(state.matchId(), state.revision(), status, stateBytes, transcript));
+          insert.setString(
+              4, digest(state.matchId(), state.revision(), status, stateBytes, transcript));
           insert.setString(5, transcript);
           insert.executeUpdate();
         }
@@ -173,7 +181,10 @@ public final class SqliteMatchRepository implements MatchRepository {
         connection.commit();
         return SaveResult.success(0L);
       } catch (SQLException | RuntimeException exception) {
-        try { connection.rollback(); } catch (SQLException ignored) { }
+        try {
+          connection.rollback();
+        } catch (SQLException ignored) {
+        }
         if (exception instanceof RuntimeException runtime) throw runtime;
         throw exception;
       } finally {
@@ -183,16 +194,24 @@ public final class SqliteMatchRepository implements MatchRepository {
       throw new IllegalStateException("SQLite initial match save failed", exception);
     }
   }
+
   @Override
   public Optional<MatchSnapshot> find(org.aincraft.mobmatrix.domain.MatchId matchId) {
     Objects.requireNonNull(matchId, "match id is required");
-    try (var query = connection.prepareStatement(
-        "SELECT revision, status, state_bytes, transcript_json, state_digest FROM matches WHERE match_id = ?")) {
+    try (var query =
+        connection.prepareStatement(
+            "SELECT revision, status, state_bytes, transcript_json, state_digest FROM matches WHERE match_id = ?")) {
       query.setString(1, matchId.value());
       try (var rows = query.executeQuery()) {
         if (!rows.next()) return Optional.empty();
-        MatchSnapshot snapshot = new MatchSnapshot(matchId, rows.getLong(1), rows.getString(2),
-            rows.getBytes(3), rows.getString(4), rows.getString(5));
+        MatchSnapshot snapshot =
+            new MatchSnapshot(
+                matchId,
+                rows.getLong(1),
+                rows.getString(2),
+                rows.getBytes(3),
+                rows.getString(4),
+                rows.getString(5));
         verifyIntegrity(snapshot);
         return Optional.of(snapshot);
       }
@@ -201,23 +220,29 @@ public final class SqliteMatchRepository implements MatchRepository {
     }
   }
 
-  /** Rehydrates only when a persisted catalog definition set exactly matches the caller's catalog. */
+  /**
+   * Rehydrates only when a persisted catalog definition set exactly matches the caller's catalog.
+   */
   @Override
-  public Optional<MatchState> findState(org.aincraft.mobmatrix.domain.MatchId matchId,
-      CardCatalog catalog) {
+  public Optional<MatchState> findState(
+      org.aincraft.mobmatrix.domain.MatchId matchId, CardCatalog catalog) {
     Objects.requireNonNull(matchId, "match id is required");
     Objects.requireNonNull(catalog, "catalog is required");
-    return find(matchId).map(snapshot -> {
-      verifyIntegrity(snapshot);
-      if (!snapshot.matchId().equals(matchId)) {
-        throw new IllegalArgumentException("snapshot row match ID does not match request");
-      }
-      requirePersistedCatalogMatch(MatchStateSnapshotCodec.catalogSnapshotId(snapshot.stateBytes()), catalog);
-      MatchState state = MatchStateSnapshotCodec.decode(snapshot.stateBytes(), catalog);
-      validateSnapshotState(snapshot, state);
-      return state;
-    });
+    return find(matchId)
+        .map(
+            snapshot -> {
+              verifyIntegrity(snapshot);
+              if (!snapshot.matchId().equals(matchId)) {
+                throw new IllegalArgumentException("snapshot row match ID does not match request");
+              }
+              requirePersistedCatalogMatch(
+                  MatchStateSnapshotCodec.catalogSnapshotId(snapshot.stateBytes()), catalog);
+              MatchState state = MatchStateSnapshotCodec.decode(snapshot.stateBytes(), catalog);
+              validateSnapshotState(snapshot, state);
+              return state;
+            });
   }
+
   public MatchState rehydrate(MatchSnapshot snapshot, CardCatalog catalog) {
     Objects.requireNonNull(snapshot, "snapshot is required");
     Objects.requireNonNull(catalog, "catalog is required");
@@ -228,31 +253,40 @@ public final class SqliteMatchRepository implements MatchRepository {
     validateSnapshotState(snapshot, state);
     return state;
   }
-  public Optional<MatchState> rehydrate(MatchSnapshot snapshot,
-      java.util.function.Function<String, CardCatalog> catalogResolver) {
+
+  public Optional<MatchState> rehydrate(
+      MatchSnapshot snapshot, java.util.function.Function<String, CardCatalog> catalogResolver) {
     Objects.requireNonNull(snapshot, "snapshot is required");
     Objects.requireNonNull(catalogResolver, "catalog resolver is required");
     verifyIntegrity(snapshot);
-    var catalog = Objects.requireNonNull(catalogResolver.apply(
-        MatchStateSnapshotCodec.catalogSnapshotId(snapshot.stateBytes())), "catalog is required");
+    var catalog =
+        Objects.requireNonNull(
+            catalogResolver.apply(MatchStateSnapshotCodec.catalogSnapshotId(snapshot.stateBytes())),
+            "catalog is required");
 
     return Optional.of(rehydrate(snapshot, catalog));
   }
+
   private static void persistCatalogSnapshot(Connection connection, CardCatalog catalog)
       throws SQLException {
-    SqliteCardRepository.persistCatalogSnapshotForMatch(connection, catalog.snapshotId(), catalog.all());
+    SqliteCardRepository.persistCatalogSnapshotForMatch(
+        connection, catalog.snapshotId(), catalog.all());
   }
+
   private CardCatalog persistedCatalog(String snapshotId) {
     try {
-      try (var query = connection.prepareStatement(
-          "SELECT 1 FROM catalog_snapshots WHERE snapshot_id = ?")) {
+      try (var query =
+          connection.prepareStatement("SELECT 1 FROM catalog_snapshots WHERE snapshot_id = ?")) {
         query.setString(1, snapshotId);
         try (var rows = query.executeQuery()) {
-          if (!rows.next()) throw new IllegalArgumentException("persisted catalog snapshot is absent");
+          if (!rows.next())
+            throw new IllegalArgumentException("persisted catalog snapshot is absent");
         }
       }
       List<CardDefinition> definitions = new ArrayList<>();
-      try (var query = connection.prepareStatement("""
+      try (var query =
+          connection.prepareStatement(
+              """
           SELECT catalog_id, public_number, name, stars, type, top_value, right_value,
             bottom_value, left_value, sale_price
           FROM card_definitions WHERE snapshot_id = ? ORDER BY catalog_id
@@ -260,10 +294,18 @@ public final class SqliteMatchRepository implements MatchRepository {
         query.setString(1, snapshotId);
         try (var rows = query.executeQuery()) {
           while (rows.next()) {
-            definitions.add(new CardDefinition(new org.aincraft.mobmatrix.domain.CardId(rows.getInt(1)),
-                rows.getString(2), rows.getString(3), rows.getInt(4),
-                CardType.valueOf(rows.getString(5)), rows.getInt(6), rows.getInt(7),
-                rows.getInt(8), rows.getInt(9), rows.getInt(10)));
+            definitions.add(
+                new CardDefinition(
+                    new org.aincraft.mobmatrix.domain.CardId(rows.getInt(1)),
+                    rows.getString(2),
+                    rows.getString(3),
+                    rows.getInt(4),
+                    CardType.valueOf(rows.getString(5)),
+                    rows.getInt(6),
+                    rows.getInt(7),
+                    rows.getInt(8),
+                    rows.getInt(9),
+                    rows.getInt(10)));
           }
         }
       }
@@ -272,11 +314,12 @@ public final class SqliteMatchRepository implements MatchRepository {
       throw new IllegalStateException("SQLite catalog lookup failed", exception);
     }
   }
+
   private void requirePersistedCatalogMatch(String snapshotId, CardCatalog catalog) {
     try {
       boolean persisted;
-      try (var query = connection.prepareStatement(
-          "SELECT 1 FROM catalog_snapshots WHERE snapshot_id = ?")) {
+      try (var query =
+          connection.prepareStatement("SELECT 1 FROM catalog_snapshots WHERE snapshot_id = ?")) {
         query.setString(1, snapshotId);
         try (var rows = query.executeQuery()) {
           persisted = rows.next();
@@ -286,7 +329,9 @@ public final class SqliteMatchRepository implements MatchRepository {
         throw new IllegalArgumentException("persisted catalog snapshot is absent");
       }
       List<CardDefinition> definitions = new ArrayList<>();
-      try (var query = connection.prepareStatement("""
+      try (var query =
+          connection.prepareStatement(
+              """
           SELECT catalog_id, public_number, name, stars, type, top_value, right_value,
             bottom_value, left_value, sale_price
           FROM card_definitions WHERE snapshot_id = ? ORDER BY catalog_id
@@ -294,10 +339,18 @@ public final class SqliteMatchRepository implements MatchRepository {
         query.setString(1, snapshotId);
         try (var rows = query.executeQuery()) {
           while (rows.next()) {
-            definitions.add(new CardDefinition(new org.aincraft.mobmatrix.domain.CardId(rows.getInt(1)),
-                rows.getString(2), rows.getString(3), rows.getInt(4),
-                CardType.valueOf(rows.getString(5)), rows.getInt(6), rows.getInt(7),
-                rows.getInt(8), rows.getInt(9), rows.getInt(10)));
+            definitions.add(
+                new CardDefinition(
+                    new org.aincraft.mobmatrix.domain.CardId(rows.getInt(1)),
+                    rows.getString(2),
+                    rows.getString(3),
+                    rows.getInt(4),
+                    CardType.valueOf(rows.getString(5)),
+                    rows.getInt(6),
+                    rows.getInt(7),
+                    rows.getInt(8),
+                    rows.getInt(9),
+                    rows.getInt(10)));
           }
         }
       }
@@ -308,6 +361,7 @@ public final class SqliteMatchRepository implements MatchRepository {
       throw new IllegalStateException("SQLite catalog lookup failed", exception);
     }
   }
+
   private static void validateSnapshotState(MatchSnapshot snapshot, MatchState state) {
     if (!state.matchId().equals(snapshot.matchId())) {
       throw new IllegalArgumentException("snapshot state match ID does not match row");
@@ -321,12 +375,12 @@ public final class SqliteMatchRepository implements MatchRepository {
     }
   }
 
-
   @Override
   public ActiveMatchesResult activeMatchesReport() {
-    try (var query = connection.prepareStatement(
-        "SELECT match_id, revision, status, state_bytes, transcript_json, state_digest "
-            + "FROM matches ORDER BY match_id")) {
+    try (var query =
+        connection.prepareStatement(
+            "SELECT match_id, revision, status, state_bytes, transcript_json, state_digest "
+                + "FROM matches ORDER BY match_id")) {
       List<MatchSnapshot> result = new ArrayList<>();
       List<ActiveMatchFailure> failures = new ArrayList<>();
       try (var rows = query.executeQuery()) {
@@ -334,16 +388,23 @@ public final class SqliteMatchRepository implements MatchRepository {
           MatchId matchId = null;
           try {
             matchId = new org.aincraft.mobmatrix.domain.MatchId(rows.getString(1));
-            MatchSnapshot snapshot = new MatchSnapshot(matchId, rows.getLong(2),
-                rows.getString(3), rows.getBytes(4), rows.getString(5), rows.getString(6));
+            MatchSnapshot snapshot =
+                new MatchSnapshot(
+                    matchId,
+                    rows.getLong(2),
+                    rows.getString(3),
+                    rows.getBytes(4),
+                    rows.getString(5),
+                    rows.getString(6));
             verifyIntegrity(snapshot);
-            CardCatalog catalog = persistedCatalog(
-                MatchStateSnapshotCodec.catalogSnapshotId(snapshot.stateBytes()));
+            CardCatalog catalog =
+                persistedCatalog(MatchStateSnapshotCodec.catalogSnapshotId(snapshot.stateBytes()));
             MatchState state = MatchStateSnapshotCodec.decode(snapshot.stateBytes(), catalog);
             validateSnapshotState(snapshot, state);
             if (!state.isFinished()) result.add(snapshot);
           } catch (RuntimeException exception) {
-            if (matchId != null) failures.add(new ActiveMatchFailure(matchId, Failure.INVALID_STATE));
+            if (matchId != null)
+              failures.add(new ActiveMatchFailure(matchId, Failure.INVALID_STATE));
           }
         }
       }
@@ -367,10 +428,13 @@ public final class SqliteMatchRepository implements MatchRepository {
       throw new IllegalStateException("SQLite match delete failed", exception);
     }
   }
+
   @Override
   public Optional<StartBinding> findStartBinding(org.aincraft.mobmatrix.domain.MatchId matchId) {
     Objects.requireNonNull(matchId, "match id is required");
-    try (var query = connection.prepareStatement("""
+    try (var query =
+        connection.prepareStatement(
+            """
         SELECT binding_version, request_identity, one_owner_kind, one_owner_uuid,
           one_operation_id, one_copy_ids, two_owner_kind, two_owner_uuid,
           two_operation_id, two_copy_ids
@@ -388,16 +452,24 @@ public final class SqliteMatchRepository implements MatchRepository {
           twoCopies = readCopies(rows.getString(10));
           oneOperation = SqliteCardRepository.parseCanonicalUuid(rows.getString(5));
           twoOperation = SqliteCardRepository.parseCanonicalUuid(rows.getString(9));
-          return Optional.of(new StartBinding(matchId, rows.getInt(1), rows.getString(2),
-              readOwner(rows.getString(3), rows.getString(4)), oneCopies, oneOperation,
-              readOwner(rows.getString(7), rows.getString(8)), twoCopies, twoOperation));
+          return Optional.of(
+              new StartBinding(
+                  matchId,
+                  rows.getInt(1),
+                  rows.getString(2),
+                  readOwner(rows.getString(3), rows.getString(4)),
+                  oneCopies,
+                  oneOperation,
+                  readOwner(rows.getString(7), rows.getString(8)),
+                  twoCopies,
+                  twoOperation));
         } catch (RuntimeException exception) {
           java.util.UUID identity = oneOperation != null ? oneOperation : twoOperation;
           if (identity == null) throw exception;
           List<org.aincraft.mobmatrix.domain.CardCopyId> copies =
               oneOperation != null ? oneCopies : twoCopies;
-          throw new SqliteCardRepository.CustodyIntegrityException(identity, copies,
-              "invalid match start binding owner integrity data", exception);
+          throw new SqliteCardRepository.CustodyIntegrityException(
+              identity, copies, "invalid match start binding owner integrity data", exception);
         }
       }
     } catch (SQLException exception) {
@@ -424,7 +496,9 @@ public final class SqliteMatchRepository implements MatchRepository {
 
   private static void insertStartBinding(Connection connection, StartBinding binding)
       throws SQLException {
-    try (var insert = connection.prepareStatement("""
+    try (var insert =
+        connection.prepareStatement(
+            """
         INSERT INTO match_start_bindings(match_id, binding_version, request_identity,
           one_owner_kind, one_owner_uuid, one_operation_id, one_copy_ids,
           two_owner_kind, two_owner_uuid, two_operation_id, two_copy_ids)
@@ -444,15 +518,20 @@ public final class SqliteMatchRepository implements MatchRepository {
   }
 
   private static String writeCopies(List<org.aincraft.mobmatrix.domain.CardCopyId> copies) {
-    return copies.stream().map(copy -> copy.value().toString()).collect(java.util.stream.Collectors.joining(","));
+    return copies.stream()
+        .map(copy -> copy.value().toString())
+        .collect(java.util.stream.Collectors.joining(","));
   }
 
   private static List<org.aincraft.mobmatrix.domain.CardCopyId> readCopies(String value) {
     if (value == null) throw new IllegalArgumentException("copy IDs are required");
     if (value.isEmpty()) return List.of();
     return java.util.Arrays.stream(value.split(",", -1))
-        .map(text -> new org.aincraft.mobmatrix.domain.CardCopyId(
-            SqliteCardRepository.parseCanonicalUuid(text))).toList();
+        .map(
+            text ->
+                new org.aincraft.mobmatrix.domain.CardCopyId(
+                    SqliteCardRepository.parseCanonicalUuid(text)))
+        .toList();
   }
 
   private static org.aincraft.mobmatrix.domain.CopyOwner readOwner(String kind, String uuid) {
@@ -466,8 +545,12 @@ public final class SqliteMatchRepository implements MatchRepository {
     throw new IllegalStateException("invalid owner in database");
   }
 
-  private static void writeOwner(java.sql.PreparedStatement statement, int kindIndex,
-      int uuidIndex, org.aincraft.mobmatrix.domain.CopyOwner owner) throws SQLException {
+  private static void writeOwner(
+      java.sql.PreparedStatement statement,
+      int kindIndex,
+      int uuidIndex,
+      org.aincraft.mobmatrix.domain.CopyOwner owner)
+      throws SQLException {
     if (owner.isPlayer()) {
       statement.setString(kindIndex, "PLAYER");
       statement.setString(uuidIndex, owner.playerId().toString());
@@ -477,8 +560,12 @@ public final class SqliteMatchRepository implements MatchRepository {
     }
   }
 
-  private String digest(org.aincraft.mobmatrix.domain.MatchId matchId, long revision,
-      String status, byte[] stateBytes, String transcriptJson) {
+  private String digest(
+      org.aincraft.mobmatrix.domain.MatchId matchId,
+      long revision,
+      String status,
+      byte[] stateBytes,
+      String transcriptJson) {
     Objects.requireNonNull(matchId, "match ID is required");
     Objects.requireNonNull(status, "status is required");
     Objects.requireNonNull(stateBytes, "state bytes are required");
@@ -505,17 +592,25 @@ public final class SqliteMatchRepository implements MatchRepository {
     output.write(bytes);
   }
 
-  private static void writeCanonicalBytes(DataOutputStream output, byte[] value) throws IOException {
+  private static void writeCanonicalBytes(DataOutputStream output, byte[] value)
+      throws IOException {
     output.writeInt(value.length);
     output.write(value);
   }
 
   private void verifyIntegrity(MatchSnapshot snapshot) {
     String persisted = snapshot.stateDigest();
-    String expected = digest(snapshot.matchId(), snapshot.revision(), snapshot.status(),
-        snapshot.stateBytes(), snapshot.transcriptJson());
-    if (persisted == null || persisted.isBlank()
-        || !MessageDigest.isEqual(persisted.getBytes(StandardCharsets.US_ASCII),
+    String expected =
+        digest(
+            snapshot.matchId(),
+            snapshot.revision(),
+            snapshot.status(),
+            snapshot.stateBytes(),
+            snapshot.transcriptJson());
+    if (persisted == null
+        || persisted.isBlank()
+        || !MessageDigest.isEqual(
+            persisted.getBytes(StandardCharsets.US_ASCII),
             expected.getBytes(StandardCharsets.US_ASCII))) {
       throw new IllegalArgumentException("match snapshot integrity verification failed");
     }
@@ -527,46 +622,63 @@ public final class SqliteMatchRepository implements MatchRepository {
     }
     byte[] bytes = value.getBytes(StandardCharsets.UTF_8);
     if (bytes.length < 16) {
-      throw new IllegalArgumentException("match snapshot server secret must contain at least 16 bytes");
+      throw new IllegalArgumentException(
+          "match snapshot server secret must contain at least 16 bytes");
     }
     return value;
   }
 
   private static String configuredSecret() {
     String property = System.getProperty(SECRET_PROPERTY);
-    String value = property == null || property.isBlank()
-        ? System.getenv(SECRET_ENVIRONMENT) : property;
+    String value =
+        property == null || property.isBlank() ? System.getenv(SECRET_ENVIRONMENT) : property;
     return requireSecret(value);
   }
 
   private Optional<MatchSnapshot> loadSnapshot(Connection connection, String matchId)
       throws SQLException {
-    try (var query = connection.prepareStatement("""
+    try (var query =
+        connection.prepareStatement(
+            """
         SELECT match_id, revision, status, state_bytes, transcript_json, state_digest
         FROM matches WHERE match_id = ?
         """)) {
       query.setString(1, matchId);
       try (var rows = query.executeQuery()) {
         if (!rows.next()) return Optional.empty();
-        return Optional.of(new MatchSnapshot(
-            new org.aincraft.mobmatrix.domain.MatchId(rows.getString(1)), rows.getLong(2),
-            rows.getString(3), rows.getBytes(4), rows.getString(5), rows.getString(6)));
+        return Optional.of(
+            new MatchSnapshot(
+                new org.aincraft.mobmatrix.domain.MatchId(rows.getString(1)),
+                rows.getLong(2),
+                rows.getString(3),
+                rows.getBytes(4),
+                rows.getString(5),
+                rows.getString(6)));
       }
     }
   }
 
-
   private static String transcriptJson(MatchState state) {
     var transcript = state.transcript();
-    StringBuilder json = new StringBuilder("{\"seed\":").append(transcript.seed())
-        .append(",\"cursor\":").append(transcript.cursor())
-        .append(",\"replay\":").append(transcript.replayMode()).append(",\"decisions\":[");
+    StringBuilder json =
+        new StringBuilder("{\"seed\":")
+            .append(transcript.seed())
+            .append(",\"cursor\":")
+            .append(transcript.cursor())
+            .append(",\"replay\":")
+            .append(transcript.replayMode())
+            .append(",\"decisions\":[");
     boolean first = true;
     for (var decision : transcript.decisions()) {
       if (!first) json.append(',');
       first = false;
-      json.append("{\"decision\":\"").append(escape(decision.decision())).append("\",\"bound\":")
-          .append(decision.bound()).append(",\"value\":").append(decision.value()).append('}');
+      json.append("{\"decision\":\"")
+          .append(escape(decision.decision()))
+          .append("\",\"bound\":")
+          .append(decision.bound())
+          .append(",\"value\":")
+          .append(decision.value())
+          .append('}');
     }
     return json.append("]}").toString();
   }

@@ -6,13 +6,15 @@ import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
 import org.aincraft.mobmatrix.domain.CardCatalog;
-import org.aincraft.mobmatrix.domain.MatchId;
-import org.aincraft.mobmatrix.domain.MatchState;
 import org.aincraft.mobmatrix.domain.CardCopyId;
 import org.aincraft.mobmatrix.domain.CopyOwner;
+import org.aincraft.mobmatrix.domain.MatchId;
+import org.aincraft.mobmatrix.domain.MatchState;
+
 /** Persistence boundary for immutable match snapshots with optimistic revisions. */
 public interface MatchRepository {
   SaveResult save(long expectedRevision, MatchState state);
+
   /**
    * Persists a revision-0 active match and its durable start binding atomically.
    *
@@ -27,12 +29,14 @@ public interface MatchRepository {
   }
 
   Optional<MatchSnapshot> find(MatchId matchId);
+
   /** Loads the executable state needed to compare an idempotent start request. */
   default Optional<MatchState> findState(MatchId matchId, CardCatalog catalog) {
     Objects.requireNonNull(matchId, "match id is required");
     Objects.requireNonNull(catalog, "catalog is required");
     return Optional.empty();
   }
+
   /** Durable identity captured with the initial active snapshot for idempotent start retries. */
   default Optional<StartBinding> findStartBinding(MatchId matchId) {
     Objects.requireNonNull(matchId, "match id is required");
@@ -43,17 +47,26 @@ public interface MatchRepository {
     Objects.requireNonNull(binding, "start binding is required");
   }
 
-  record StartBinding(MatchId matchId, int version, String requestIdentity, CopyOwner oneOwner,
-      List<CardCopyId> oneCopies, UUID oneOperationId, CopyOwner twoOwner,
-      List<CardCopyId> twoCopies, UUID twoOperationId) {
+  record StartBinding(
+      MatchId matchId,
+      int version,
+      String requestIdentity,
+      CopyOwner oneOwner,
+      List<CardCopyId> oneCopies,
+      UUID oneOperationId,
+      CopyOwner twoOwner,
+      List<CardCopyId> twoCopies,
+      UUID twoOperationId) {
     public StartBinding {
       Objects.requireNonNull(matchId, "match id is required");
       if (version < 1) throw new IllegalArgumentException("binding version must be positive");
       if (requestIdentity == null || requestIdentity.isBlank()) {
         throw new IllegalArgumentException("request identity is required");
       }
-      Objects.requireNonNull(oneOwner); oneCopies = List.copyOf(Objects.requireNonNull(oneCopies));
-      Objects.requireNonNull(oneOperationId); Objects.requireNonNull(twoOwner);
+      Objects.requireNonNull(oneOwner);
+      oneCopies = List.copyOf(Objects.requireNonNull(oneCopies));
+      Objects.requireNonNull(oneOperationId);
+      Objects.requireNonNull(twoOwner);
       twoCopies = List.copyOf(Objects.requireNonNull(twoCopies));
       Objects.requireNonNull(twoOperationId);
     }
@@ -90,16 +103,20 @@ public interface MatchRepository {
   }
 
   default void delete(MatchId matchId) {}
+
   /** Rehydrates a snapshot after resolving its catalog snapshot ID. */
-  default Optional<MatchState> rehydrate(MatchSnapshot snapshot,
-      Function<String, CardCatalog> catalogResolver) {
+  default Optional<MatchState> rehydrate(
+      MatchSnapshot snapshot, Function<String, CardCatalog> catalogResolver) {
     Objects.requireNonNull(snapshot, "snapshot is required");
     Objects.requireNonNull(catalogResolver, "catalog resolver is required");
     return Optional.empty();
   }
 
   default List<MatchState> activeStates(Function<String, CardCatalog> catalogResolver) {
-    return activeMatches().stream().map(snapshot -> rehydrate(snapshot, catalogResolver)).flatMap(Optional::stream).toList();
+    return activeMatches().stream()
+        .map(snapshot -> rehydrate(snapshot, catalogResolver))
+        .flatMap(Optional::stream)
+        .toList();
   }
 
   record SaveResult(boolean saved, long revision, Failure failure) {
@@ -107,9 +124,17 @@ public interface MatchRepository {
       Objects.requireNonNull(failure, "failure is required");
     }
 
-    public static SaveResult success(long revision) { return new SaveResult(true, revision, Failure.NONE); }
-    public static SaveResult stale(long revision) { return new SaveResult(false, revision, Failure.STALE_REVISION); }
-    public boolean accepted() { return saved; }
+    public static SaveResult success(long revision) {
+      return new SaveResult(true, revision, Failure.NONE);
+    }
+
+    public static SaveResult stale(long revision) {
+      return new SaveResult(false, revision, Failure.STALE_REVISION);
+    }
+
+    public boolean accepted() {
+      return saved;
+    }
   }
 
   enum Failure {
@@ -119,21 +144,30 @@ public interface MatchRepository {
     INVALID_STATE
   }
 
-  record MatchSnapshot(MatchId matchId, long revision, String status, byte[] stateBytes,
-      String transcriptJson, String stateDigest) {
-    public MatchSnapshot(MatchId matchId, long revision, String status, byte[] stateBytes,
-        String transcriptJson) {
+  record MatchSnapshot(
+      MatchId matchId,
+      long revision,
+      String status,
+      byte[] stateBytes,
+      String transcriptJson,
+      String stateDigest) {
+    public MatchSnapshot(
+        MatchId matchId, long revision, String status, byte[] stateBytes, String transcriptJson) {
       this(matchId, revision, status, stateBytes, transcriptJson, null);
     }
 
     public MatchSnapshot {
-      Objects.requireNonNull(matchId); Objects.requireNonNull(status);
-      Objects.requireNonNull(stateBytes); stateBytes = stateBytes.clone();
+      Objects.requireNonNull(matchId);
+      Objects.requireNonNull(status);
+      Objects.requireNonNull(stateBytes);
+      stateBytes = stateBytes.clone();
       Objects.requireNonNull(transcriptJson);
       if (revision < 0) throw new IllegalArgumentException("revision must not be negative");
     }
 
     @Override
-    public byte[] stateBytes() { return stateBytes.clone(); }
+    public byte[] stateBytes() {
+      return stateBytes.clone();
+    }
   }
 }

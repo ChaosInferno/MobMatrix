@@ -19,7 +19,8 @@ final class MatchEngineStandardTest {
     MatchEngine.MatchTransition transition = MatchEngine.start(fixtureStart(17L));
     MatchState state = transition.state();
 
-    assertEquals(List.of(0, 1, 2, 3, 4, 5, 6, 7, 8),
+    assertEquals(
+        List.of(0, 1, 2, 3, 4, 5, 6, 7, 8),
         state.board().emptySquares().stream().map(Square::index).toList());
     assertEquals(5, state.hand(PlayerSeat.ONE).size());
     assertEquals(5, state.hand(PlayerSeat.TWO).size());
@@ -34,8 +35,16 @@ final class MatchEngineStandardTest {
     PlayerSeat actor = state.currentSeat();
     CardCopyId copy = state.hand(actor).getFirst().copyId();
 
-    MatchEngine.MatchTransition transition = MatchEngine.apply(
-        state, new MatchCommand.PlaceCard(actor, copy, Square.CENTER, state.revision(), UUID.randomUUID(), START.plusSeconds(1)));
+    MatchEngine.MatchTransition transition =
+        MatchEngine.apply(
+            state,
+            new MatchCommand.PlaceCard(
+                actor,
+                copy,
+                Square.CENTER,
+                state.revision(),
+                UUID.randomUUID(),
+                START.plusSeconds(1)));
 
     assertTrue(transition.accepted());
     assertEquals(1, transition.state().revision());
@@ -52,23 +61,30 @@ final class MatchEngineStandardTest {
     CardCopyId first = state.hand(actor).get(0).copyId();
     CardCopyId second = state.hand(opponent).get(0).copyId();
 
-    MatchEngine.MatchTransition firstMove = MatchEngine.apply(state,
-        place(actor, first, Square.WEST, state.revision(), START.plusSeconds(1)));
+    MatchEngine.MatchTransition firstMove =
+        MatchEngine.apply(
+            state, place(actor, first, Square.WEST, state.revision(), START.plusSeconds(1)));
     MatchState afterFirst = firstMove.state();
-    MatchEngine.MatchTransition secondMove = MatchEngine.apply(afterFirst,
-        place(opponent, second, Square.CENTER, afterFirst.revision(), START.plusSeconds(2)));
+    MatchEngine.MatchTransition secondMove =
+        MatchEngine.apply(
+            afterFirst,
+            place(opponent, second, Square.CENTER, afterFirst.revision(), START.plusSeconds(2)));
     MatchState afterSecond = secondMove.state();
     CardCopyId third = afterSecond.hand(actor).getFirst().copyId();
-    MatchEngine.MatchTransition capture = MatchEngine.apply(afterSecond,
-        place(actor, third, Square.NORTH, afterSecond.revision(), START.plusSeconds(3)));
+    MatchEngine.MatchTransition capture =
+        MatchEngine.apply(
+            afterSecond,
+            place(actor, third, Square.NORTH, afterSecond.revision(), START.plusSeconds(3)));
 
     assertTrue(capture.accepted());
     assertEquals(actor, capture.state().board().ownerOf(Square.CENTER));
 
     MatchState friendly = capture.state().withCurrentSeat(actor);
     CardCopyId fourth = friendly.hand(actor).getFirst().copyId();
-    MatchEngine.MatchTransition friendlyMove = MatchEngine.apply(friendly,
-        place(actor, fourth, Square.SOUTH, friendly.revision(), START.plusSeconds(4)));
+    MatchEngine.MatchTransition friendlyMove =
+        MatchEngine.apply(
+            friendly,
+            place(actor, fourth, Square.SOUTH, friendly.revision(), START.plusSeconds(4)));
     assertTrue(friendlyMove.accepted());
     assertEquals(actor, friendlyMove.state().board().ownerOf(Square.CENTER));
   }
@@ -79,18 +95,50 @@ final class MatchEngineStandardTest {
     PlayerSeat actor = state.currentSeat();
     CardCopyId copy = state.hand(actor).getFirst().copyId();
     UUID commandId = UUID.randomUUID();
-    MatchCommand command = new MatchCommand.PlaceCard(actor, copy, Square.CENTER, state.revision(), commandId, START);
+    MatchCommand command =
+        new MatchCommand.PlaceCard(actor, copy, Square.CENTER, state.revision(), commandId, START);
 
     MatchEngine.MatchTransition accepted = MatchEngine.apply(state, command);
     assertTrue(accepted.accepted());
-    assertEquals(MatchErrorCode.DUPLICATE_COMMAND_ID,
+    assertEquals(
+        MatchErrorCode.DUPLICATE_COMMAND_ID,
         MatchEngine.apply(accepted.state(), command).rejection().code());
-    assertEquals(MatchErrorCode.OCCUPIED_SQUARE,
-        MatchEngine.apply(accepted.state(), place(accepted.state().currentSeat(), accepted.state().hand(accepted.state().currentSeat()).getFirst().copyId(), Square.CENTER, accepted.state().revision(), START)).rejection().code());
-    assertEquals(MatchErrorCode.WRONG_ACTOR,
-        MatchEngine.apply(accepted.state(), place(actor, accepted.state().hand(accepted.state().currentSeat()).getFirst().copyId(), Square.NORTH, accepted.state().revision(), START)).rejection().code());
-    assertEquals(MatchErrorCode.STALE_REVISION,
-        MatchEngine.apply(accepted.state(), place(accepted.state().currentSeat(), accepted.state().hand(accepted.state().currentSeat()).getFirst().copyId(), Square.NORTH, 0, START)).rejection().code());
+    assertEquals(
+        MatchErrorCode.OCCUPIED_SQUARE,
+        MatchEngine.apply(
+                accepted.state(),
+                place(
+                    accepted.state().currentSeat(),
+                    accepted.state().hand(accepted.state().currentSeat()).getFirst().copyId(),
+                    Square.CENTER,
+                    accepted.state().revision(),
+                    START))
+            .rejection()
+            .code());
+    assertEquals(
+        MatchErrorCode.WRONG_ACTOR,
+        MatchEngine.apply(
+                accepted.state(),
+                place(
+                    actor,
+                    accepted.state().hand(accepted.state().currentSeat()).getFirst().copyId(),
+                    Square.NORTH,
+                    accepted.state().revision(),
+                    START))
+            .rejection()
+            .code());
+    assertEquals(
+        MatchErrorCode.STALE_REVISION,
+        MatchEngine.apply(
+                accepted.state(),
+                place(
+                    accepted.state().currentSeat(),
+                    accepted.state().hand(accepted.state().currentSeat()).getFirst().copyId(),
+                    Square.NORTH,
+                    0,
+                    START))
+            .rejection()
+            .code());
   }
 
   @Test
@@ -99,8 +147,11 @@ final class MatchEngineStandardTest {
     for (int index = 0; index < 9; index++) {
       PlayerSeat actor = state.currentSeat();
       CardCopyId copy = state.hand(actor).getFirst().copyId();
-      MatchEngine.MatchTransition transition = MatchEngine.apply(state,
-          place(actor, copy, Square.of(index), state.revision(), START.plusSeconds(index + 1L)));
+      MatchEngine.MatchTransition transition =
+          MatchEngine.apply(
+              state,
+              place(
+                  actor, copy, Square.of(index), state.revision(), START.plusSeconds(index + 1L)));
       assertTrue(transition.accepted());
       state = transition.state();
     }
@@ -127,20 +178,22 @@ final class MatchEngineStandardTest {
     assertEquals(9, projection.legalSquares().size());
   }
 
-  private static MatchCommand.PlaceCard place(PlayerSeat seat, CardCopyId copy, Square square, long revision, Instant time) {
+  private static MatchCommand.PlaceCard place(
+      PlayerSeat seat, CardCopyId copy, Square square, long revision, Instant time) {
     return new MatchCommand.PlaceCard(seat, copy, square, revision, UUID.randomUUID(), time);
   }
 
   static MatchEngine.StartMatch fixtureStart(long seed) {
     CardCatalog catalog = fixtureCatalog();
-    return new MatchEngine.StartMatch(new MatchId("match-" + seed), deck(1), deck(6), catalog,
-        new MatchRules(), seed, START);
+    return new MatchEngine.StartMatch(
+        new MatchId("match-" + seed), deck(1), deck(6), catalog, new MatchRules(), seed, START);
   }
 
   static Deck deck(int firstId) {
     List<CardCopy> copies = new ArrayList<>();
     for (int index = 0; index < 5; index++) {
-      copies.add(new CardCopy(new CardCopyId(new UUID(firstId, index + 1L)), new CardId(firstId + index)));
+      copies.add(
+          new CardCopy(new CardCopyId(new UUID(firstId, index + 1L)), new CardId(firstId + index)));
     }
     return new Deck(copies);
   }
@@ -148,8 +201,18 @@ final class MatchEngineStandardTest {
   static CardCatalog fixtureCatalog() {
     List<CardDefinition> definitions = new ArrayList<>();
     for (int id = 1; id <= 10; id++) {
-      definitions.add(new CardDefinition(new CardId(id), "No. " + id, "Card " + id, 1,
-          CardType.NORMAL, id == 1 ? 10 : 1, id == 2 ? 10 : 1, id == 2 ? 10 : 1, 1, 100));
+      definitions.add(
+          new CardDefinition(
+              new CardId(id),
+              "No. " + id,
+              "Card " + id,
+              1,
+              CardType.NORMAL,
+              id == 1 ? 10 : 1,
+              id == 2 ? 10 : 1,
+              id == 2 ? 10 : 1,
+              1,
+              100));
     }
     return new CardCatalog(definitions, "test");
   }

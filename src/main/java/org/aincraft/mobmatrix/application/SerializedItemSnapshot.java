@@ -44,7 +44,8 @@ public record SerializedItemSnapshot(CardCopyId copyId, byte[] bytes) {
   @Override
   public boolean equals(Object other) {
     return other instanceof SerializedItemSnapshot snapshot
-        && copyId.equals(snapshot.copyId) && Arrays.equals(bytes, snapshot.bytes);
+        && copyId.equals(snapshot.copyId)
+        && Arrays.equals(bytes, snapshot.bytes);
   }
 
   @Override
