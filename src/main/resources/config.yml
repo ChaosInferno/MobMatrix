@@ -1,0 +1,7 @@
+server-secret: "change-this-to-a-stable-random-secret-at-least-16-bytes"
+database-file: "mobmatrix.sqlite"
+challenge-expiry-seconds: 60
+max-give-amount: 64
+bot-seed: 449748
+rules: []
+disconnect-policy: timeout

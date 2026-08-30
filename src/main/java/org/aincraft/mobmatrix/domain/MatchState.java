@@ -91,6 +91,14 @@ public final class MatchState {
         for (CardCopy copy : offering.cards()) houseCopies.add(copy.copyId());
       }
     }
+    for (List<HandCard> hand : this.hands.values()) {
+      for (HandCard card : hand) {
+        if (card.copy().owner().isHouse()) houseCopies.add(card.copyId());
+      }
+    }
+    for (Board.Cell cell : this.board.cells()) {
+      if (cell != null && cell.copy().owner().isHouse()) houseCopies.add(cell.copy().copyId());
+    }
     this.houseOwnedCopies = Set.copyOf(houseCopies);
     this.chaosChoices = Map.copyOf(Objects.requireNonNull(chaosChoices));
   }

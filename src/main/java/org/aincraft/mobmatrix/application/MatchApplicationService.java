@@ -42,12 +42,30 @@ public final class MatchApplicationService {
    * the domain start transition have succeeded.
    */
   public synchronized MatchStartResult start(StartMatchRequest request) {
+    return start(request, false);
+  }
+
+  /**
+   * Starts a player-versus-house match. The house seat is deliberately not passed through the
+   * custody adapter: only the player's selected physical copies are reserved and settled.
+   */
+  public synchronized MatchStartResult startBot(BotStartMatchRequest request) {
+    Objects.requireNonNull(request, "bot start request is required");
+    return start(request.asStartMatchRequest(), true);
+  }
+
+  /** Compatibility alias for callers that name the operation after the match mode. */
+  public synchronized MatchStartResult startBotMatch(BotStartMatchRequest request) {
+    return startBot(request);
+  }
+
+  private synchronized MatchStartResult start(StartMatchRequest request, boolean allowHouseSeat) {
     Objects.requireNonNull(request, "start request is required");
-    Failure ownerValidation = validateSeatOwners(request);
+    Failure ownerValidation = validateSeatOwners(request, allowHouseSeat);
     if (ownerValidation != Failure.NONE) {
       return MatchStartResult.rejected(request.match().matchId(), ownerValidation);
     }
-    Failure validation = validateDeckSelections(request);
+    Failure validation = validateDeckSelections(request, allowHouseSeat);
     if (validation != Failure.NONE) {
       return MatchStartResult.rejected(request.match().matchId(), validation);
     }
@@ -541,7 +559,16 @@ public final class MatchApplicationService {
     String text = String.valueOf(item);
     value.append(text.length()).append(':').append(text);
   }
-  private static Failure validateSeatOwners(StartMatchRequest request) {
+  private static Failure validateSeatOwners(StartMatchRequest request, boolean allowHouseSeat) {
+    if (!allowHouseSeat
+        && (!request.oneOwner().isPlayer() || !request.twoOwner().isPlayer())) {
+      return Failure.INVALID_OWNER;
+    }
+    if (allowHouseSeat
+        && (!request.oneOwner().isPlayer()
+            || (!request.twoOwner().isPlayer() && !request.twoOwner().isHouse()))) {
+      return Failure.INVALID_OWNER;
+    }
     if (request.oneOwner().isPlayer() && request.twoOwner().isPlayer()
         && request.oneOwner().playerId().equals(request.twoOwner().playerId())) {
       return Failure.INVALID_OWNER;
@@ -549,14 +576,32 @@ public final class MatchApplicationService {
     return Failure.NONE;
   }
 
-  private static Failure validateDeckSelections(StartMatchRequest request) {
+
+  private static Failure validateDeckSelections(StartMatchRequest request, boolean allowHouseSeat) {
     if (overlaps(request.match())) return Failure.INVALID_COPY_SET;
     Failure one = validateDeck(request.oneCopies(), request.match().oneDeck(), request.oneOwner(),
         request.match().oneInventory(), request.match().rules());
     if (one != Failure.NONE) return one;
+    if (allowHouseSeat && request.twoOwner().isHouse()) {
+      return validateHouseDeck(request);
+    }
     return validateDeck(request.twoCopies(), request.match().twoDeck(), request.twoOwner(),
         request.match().twoInventory(), request.match().rules());
   }
+
+
+  private static Failure validateHouseDeck(StartMatchRequest request) {
+    if (!request.twoCopies().isEmpty() || request.match().twoDeck().copies().size() != 5) {
+      return Failure.INVALID_COPY_SET;
+    }
+    Set<CardCopyId> ids = new HashSet<>();
+    for (var copy : request.match().twoDeck().copies()) {
+      if (!copy.owner().isHouse() || !ids.add(copy.copyId())) return Failure.INVALID_OWNER;
+      if (!request.match().twoInventory().contains(copy)) return Failure.MISMATCHED_OWNER;
+    }
+    return Failure.NONE;
+  }
+
   private static Failure validateRandomSelections(StartMatchRequest request, MatchState state) {
     Failure one = validateRandomSeat(request.oneCopies(), request.oneOwner(),
         request.match().oneInventory(), state, PlayerSeat.ONE);
@@ -888,6 +933,29 @@ public final class MatchApplicationService {
     return List.copyOf(copyIds);
   }
 
+  /**
+   * Pure request for a deterministic player-versus-house match. The house seat is represented by
+   * five house-owned cards in {@link #match()} and has no physical custody selection.
+   */
+  public record BotStartMatchRequest(MatchEngine.StartMatch match, CopyOwner playerOwner,
+      List<CardCopyId> playerCopies, UUID playerOperationId, UUID houseOperationId) {
+    public BotStartMatchRequest {
+      Objects.requireNonNull(match, "match is required");
+      Objects.requireNonNull(playerOwner, "player owner is required");
+      if (!playerOwner.isPlayer()) throw new IllegalArgumentException("player owner is required");
+      playerCopies = List.copyOf(Objects.requireNonNull(playerCopies, "player copies are required"));
+      Objects.requireNonNull(playerOperationId, "player operation is required");
+      Objects.requireNonNull(houseOperationId, "house operation is required");
+      if (playerOperationId.equals(houseOperationId)) {
+        throw new IllegalArgumentException("operations must differ");
+      }
+    }
+
+    private StartMatchRequest asStartMatchRequest() {
+      return new StartMatchRequest(match, playerOwner, playerCopies, playerOperationId,
+          CopyOwner.house(), List.of(), houseOperationId);
+    }
+  }
   public record StartMatchRequest(MatchEngine.StartMatch match, CopyOwner oneOwner,
       List<CardCopyId> oneCopies, UUID oneOperationId, CopyOwner twoOwner,
       List<CardCopyId> twoCopies, UUID twoOperationId) {

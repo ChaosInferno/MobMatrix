@@ -1,0 +1,20 @@
+name: MobMatrix
+version: '${version}'
+main: org.aincraft.mobmatrix.MobMatrixPlugin
+api-version: '26.2'
+load: POSTWORLD
+dependencies:
+  server:
+    MapGUI:
+      load: BEFORE
+      required: true
+      join-classpath: true
+commands:
+  mobmatrix:
+    description: Play MobMatrix Triple Triad
+    usage: /mobmatrix <give|deck|challenge|bot|accept|decline|cancel>
+    aliases: [mm]
+    permission: mobmatrix.use
+permissions:
+  mobmatrix.use:
+    default: true
