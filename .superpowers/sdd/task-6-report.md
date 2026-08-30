@@ -2114,3 +2114,22 @@ BUILD SUCCESSFUL in 8s
 The focused storage class selected 73 tests and passed. The SQLite restricted-native-access warning
 was emitted by the environment. No formatter, linter, project-wide build, or project-wide test
 suite was run.
+
+The focused inventory protection test command was also run:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --no-daemon
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 7s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+The added malformed-item death scan regression is assumption-skipped when Paper's item registry is
+unavailable; the class compiled and the remaining focused inventory tests passed. The additional
+test commit is `6c82840` (`test: cover malformed death protection`). Report update commits are
+`3a2bdf2` and this update.
