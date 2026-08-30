@@ -739,22 +739,31 @@ public final class MatchApplicationService {
             custody.operationMatchId(operationId);
         Optional<CardCustodyPort.OperationBinding> detailedBinding = binding.isEmpty()
             ? custody.operationBinding(operationId) : Optional.empty();
+        Optional<OperationStatus> durableStatus = status.isPresent()
+            ? status
+            : detailedBinding.map(CardCustodyPort.OperationBinding::status);
+        boolean hasBinding = binding.isPresent() || detailedBinding.isPresent();
         boolean boundToActiveMatch = binding.map(activeMatchIds::contains).orElse(false)
             || detailedBinding.map(CardCustodyPort.OperationBinding::matchId)
-                .map(activeMatchIds::contains).orElse(false)
-            || (activeMatchesLoadFailed && (binding.isPresent() || detailedBinding.isPresent()));
-        if (boundToActiveMatch) {
-          if (status.isEmpty()) {
-            // An active binding plus an unreadable status is ambiguous: preserving custody is safer
-            // than attempting a return that could release cards still held by the match.
-            recoveries.add(recoveryFailure(operationId));
-          } else if (!isTerminal(status.get())) {
-            // PREPARED, ESCROWED, and RETURN_PENDING all remain match-bound until terminality is
+                .map(activeMatchIds::contains).orElse(false);
+
+        // An open operation without a durable binding cannot be classified as an orphan while
+        // active matches are known. Likewise, an unreadable status cannot prove that the row is
+        // terminal. Preserve custody and report an unknown result rather than releasing cards.
+        if (!hasBinding && (activeMatchesLoadFailed || durableStatus.isEmpty()
+            || !isTerminal(durableStatus.get()))) {
+          recoveries.add(recoveryFailure(operationId));
+        } else if (boundToActiveMatch || (activeMatchesLoadFailed && hasBinding)) {
+          if (durableStatus.isEmpty() || !isTerminal(durableStatus.get())) {
+            // PREPARED, ESCROWED, and RETURN_PENDING remain match-bound until terminality is
             // durably proven. Never reconcile active custody based on a nonterminal row.
+            if (durableStatus.isEmpty()) recoveries.add(recoveryFailure(operationId));
           } else {
             recoveries.add(custody.recover(operationId));
           }
         } else {
+          // A durable binding to a match not present in the active snapshot proves this operation
+          // is unrelated to active custody and permits normal orphan reconciliation.
           recoveries.add(custody.recover(operationId));
         }
       } catch (RuntimeException exception) {

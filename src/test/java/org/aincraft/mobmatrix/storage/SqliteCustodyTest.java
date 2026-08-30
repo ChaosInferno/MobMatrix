@@ -2436,4 +2436,156 @@ final class SqliteCustodyTest {
     }
     Files.deleteIfExists(path);
   }
+  @Test
+  void noncanonicalLedgerUuidCannotBeReadOrProvenTerminal() throws Exception {
+    var path = Files.createTempFile("mobmatrix-noncanonical-ledger-proof", ".sqlite");
+    UUID operation = UUID.randomUUID();
+    UUID secondOperation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.fromString("ffffffff-ffff-4fff-8fff-ffffffffffff"));
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {8, 4});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(operation, owner, List.of(copy), List.of(snapshot));
+      repository.transition(operation, OperationStatus.ESCROWED);
+      repository.transition(operation, OperationStatus.RETURN_PENDING);
+      repository.addRecovery(operation, owner, snapshot);
+      repository.markRestored(operation, copy);
+      repository.transition(operation, OperationStatus.RETURNED);
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA foreign_keys = OFF");
+      }
+      try (var update = database.connection().prepareStatement(
+          "UPDATE card_copies SET copy_uuid = ? WHERE copy_uuid = ?")) {
+        update.setString(1, copy.value().toString().toUpperCase(java.util.Locale.ROOT));
+        update.setString(2, copy.value().toString());
+        update.executeUpdate();
+      }
+
+      assertThrows(IllegalStateException.class, () -> repository.findCopy(copy));
+      assertTrue(repository.reservedCopyIds().contains(copy));
+      assertTrue(repository.hasUnresolvedReservationIdentity());
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
+            created_at, updated_at)
+          VALUES (?, 'PLAYER', ?, NULL, 'PREPARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          """)) {
+        insert.setString(1, secondOperation.toString());
+        insert.setString(2, owner.playerId().toString());
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES (?, ?)")) {
+        insert.setString(1, secondOperation.toString());
+        insert.setString(2, copy.value().toString());
+        assertThrows(java.sql.SQLException.class, insert::executeUpdate);
+      }
+      assertThrows(IllegalStateException.class,
+          () -> repository.prepare(secondOperation, owner, List.of(copy), List.of(snapshot)));
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void noncanonicalParentAndChildOperationIdentitiesAreRejected() throws Exception {
+    var path = Files.createTempFile("mobmatrix-noncanonical-operation-proof", ".sqlite");
+    UUID operation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {3, 1});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(operation, owner, List.of(copy), List.of(snapshot));
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA foreign_keys = OFF");
+      }
+      try (var update = database.connection().prepareStatement(
+          "UPDATE reservations SET operation_id = ? WHERE operation_id = ?")) {
+        update.setString(1, operation.toString().toUpperCase(java.util.Locale.ROOT));
+        update.setString(2, operation.toString());
+        update.executeUpdate();
+      }
+      var parentFailure = assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+          () -> repository.findReservation(operation));
+      assertEquals(List.of(copy), parentFailure.expectedCopyIds());
+    }
+    Files.deleteIfExists(path);
+
+    path = Files.createTempFile("mobmatrix-noncanonical-child-operation-proof", ".sqlite");
+    UUID childOperation = UUID.randomUUID();
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(childOperation, owner, List.of(copy), List.of(snapshot));
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA foreign_keys = OFF");
+      }
+      try (var update = database.connection().prepareStatement(
+          "UPDATE reservation_copies SET operation_id = ? WHERE operation_id = ?")) {
+        update.setString(1, childOperation.toString().toUpperCase(java.util.Locale.ROOT));
+        update.setString(2, childOperation.toString());
+        update.executeUpdate();
+      }
+      var childFailure = assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+          () -> repository.findReservation(childOperation));
+      assertEquals(List.of(copy), childFailure.expectedCopyIds());
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void noncanonicalRecoveryOperationCannotProveTerminalReuse() throws Exception {
+    var path = Files.createTempFile("mobmatrix-noncanonical-recovery-operation-proof", ".sqlite");
+    UUID operation = UUID.randomUUID();
+    UUID secondOperation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {9, 2});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(operation, owner, List.of(copy), List.of(snapshot));
+      repository.transition(operation, OperationStatus.ESCROWED);
+      repository.transition(operation, OperationStatus.RETURN_PENDING);
+      repository.addRecovery(operation, owner, snapshot);
+      repository.markRestored(operation, copy);
+      repository.transition(operation, OperationStatus.RETURNED);
+
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA foreign_keys = OFF");
+      }
+      try (var update = database.connection().prepareStatement(
+          "UPDATE recovery_rows SET operation_id = ? WHERE operation_id = ?")) {
+        update.setString(1, operation.toString().toUpperCase(java.util.Locale.ROOT));
+        update.setString(2, operation.toString());
+        update.executeUpdate();
+      }
+
+      assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+          () -> repository.prepare(secondOperation, owner, List.of(copy), List.of(snapshot)));
+    }
+    Files.deleteIfExists(path);
+  }
+  @Test
+  void migrationRejectsNoncanonicalSingleCardCopyLedgerIdentity() throws Exception {
+    var path = Files.createTempFile("mobmatrix-card-copy-noncanonical-migration", ".sqlite");
+    CardCopyId copy = new CardCopyId(UUID.fromString("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"));
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    try (Database database = new Database(path)) {
+      new SqliteCardRepository(database).saveCopy(
+          new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      try (var statement = database.connection().createStatement()) {
+        statement.execute("DROP INDEX IF EXISTS card_copies_copy_uuid_ci");
+        statement.execute("UPDATE card_copies SET copy_uuid = '"
+            + copy.value().toString().toUpperCase(java.util.Locale.ROOT) + "'");
+        statement.execute("DELETE FROM schema_migrations WHERE version = 8");
+      }
+      assertThrows(java.sql.SQLException.class,
+          () -> SchemaMigrator.migrate(database.connection()));
+    }
+    Files.deleteIfExists(path);
+  }
+
 }

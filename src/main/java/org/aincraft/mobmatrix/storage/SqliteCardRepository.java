@@ -180,6 +180,13 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     }
     return parsed;
   }
+  private static UUID parseStoredCanonicalUuid(String value, String message) {
+    try {
+      return parseCanonicalUuid(value);
+    } catch (RuntimeException exception) {
+      throw new IllegalStateException(message, exception);
+    }
+  }
 
   private static boolean isUuid(String value) {
     try {
@@ -209,13 +216,18 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     Objects.requireNonNull(copy, "copy is required");
     inTransaction(() -> {
       try (var existing = connection.prepareStatement(
-          "SELECT catalog_id, owner_kind, owner_uuid FROM card_copies "
+          "SELECT copy_uuid, catalog_id, owner_kind, owner_uuid FROM card_copies "
               + "WHERE lower(copy_uuid) = lower(?)")) {
         existing.setString(1, copy.copyId().value().toString());
         try (var rows = existing.executeQuery()) {
           if (rows.next()) {
-            int catalogId = rows.getInt(1);
-            CopyOwner owner = readOwner(rows.getString(2), rows.getString(3));
+            String rawCopyId = rows.getString(1);
+            if (!copy.copyId().value().equals(parseStoredCanonicalUuid(rawCopyId,
+                "invalid stored card-copy UUID"))) {
+              throw new IllegalStateException("stored card-copy UUID does not match requested identity");
+            }
+            int catalogId = rows.getInt(2);
+            CopyOwner owner = readOwner(rows.getString(3), rows.getString(4));
             if (rows.next()) {
               throw new IllegalStateException("duplicate card-copy UUID: " + copy.copyId());
             }
@@ -699,41 +711,53 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       }
     }
   }
-
   private Reservation findReservationInternal(UUID operationId) throws SQLException {
+    boolean duplicateOperationIdentity = false;
     try (var count = connection.prepareStatement(
         "SELECT COUNT(*) FROM reservations WHERE lower(operation_id) = lower(?)")) {
       count.setString(1, operationId.toString());
       try (var rows = count.executeQuery()) {
-        if (rows.next() && rows.getInt(1) > 1) {
-          throw new CustodyIntegrityException(operationId, List.of(),
-              "duplicate case-variant reservation operation identity");
-        }
+        duplicateOperationIdentity = rows.next() && rows.getInt(1) > 1;
       }
     }
     try (var query = connection.prepareStatement(
-        "SELECT owner_kind, owner_uuid, match_id, status FROM reservations "
+        "SELECT operation_id, owner_kind, owner_uuid, match_id, status FROM reservations "
             + "WHERE lower(operation_id) = lower(?)")) {
       query.setString(1, operationId.toString());
       try (var rows = query.executeQuery()) {
         if (!rows.next()) return null;
-        String ownerKind = rows.getString(1);
-        String ownerUuid = rows.getString(2);
-        String matchId = rows.getString(3);
-        String rawStatus = rows.getString(4);
+        String rawParentOperationId = rows.getString(1);
+        String ownerKind = rows.getString(2);
+        String ownerUuid = rows.getString(3);
+        String matchId = rows.getString(4);
+        String rawStatus = rows.getString(5);
         List<CardCopyId> copies = new ArrayList<>();
         RuntimeException decodeFailure = null;
+        try {
+          if (!operationId.equals(parseCanonicalUuid(rawParentOperationId))) {
+            throw new IllegalArgumentException("parent operation identity does not match requested");
+          }
+        } catch (RuntimeException exception) {
+          decodeFailure = exception;
+        }
 
-        // Scan every reservation-copy row even when one UUID is malformed. The parseable UUIDs
-        // are the only physical identities that can be retained for fail-closed recovery.
+        // Scan every reservation-copy row even when one identity is malformed. The parseable
+        // physical UUIDs are the only identities that can be retained for fail-closed recovery.
         try (var copyQuery = connection.prepareStatement(
-            "SELECT copy_uuid FROM reservation_copies "
+            "SELECT operation_id, copy_uuid FROM reservation_copies "
                 + "WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
           copyQuery.setString(1, operationId.toString());
           try (var copyRows = copyQuery.executeQuery()) {
             while (copyRows.next()) {
               try {
-                copies.add(new CardCopyId(parseCanonicalUuid(copyRows.getString(1))));
+                if (!operationId.equals(parseCanonicalUuid(copyRows.getString(1)))) {
+                  throw new IllegalArgumentException("child operation identity does not match parent");
+                }
+              } catch (RuntimeException exception) {
+                if (decodeFailure == null) decodeFailure = exception;
+              }
+              try {
+                copies.add(new CardCopyId(parseCanonicalUuid(copyRows.getString(2))));
               } catch (RuntimeException exception) {
                 if (decodeFailure == null) decodeFailure = exception;
               }
@@ -743,14 +767,17 @@ public final class SqliteCardRepository implements CardCustodyJournal {
 
         List<SerializedItemSnapshot> snapshots = new ArrayList<>();
         try (var snapshotQuery = connection.prepareStatement(
-            "SELECT copy_uuid, item_bytes FROM escrow_items "
+            "SELECT operation_id, copy_uuid, item_bytes FROM escrow_items "
                 + "WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
           snapshotQuery.setString(1, operationId.toString());
           try (var snapshotRows = snapshotQuery.executeQuery()) {
             while (snapshotRows.next()) {
               try {
-                CardCopyId copy = new CardCopyId(parseCanonicalUuid(snapshotRows.getString(1)));
-                snapshots.add(new SerializedItemSnapshot(copy, snapshotRows.getBytes(2)));
+                if (!operationId.equals(parseCanonicalUuid(snapshotRows.getString(1)))) {
+                  throw new IllegalArgumentException("child operation identity does not match parent");
+                }
+                CardCopyId copy = new CardCopyId(parseCanonicalUuid(snapshotRows.getString(2)));
+                snapshots.add(new SerializedItemSnapshot(copy, snapshotRows.getBytes(3)));
               } catch (RuntimeException exception) {
                 if (decodeFailure == null) decodeFailure = exception;
               }
@@ -760,22 +787,26 @@ public final class SqliteCardRepository implements CardCustodyJournal {
 
         List<CardCopyId> restored = new ArrayList<>();
         try (var restoredQuery = connection.prepareStatement(
-            "SELECT copy_uuid FROM reservation_restored "
+            "SELECT operation_id, copy_uuid FROM reservation_restored "
                 + "WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
           restoredQuery.setString(1, operationId.toString());
           try (var restoredRows = restoredQuery.executeQuery()) {
             while (restoredRows.next()) {
               try {
-                restored.add(new CardCopyId(parseCanonicalUuid(restoredRows.getString(1))));
+                if (!operationId.equals(parseCanonicalUuid(restoredRows.getString(1)))) {
+                  throw new IllegalArgumentException("child operation identity does not match parent");
+                }
+                restored.add(new CardCopyId(parseCanonicalUuid(restoredRows.getString(2))));
               } catch (RuntimeException exception) {
                 if (decodeFailure == null) decodeFailure = exception;
               }
             }
           }
         }
-        if (decodeFailure != null) {
+        if (duplicateOperationIdentity || decodeFailure != null) {
           throw new CustodyIntegrityException(operationId, copies,
-              "invalid reservation identity data", decodeFailure);
+              duplicateOperationIdentity ? "duplicate case-variant reservation operation identity"
+                  : "invalid reservation identity data", decodeFailure);
         }
         try {
           CopyOwner owner = readOwner(ownerKind, ownerUuid);
@@ -813,11 +844,17 @@ public final class SqliteCardRepository implements CardCustodyJournal {
 
   private boolean hasValidRecoveryRows(String rawOperationId, CopyOwner owner,
       List<CardCopyId> copies, List<SerializedItemSnapshot> snapshots) throws SQLException {
+    UUID expectedOperation;
+    try {
+      expectedOperation = parseCanonicalUuid(rawOperationId);
+    } catch (RuntimeException exception) {
+      return false;
+    }
     java.util.Map<CardCopyId, byte[]> expected = new java.util.HashMap<>();
     for (SerializedItemSnapshot snapshot : snapshots) expected.put(snapshot.copyId(), snapshot.bytes());
     Set<CardCopyId> seen = new HashSet<>();
     try (var query = connection.prepareStatement("""
-        SELECT copy_uuid, owner_kind, owner_uuid, item_bytes, status
+        SELECT operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status
         FROM recovery_rows WHERE lower(operation_id) = lower(?)
         """)) {
       query.setString(1, rawOperationId);
@@ -825,22 +862,23 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         while (rows.next()) {
           CardCopyId copy;
           try {
-            copy = new CardCopyId(parseCanonicalUuid(rows.getString(1)));
+            if (!expectedOperation.equals(parseCanonicalUuid(rows.getString(1)))) return false;
+            copy = new CardCopyId(parseCanonicalUuid(rows.getString(2)));
           } catch (RuntimeException exception) {
             return false;
           }
           if (!expected.containsKey(copy) || !seen.add(copy)) return false;
           CopyOwner recoveryOwner;
           try {
-            recoveryOwner = readOwner(rows.getString(2), rows.getString(3));
+            recoveryOwner = readOwner(rows.getString(3), rows.getString(4));
           } catch (RuntimeException exception) {
             return false;
           }
           if (!owner.equals(recoveryOwner)
-              || (!"PENDING".equals(rows.getString(5)) && !"RESTORED".equals(rows.getString(5)))) {
+              || (!"PENDING".equals(rows.getString(6)) && !"RESTORED".equals(rows.getString(6)))) {
             return false;
           }
-          byte[] bytes = rows.getBytes(4);
+          byte[] bytes = rows.getBytes(5);
           if (bytes == null || bytes.length == 0 || !Arrays.equals(expected.get(copy), bytes)) {
             return false;
           }
@@ -853,15 +891,28 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   private boolean hasPendingRecovery(UUID operationId) throws SQLException {
     return hasPendingRecovery(operationId.toString());
   }
-
   private boolean hasPendingRecovery(String rawOperationId) throws SQLException {
+    UUID expectedOperation;
+    try {
+      expectedOperation = parseCanonicalUuid(rawOperationId);
+    } catch (RuntimeException exception) {
+      return true;
+    }
     try (var query = connection.prepareStatement(
-        "SELECT 1 FROM recovery_rows WHERE lower(operation_id) = lower(?) AND status = 'PENDING'")) {
+        "SELECT operation_id, status FROM recovery_rows WHERE lower(operation_id) = lower(?)")) {
       query.setString(1, rawOperationId);
       try (var rows = query.executeQuery()) {
-        return rows.next();
+        while (rows.next()) {
+          try {
+            if (!expectedOperation.equals(parseCanonicalUuid(rows.getString(1)))) return true;
+          } catch (RuntimeException exception) {
+            return true;
+          }
+          if ("PENDING".equals(rows.getString(2))) return true;
+        }
       }
     }
+    return false;
   }
 
   private boolean provenTerminal(String rawOperationId) throws SQLException {
@@ -886,8 +937,13 @@ public final class SqliteCardRepository implements CardCustodyJournal {
 
   private boolean provenTerminal(String rawOperationId, String ownerKind, String ownerUuid,
       String rawStatus) throws SQLException {
-    if (!isUuid(rawOperationId)
-        || (!"RETURNED".equals(rawStatus) && !"ABORTED".equals(rawStatus))) return false;
+    UUID expectedOperation;
+    try {
+      expectedOperation = parseCanonicalUuid(rawOperationId);
+    } catch (RuntimeException exception) {
+      return false;
+    }
+    if (!"RETURNED".equals(rawStatus) && !"ABORTED".equals(rawStatus)) return false;
     CopyOwner owner;
     try {
       owner = readOwner(ownerKind, ownerUuid);
@@ -896,12 +952,14 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     }
     List<CardCopyId> copies = new ArrayList<>();
     try (var query = connection.prepareStatement(
-        "SELECT copy_uuid FROM reservation_copies WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
+        "SELECT operation_id, copy_uuid FROM reservation_copies "
+            + "WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
       query.setString(1, rawOperationId);
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
           try {
-            CardCopyId copy = new CardCopyId(parseCanonicalUuid(rows.getString(1)));
+            if (!expectedOperation.equals(parseCanonicalUuid(rows.getString(1)))) return false;
+            CardCopyId copy = new CardCopyId(parseCanonicalUuid(rows.getString(2)));
             if (copies.contains(copy)) return false;
             copies.add(copy);
           } catch (RuntimeException exception) {
@@ -922,13 +980,15 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     List<SerializedItemSnapshot> snapshots = new ArrayList<>();
     Set<CardCopyId> snapshotIds = new HashSet<>();
     try (var query = connection.prepareStatement(
-        "SELECT copy_uuid, item_bytes FROM escrow_items WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
+        "SELECT operation_id, copy_uuid, item_bytes FROM escrow_items "
+            + "WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
       query.setString(1, rawOperationId);
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
           try {
-            CardCopyId copy = new CardCopyId(parseCanonicalUuid(rows.getString(1)));
-            byte[] bytes = rows.getBytes(2);
+            if (!expectedOperation.equals(parseCanonicalUuid(rows.getString(1)))) return false;
+            CardCopyId copy = new CardCopyId(parseCanonicalUuid(rows.getString(2)));
+            byte[] bytes = rows.getBytes(3);
             if (!snapshotIds.add(copy) || bytes == null || bytes.length == 0) return false;
             snapshots.add(new SerializedItemSnapshot(copy, bytes));
           } catch (RuntimeException exception) {
@@ -940,12 +1000,14 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     if (!hasExactSnapshots(copies, snapshots)) return false;
     Set<CardCopyId> restored = new HashSet<>();
     try (var query = connection.prepareStatement(
-        "SELECT copy_uuid FROM reservation_restored WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
+        "SELECT operation_id, copy_uuid FROM reservation_restored "
+            + "WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
       query.setString(1, rawOperationId);
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
           try {
-            CardCopyId copy = new CardCopyId(parseCanonicalUuid(rows.getString(1)));
+            if (!expectedOperation.equals(parseCanonicalUuid(rows.getString(1)))) return false;
+            CardCopyId copy = new CardCopyId(parseCanonicalUuid(rows.getString(2)));
             if (!restored.add(copy)) return false;
           } catch (RuntimeException exception) {
             return false;
@@ -966,10 +1028,15 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       try (var rows = query.executeQuery()) {
         String stored = null;
         while (rows.next()) {
+          String rawCopyId = rows.getString(1);
+          if (!copyId.value().equals(parseStoredCanonicalUuid(rawCopyId,
+              "invalid stored card-copy UUID"))) {
+            throw new IllegalStateException("stored card-copy UUID does not match requested identity");
+          }
           if (stored != null) {
             throw new IllegalStateException("duplicate card-copy UUID: " + copyId);
           }
-          stored = rows.getString(1);
+          stored = rawCopyId;
         }
         if (stored == null) throw new IllegalStateException("unknown card copy: " + copyId);
         return stored;
@@ -982,45 +1049,74 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         "SELECT operation_id FROM reservations WHERE lower(operation_id) = lower(?)")) {
       query.setString(1, operationId.toString());
       try (var rows = query.executeQuery()) {
-        if (!rows.next()) throw new IllegalStateException("unknown operation: " + operationId);
-        return rows.getString(1);
+        String stored = null;
+        while (rows.next()) {
+          String rawOperationId = rows.getString(1);
+          if (!operationId.equals(parseStoredCanonicalUuid(rawOperationId,
+              "invalid stored operation UUID"))) {
+            throw new IllegalStateException("stored operation UUID does not match requested identity");
+          }
+          if (stored != null) {
+            throw new IllegalStateException("duplicate reservation operation UUID: " + operationId);
+          }
+          stored = rawOperationId;
+        }
+        if (stored == null) throw new IllegalStateException("unknown operation: " + operationId);
+        return stored;
       }
     }
   }
-
   private String findStoredReservationCopyUuidInternal(UUID operationId, CardCopyId copyId)
       throws SQLException {
     try (var query = connection.prepareStatement(
-        "SELECT copy_uuid FROM reservation_copies "
+        "SELECT operation_id, copy_uuid FROM reservation_copies "
             + "WHERE lower(operation_id) = lower(?) AND lower(copy_uuid) = lower(?) ORDER BY rowid")) {
       query.setString(1, operationId.toString());
       query.setString(2, copyId.value().toString());
       try (var rows = query.executeQuery()) {
-        if (!rows.next()) throw new IllegalStateException("copy is not reserved by operation");
-        return rows.getString(1);
+        String stored = null;
+        while (rows.next()) {
+          String rawOperationId = rows.getString(1);
+          String rawCopyId = rows.getString(2);
+          if (!operationId.equals(parseStoredCanonicalUuid(rawOperationId,
+              "invalid stored operation UUID"))
+              || !copyId.value().equals(parseStoredCanonicalUuid(rawCopyId,
+                  "invalid stored card-copy UUID"))) {
+            throw new IllegalStateException("stored reservation identity does not match request");
+          }
+          if (stored != null) {
+            throw new IllegalStateException("duplicate reserved copy identity: " + copyId);
+          }
+          stored = rawCopyId;
+        }
+        if (stored == null) throw new IllegalStateException("copy is not reserved by operation");
+        return stored;
       }
     }
   }
-
   private StoredCardCopy findCopyInternal(CardCopyId copyId) throws SQLException {
     try (var query = connection.prepareStatement(
-        "SELECT catalog_id, owner_kind, owner_uuid FROM card_copies "
+        "SELECT copy_uuid, catalog_id, owner_kind, owner_uuid FROM card_copies "
             + "WHERE lower(copy_uuid) = lower(?)")) {
       query.setString(1, copyId.value().toString());
       try (var rows = query.executeQuery()) {
         StoredCardCopy found = null;
         while (rows.next()) {
+          String rawCopyId = rows.getString(1);
+          if (!copyId.value().equals(parseStoredCanonicalUuid(rawCopyId,
+              "invalid stored card-copy UUID"))) {
+            throw new IllegalStateException("stored card-copy UUID does not match requested identity");
+          }
           if (found != null) {
             throw new IllegalStateException("duplicate card-copy UUID: " + copyId);
           }
-          found = new StoredCardCopy(copyId, new CardId(rows.getInt(1)),
-              readOwner(rows.getString(2), rows.getString(3)));
+          found = new StoredCardCopy(copyId, new CardId(rows.getInt(2)),
+              readOwner(rows.getString(3), rows.getString(4)));
         }
         return found;
       }
     }
   }
-
   private void saveSnapshotsInternal(UUID operationId, List<SerializedItemSnapshot> snapshots)
       throws SQLException {
     String storedOperationId = findStoredReservationOperationIdInternal(operationId);

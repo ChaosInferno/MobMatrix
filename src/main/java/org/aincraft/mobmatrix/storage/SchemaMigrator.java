@@ -472,6 +472,14 @@ public final class SchemaMigrator {
                       SELECT 1
                       FROM card_copies ledger
                       WHERE lower(ledger.copy_uuid) = lower(expected.copy_uuid)
+                        AND length(ledger.copy_uuid) = 36
+                        AND substr(ledger.copy_uuid, 9, 1) = '-'
+                        AND substr(ledger.copy_uuid, 14, 1) = '-'
+                        AND substr(ledger.copy_uuid, 19, 1) = '-'
+                        AND substr(ledger.copy_uuid, 24, 1) = '-'
+                        AND ledger.copy_uuid GLOB '[0-9a-f-]*'
+                        AND ledger.copy_uuid NOT GLOB '*[^0-9a-f-]*'
+                        AND ledger.copy_uuid = lower(ledger.copy_uuid)
                         AND ledger.owner_kind = reservation.owner_kind
                         AND (
                           (ledger.owner_kind = 'HOUSE' AND ledger.owner_uuid IS NULL)
@@ -482,7 +490,9 @@ public final class SchemaMigrator {
                             AND substr(ledger.owner_uuid, 14, 1) = '-'
                             AND substr(ledger.owner_uuid, 19, 1) = '-'
                             AND substr(ledger.owner_uuid, 24, 1) = '-'
-                            AND ledger.owner_uuid NOT GLOB '*[^0-9A-Fa-f-]*')
+                            AND ledger.owner_uuid GLOB '[0-9a-f-]*'
+                            AND ledger.owner_uuid NOT GLOB '*[^0-9a-f-]*'
+                            AND ledger.owner_uuid = lower(ledger.owner_uuid))
                         )
                     )
                 )
@@ -622,6 +632,22 @@ public final class SchemaMigrator {
   }
 
   private static void applyV8(Connection connection) throws SQLException {
+    try (var query = connection.createStatement().executeQuery("""
+        SELECT copy_uuid
+        FROM card_copies
+        WHERE copy_uuid IS NULL
+          OR length(copy_uuid) <> 36
+          OR substr(copy_uuid, 9, 1) <> '-'
+          OR substr(copy_uuid, 14, 1) <> '-'
+          OR substr(copy_uuid, 19, 1) <> '-'
+          OR substr(copy_uuid, 24, 1) <> '-'
+          OR copy_uuid GLOB '*[^0-9a-f-]*'
+          OR copy_uuid <> lower(copy_uuid)
+        """)) {
+      if (query.next()) {
+        throw new SQLException("noncanonical card-copy UUID: " + query.getString(1));
+      }
+    }
     try (var query = connection.createStatement().executeQuery("""
         SELECT lower(copy_uuid), COUNT(*)
         FROM card_copies

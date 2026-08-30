@@ -345,6 +345,28 @@ final class MatchApplicationServiceTest {
   }
 
   @Test
+  void startupPreservesActiveMatchWhenCustodyMetadataIsUnreadable() {
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> expected = copies();
+    MatchEngine.StartMatch start = match("startup-missing-custody-metadata", owner, expected, owner,
+        copies());
+    MatchState state = MatchEngine.start(start).state();
+    UUID operation = UUID.randomUUID();
+    UnknownMetadataCustody custody = new UnknownMetadataCustody(operation, expected);
+
+    MatchApplicationService.StartupRecoveryResult result = new MatchApplicationService(custody,
+        new StartupRehydrationRepository(start.matchId(), null, state, false)).recoverStartup(
+            id -> start.catalog(), Instant.parse("2026-01-01T00:00:00Z"));
+
+    CardCustodyPort.RecoveryResult recovery = result.recoveries().getFirst();
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, recovery.failure());
+    assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING, recovery.status());
+    assertEquals(operation, recovery.operationId());
+    assertEquals(List.of(), recovery.expectedCopyIds());
+    assertTrue(custody.recovered.isEmpty());
+  }
+
+  @Test
   void startupPropagatesStructuredReservationIdentityFailure() {
     List<CardCopyId> expected = copies();
     UUID operation = UUID.randomUUID();
@@ -1084,6 +1106,12 @@ final class MatchApplicationServiceTest {
     public java.util.Optional<OperationStatus> operationStatus(UUID operationId) {
       return java.util.Optional.of(OperationStatus.ESCROWED);
     }
+    @Override
+    public java.util.Optional<OperationBinding> operationBinding(UUID operationId) {
+      if (operationId.equals(active)) return java.util.Optional.empty();
+      return java.util.Optional.of(new OperationBinding(CopyOwner.player(UUID.randomUUID()),
+          List.of(), OperationStatus.ESCROWED, new MatchId("orphan-" + operationId)));
+    }
 
     @Override
     public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
@@ -1440,6 +1468,59 @@ final class MatchApplicationServiceTest {
       throw new IllegalStateException("database unavailable");
     }
   }
+  private static final class UnknownMetadataCustody implements CardCustodyPort {
+    private final UUID operation;
+    private final List<CardCopyId> copies;
+    private final List<UUID> recovered = new ArrayList<>();
+
+    private UnknownMetadataCustody(UUID operation, List<CardCopyId> copies) {
+      this.operation = operation;
+      this.copies = List.copyOf(copies);
+    }
+
+    @Override
+    public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
+      return PrepareResult.rejected(operationId, owner, copyIds, Failure.DATABASE_ERROR);
+    }
+
+    @Override
+    public CustodyResult escrow(UUID operationId) {
+      return CustodyResult.rejected(operationId, OperationStatus.PREPARED, Failure.DATABASE_ERROR);
+    }
+
+    @Override
+    public ReturnResult returnCopies(UUID operationId) {
+      throw new AssertionError("must preserve active-bound custody");
+    }
+
+    @Override
+    public RecoveryResult recover(UUID operationId) {
+      recovered.add(operationId);
+      throw new AssertionError("must preserve active-bound custody");
+    }
+
+    @Override
+    public List<UUID> openOperationIds() {
+      return List.of(operation);
+    }
+
+    @Override
+    public java.util.Optional<OperationStatus> operationStatus(UUID operationId) {
+      return java.util.Optional.empty();
+    }
+
+    @Override
+    public java.util.Optional<MatchId> operationMatchId(UUID operationId) {
+      return java.util.Optional.empty();
+    }
+
+    @Override
+    public java.util.Optional<OperationBinding> operationBinding(UUID operationId) {
+      return java.util.Optional.empty();
+    }
+
+  }
+
   private static final class BoundEscrowCustody implements CardCustodyPort {
     private final UUID operation;
     private final MatchId matchId;
