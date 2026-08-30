@@ -362,7 +362,7 @@ final class MatchApplicationServiceTest {
     assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, recovery.failure());
     assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING, recovery.status());
     assertEquals(operation, recovery.operationId());
-    assertEquals(List.of(), recovery.expectedCopyIds());
+    assertEquals(expected, recovery.expectedCopyIds());
     assertTrue(custody.recovered.isEmpty());
   }
 
@@ -1516,7 +1516,8 @@ final class MatchApplicationServiceTest {
 
     @Override
     public java.util.Optional<OperationBinding> operationBinding(UUID operationId) {
-      return java.util.Optional.empty();
+      return java.util.Optional.of(new OperationBinding(CopyOwner.player(UUID.randomUUID()),
+          copies, OperationStatus.ESCROWED, null));
     }
 
   }

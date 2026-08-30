@@ -742,7 +742,8 @@ public final class MatchApplicationService {
         Optional<OperationStatus> durableStatus = status.isPresent()
             ? status
             : detailedBinding.map(CardCustodyPort.OperationBinding::status);
-        boolean hasBinding = binding.isPresent() || detailedBinding.isPresent();
+        boolean hasBinding = binding.isPresent()
+            || detailedBinding.map(CardCustodyPort.OperationBinding::matchId).isPresent();
         boolean boundToActiveMatch = binding.map(activeMatchIds::contains).orElse(false)
             || detailedBinding.map(CardCustodyPort.OperationBinding::matchId)
                 .map(activeMatchIds::contains).orElse(false);
