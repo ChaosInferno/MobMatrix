@@ -1979,3 +1979,16 @@ cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest
 BUILD SUCCESSFUL in 1s
 4 actionable tasks: 2 executed, 2 up-to-date
 ```
+
+Final focused rerun after the malformed recovery-owner regression:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest
+
+> Task :test
+BUILD SUCCESSFUL in 6s
+4 actionable tasks: 1 executed, 3 up-to-date
+```
+
+The final focused rerun selected 124 tests (68 storage, 10 inventory, and 46 application) and
+passed. SQLite emitted the existing JVM restricted-native-access warning.
