@@ -2354,4 +2354,4 @@ suite was run.
 ## Current commits
 
 Implementation commit: `eea5ac5` (`fix: fail closed custody identity proofs`).
-Report commit: pending this report commit.
+Report commit: `f8663ee` (`docs: record fail-closed custody identity verification`).
