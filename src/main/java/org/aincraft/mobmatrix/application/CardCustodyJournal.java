@@ -40,6 +40,14 @@ public interface CardCustodyJournal {
   default Set<CardCopyId> reservedCopyIds() {
     return Set.of();
   }
+  /**
+   * Reports whether an active or otherwise unproven reservation contains an operation or copy
+   * identity that cannot be represented by the UUID-based journal API.
+   */
+  default boolean hasUnresolvedReservationIdentity() {
+    return false;
+  }
+
 
 
   void transition(UUID operationId, CardCustodyPort.OperationStatus status);

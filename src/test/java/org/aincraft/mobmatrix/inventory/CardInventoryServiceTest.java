@@ -238,6 +238,62 @@ final class CardInventoryServiceTest {
     public void addRecovery(UUID operationId, CopyOwner owner, SerializedItemSnapshot snapshot) {}
   }
   @Test
+  void identityRefreshRetainsPriorCopiesAndMarksUnknown() {
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    FlakyIdentityJournal journal = new FlakyIdentityJournal(Set.of(copy));
+    CardInventoryService service = new CardInventoryService(
+        new CardItemCodec("test", "0123456789abcdef"), id -> null, journal);
+
+    assertTrue(service.reservedCopyIds().contains(copy));
+    journal.failRefresh = true;
+    assertTrue(service.reservedCopyIds().contains(copy));
+    assertTrue(service.hasUnresolvedReservationIdentity());
+
+    journal.failRefresh = false;
+    journal.identities = Set.of();
+    assertFalse(service.reservedCopyIds().contains(copy));
+    assertFalse(service.hasUnresolvedReservationIdentity());
+  }
+
+  private static final class FlakyIdentityJournal implements CardCustodyJournal {
+    private Set<CardCopyId> identities;
+    private boolean failRefresh;
+
+    private FlakyIdentityJournal(Set<CardCopyId> identities) {
+      this.identities = Set.copyOf(identities);
+    }
+
+    @Override
+    public Set<CardCopyId> reservedCopyIds() {
+      if (failRefresh) throw new IllegalStateException("identity refresh failed");
+      return identities;
+    }
+
+    @Override
+    public void prepare(UUID operationId, CopyOwner owner, List<CardCopyId> copyIds,
+        List<SerializedItemSnapshot> snapshots) {}
+
+    @Override
+    public Optional<Entry> find(UUID operationId) {
+      return Optional.empty();
+    }
+
+    @Override
+    public List<Entry> openEntries() {
+      return List.of();
+    }
+
+    @Override
+    public void transition(UUID operationId, OperationStatus status) {}
+
+    @Override
+    public void markRestored(UUID operationId, CardCopyId copyId) {}
+
+    @Override
+    public void addRecovery(UUID operationId, CopyOwner owner, SerializedItemSnapshot snapshot) {}
+  }
+
+  @Test
   void hydratesDurableReservedIdentitiesWhenOperationIdIsMalformed() throws Exception {
     var path = Files.createTempFile("mobmatrix-durable-reserved-identities", ".sqlite");
     CopyOwner owner = CopyOwner.player(UUID.randomUUID());

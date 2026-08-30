@@ -122,6 +122,65 @@ final class SqliteCustodyTest {
     }
     Files.deleteIfExists(path);
   }
+  @Test
+  void unresolvedReservationIdentityIsReportedForMalformedOperation() throws Exception {
+    var path = Files.createTempFile("mobmatrix-unresolved-reservation-identity", ".sqlite");
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA foreign_keys = OFF");
+      }
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
+            created_at, updated_at)
+          VALUES ('malformed-operation', 'PLAYER', ?, NULL, 'PREPARED',
+            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          """)) {
+        insert.setString(1, owner.playerId().toString());
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES ('malformed-operation', ?)")) {
+        insert.setString(1, copy.value().toString());
+        insert.executeUpdate();
+      }
+
+      assertTrue(repository.reservedCopyIds().contains(copy));
+      assertTrue(repository.hasUnresolvedReservationIdentity());
+    }
+    Files.deleteIfExists(path);
+  }
+  @Test
+  void unresolvedReservationIdentityIsReportedForMalformedCopy() throws Exception {
+    var path = Files.createTempFile("mobmatrix-unresolved-copy-identity", ".sqlite");
+    UUID operation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(operation, owner, List.of(copy),
+          List.of(new SerializedItemSnapshot(copy, new byte[] {4})));
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA foreign_keys = OFF");
+      }
+      try (var update = database.connection().prepareStatement(
+          "UPDATE reservation_copies SET copy_uuid = ? WHERE operation_id = ?")) {
+        update.setString(1, "not-a-copy-uuid");
+        update.setString(2, operation.toString());
+        update.executeUpdate();
+      }
+
+      assertTrue(repository.reservedCopyIds().isEmpty());
+      assertTrue(repository.hasUnresolvedReservationIdentity());
+    }
+    Files.deleteIfExists(path);
+  }
+
+
 
   @Test
   void reservationsHaveUniqueCopiesAndDurableStatusTransitions() throws Exception {

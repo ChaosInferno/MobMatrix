@@ -36,6 +36,7 @@ public final class CardInventoryService implements CardCustodyPort {
   private final Map<UUID, PreparedOperation> operations = new HashMap<>();
   private final Map<UUID, Set<CardCopyId>> malformedOperations = new HashMap<>();
   private final Set<CardCopyId> durableReservedCopyIds = new HashSet<>();
+  private boolean unresolvedReservationIdentity;
 
   /** Production constructor: the journal must be durable and is hydrated before use. */
   public CardInventoryService(CardItemCodec codec, PlayerLookup players,
@@ -72,6 +73,7 @@ public final class CardInventoryService implements CardCustodyPort {
           // reserved until the journal can prove the operation reached a terminal status.
           malformedOperations.put(failure.operationId(), Set.copyOf(failure.expectedCopyIds()));
         }
+        unresolvedReservationIdentity = true;
         // Keep malformed durable rows out of the in-memory cache. Startup recovery will query the
         // journal again and convert the structured integrity failure into a pending result.
       }
@@ -80,11 +82,18 @@ public final class CardInventoryService implements CardCustodyPort {
 
   private void refreshDurableReservedCopyIds() {
     try {
+      // Build and validate the complete replacement before touching the previous proof. A partial
+      // read cannot turn a previously protected identity into an apparently reusable one.
+      Set<CardCopyId> refreshed = Set.copyOf(Objects.requireNonNull(journal.reservedCopyIds(),
+          "reserved identity set is required"));
+      boolean unresolved = journal.hasUnresolvedReservationIdentity();
       durableReservedCopyIds.clear();
-      durableReservedCopyIds.addAll(journal.reservedCopyIds());
+      durableReservedCopyIds.addAll(refreshed);
+      unresolvedReservationIdentity = unresolved;
     } catch (RuntimeException ignored) {
       // A failed identity refresh cannot prove that prior reservations are terminal. Keep the
       // last known set and fail closed for movement checks.
+      unresolvedReservationIdentity = true;
     }
   }
 
@@ -104,10 +113,13 @@ public final class CardInventoryService implements CardCustodyPort {
           iterator.remove();
         }
       } catch (RuntimeException ignored) {
+        unresolvedReservationIdentity = true;
         // Integrity and unknown read failures both retain fail-closed protection.
       }
     }
+    if (!malformedOperations.isEmpty()) unresolvedReservationIdentity = true;
   }
+
 
   @Override
   public synchronized PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
@@ -401,12 +413,21 @@ public final class CardInventoryService implements CardCustodyPort {
     return false;
   }
 
+  /** True when a durable reservation identity cannot be represented or read safely. */
+  public synchronized boolean hasUnresolvedReservationIdentity() {
+    refreshDurableReservedCopyIds();
+    refreshMalformedOperations();
+    return unresolvedReservationIdentity;
+  }
+
   public boolean isReserved(ItemStack item) {
     CardItemCodec.ReadResult result = codec.read(item);
     if (result.isValid()) return isReserved(result.data().copyId());
     var copyId = codec.identityCopyId(item);
     if (copyId.isPresent() && isReserved(copyId.get())) return true;
-    return codec.hasIdentity(item) && !reservedCopyIds().isEmpty();
+    // An invalid identity-bearing item cannot be matched to a durable copy while any unresolved
+    // reservation identity exists. Ordinary items without configured PDC identity remain movable.
+    return codec.hasIdentity(item) && hasUnresolvedReservationIdentity();
   }
 
   public synchronized Set<CardCopyId> reservedCopyIds() {

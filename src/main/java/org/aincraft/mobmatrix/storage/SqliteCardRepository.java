@@ -111,6 +111,50 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       throw failure(exception);
     }
   }
+  @Override
+  public boolean hasUnresolvedReservationIdentity() {
+    try (var query = connection.prepareStatement("""
+        SELECT reservations.operation_id, reservations.owner_kind, reservations.owner_uuid,
+          reservations.status, reservation_copies.copy_uuid
+        FROM reservations
+        LEFT JOIN reservation_copies
+          ON reservation_copies.operation_id = reservations.operation_id
+        ORDER BY reservations.rowid, reservation_copies.rowid
+        """)) {
+      java.util.Map<String, Boolean> terminalProof = new java.util.HashMap<>();
+      try (var rows = query.executeQuery()) {
+        while (rows.next()) {
+          String rawOperationId = rows.getString(1);
+          boolean proven = terminalProof.computeIfAbsent(rawOperationId, ignored -> {
+            try {
+              return provenTerminal(rawOperationId, rows.getString(2), rows.getString(3),
+                  rows.getString(4));
+            } catch (SQLException exception) {
+              throw failure(exception);
+            }
+          });
+          if (proven) continue;
+          try {
+            UUID.fromString(rawOperationId);
+          } catch (RuntimeException exception) {
+            return true;
+          }
+          String rawCopyId = rows.getString(5);
+          if (rawCopyId != null) {
+            try {
+              UUID.fromString(rawCopyId);
+            } catch (RuntimeException exception) {
+              return true;
+            }
+          }
+        }
+      }
+      return false;
+    } catch (SQLException exception) {
+      throw failure(exception);
+    }
+  }
+
 
   public void saveCopy(StoredCardCopy copy) {
     Objects.requireNonNull(copy, "copy is required");
