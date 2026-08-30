@@ -135,36 +135,61 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         "SELECT operation_id, copy_uuid FROM " + table + " ORDER BY rowid");
         var rows = query.executeQuery()) {
       while (rows.next()) {
-        String operationId = rows.getString(1);
+        String rawOperationId = rows.getString(1);
         String rawCopyId = rows.getString(2);
-        String key = operationKey(operationId);
+        String key = operationKey(rawOperationId);
         ReservationRow parent = reservations.get(key);
         boolean linked = parent != null
-            && (reservationCopies || hasReservationCopy(operationId, rawCopyId));
-        boolean proven = linked && !duplicateOperations.contains(key) && terminal.getOrDefault(key, false);
+            && (reservationCopies || hasReservationCopy(rawOperationId, rawCopyId));
+        boolean proven = linked && !duplicateOperations.contains(key) && terminal.getOrDefault(key, false)
+            && isUuid(rawOperationId);
         CardCopyId copy = parseCopyId(rawCopyId);
         if (copy != null && !proven) copies.add(copy);
-        if (!isUuid(operationId) || copy == null || !linked) unresolved = true;
+        if (!isUuid(rawOperationId) || copy == null || !linked) unresolved = true;
       }
     }
     return unresolved;
   }
 
+  private boolean operationMatches(UUID operationId, String rawOperationId) {
+    return rawOperationId != null
+        && operationKey(operationId.toString()).equals(operationKey(rawOperationId));
+  }
+  private int semanticReservationCount(UUID operationId) throws SQLException {
+    int count = 0;
+    try (var query = connection.prepareStatement(
+        "SELECT operation_id FROM reservations ORDER BY rowid");
+        var rows = query.executeQuery()) {
+      while (rows.next()) {
+        if (operationMatches(operationId, rows.getString(1))) count++;
+      }
+    }
+    return count;
+  }
+
+  private boolean copyMatches(CardCopyId copyId, String rawCopyId) {
+    return rawCopyId != null
+        && operationKey(copyId.value().toString()).equals(operationKey(rawCopyId));
+  }
+
   private boolean hasReservationCopy(String operationId, String copyId) throws SQLException {
     if (operationId == null || copyId == null) return false;
     try (var query = connection.prepareStatement(
-        "SELECT 1 FROM reservation_copies "
-            + "WHERE lower(operation_id) = lower(?) AND lower(copy_uuid) = lower(?)")) {
-      query.setString(1, operationId);
-      query.setString(2, copyId);
+        "SELECT operation_id, copy_uuid FROM reservation_copies ORDER BY rowid")) {
       try (var rows = query.executeQuery()) {
-        return rows.next();
+        while (rows.next()) {
+          if (operationKey(operationId).equals(operationKey(rows.getString(1)))
+              && operationKey(copyId).equals(operationKey(rows.getString(2)))) {
+            return true;
+          }
+        }
       }
     }
+    return false;
   }
 
   private static String operationKey(String operationId) {
-    return operationId == null ? null : operationId.toLowerCase(java.util.Locale.ROOT);
+    return operationId == null ? null : operationId.strip().toLowerCase(java.util.Locale.ROOT);
   }
 
   static UUID parseCanonicalUuid(String value) {
@@ -656,26 +681,18 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   private void validateCopyReuse(UUID operationId, CopyOwner owner, CardCopyId copy)
       throws SQLException {
     try (var query = connection.prepareStatement("""
-        SELECT operation_id FROM reservation_copies
-        WHERE lower(copy_uuid) = lower(?)
+        SELECT operation_id, copy_uuid FROM reservation_copies
         UNION ALL
-        SELECT operation_id FROM escrow_items
-        WHERE lower(copy_uuid) = lower(?)
+        SELECT operation_id, copy_uuid FROM escrow_items
         UNION ALL
-        SELECT operation_id FROM reservation_restored
-        WHERE lower(copy_uuid) = lower(?)
+        SELECT operation_id, copy_uuid FROM reservation_restored
         UNION ALL
-        SELECT operation_id FROM recovery_rows
-        WHERE lower(copy_uuid) = lower(?)
+        SELECT operation_id, copy_uuid FROM recovery_rows
         """)) {
-      String rawCopyId = copy.value().toString();
-      query.setString(1, rawCopyId);
-      query.setString(2, rawCopyId);
-      query.setString(3, rawCopyId);
-      query.setString(4, rawCopyId);
       Map<String, String> seenOperationSpellings = new HashMap<>();
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
+          if (!copyMatches(copy, rows.getString(2))) continue;
           String rawOperationId = rows.getString(1);
           String operationKey = operationKey(rawOperationId);
           String previousSpelling = seenOperationSpellings.putIfAbsent(operationKey, rawOperationId);
@@ -717,20 +734,19 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     }
   }
   private Reservation findReservationInternal(UUID operationId) throws SQLException {
-    boolean duplicateOperationIdentity = false;
-    try (var count = connection.prepareStatement(
-        "SELECT COUNT(*) FROM reservations WHERE lower(operation_id) = lower(?)")) {
-      count.setString(1, operationId.toString());
-      try (var rows = count.executeQuery()) {
-        duplicateOperationIdentity = rows.next() && rows.getInt(1) > 1;
-      }
-    }
+    boolean duplicateOperationIdentity = semanticReservationCount(operationId) > 1;
     try (var query = connection.prepareStatement(
         "SELECT operation_id, owner_kind, owner_uuid, match_id, status FROM reservations "
-            + "WHERE lower(operation_id) = lower(?)")) {
-      query.setString(1, operationId.toString());
+            + "ORDER BY rowid")) {
       try (var rows = query.executeQuery()) {
-        if (!rows.next()) return null;
+        boolean foundParent = false;
+        while (rows.next()) {
+          if (operationMatches(operationId, rows.getString(1))) {
+            foundParent = true;
+            break;
+          }
+        }
+        if (!foundParent) return null;
         String rawParentOperationId = rows.getString(1);
         String ownerKind = rows.getString(2);
         String ownerUuid = rows.getString(3);
@@ -750,11 +766,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         // Scan every reservation-copy row even when one identity is malformed. The parseable
         // physical UUIDs are the only identities that can be retained for fail-closed recovery.
         try (var copyQuery = connection.prepareStatement(
-            "SELECT operation_id, copy_uuid FROM reservation_copies "
-                + "WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
-          copyQuery.setString(1, operationId.toString());
+            "SELECT operation_id, copy_uuid FROM reservation_copies ORDER BY rowid")) {
           try (var copyRows = copyQuery.executeQuery()) {
             while (copyRows.next()) {
+              if (!operationMatches(operationId, copyRows.getString(1))) continue;
               try {
                 if (!operationId.equals(parseCanonicalUuid(copyRows.getString(1)))) {
                   throw new IllegalArgumentException("child operation identity does not match parent");
@@ -775,11 +790,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
 
         List<SerializedItemSnapshot> snapshots = new ArrayList<>();
         try (var snapshotQuery = connection.prepareStatement(
-            "SELECT operation_id, copy_uuid, item_bytes FROM escrow_items "
-                + "WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
-          snapshotQuery.setString(1, operationId.toString());
+            "SELECT operation_id, copy_uuid, item_bytes FROM escrow_items ORDER BY rowid")) {
           try (var snapshotRows = snapshotQuery.executeQuery()) {
             while (snapshotRows.next()) {
+              if (!operationMatches(operationId, snapshotRows.getString(1))) continue;
               try {
                 if (!operationId.equals(parseCanonicalUuid(snapshotRows.getString(1)))) {
                   throw new IllegalArgumentException("child operation identity does not match parent");
@@ -800,11 +814,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
 
         List<CardCopyId> restored = new ArrayList<>();
         try (var restoredQuery = connection.prepareStatement(
-            "SELECT operation_id, copy_uuid FROM reservation_restored "
-                + "WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
-          restoredQuery.setString(1, operationId.toString());
+            "SELECT operation_id, copy_uuid FROM reservation_restored ORDER BY rowid")) {
           try (var restoredRows = restoredQuery.executeQuery()) {
             while (restoredRows.next()) {
+              if (!operationMatches(operationId, restoredRows.getString(1))) continue;
               try {
                 if (!operationId.equals(parseCanonicalUuid(restoredRows.getString(1)))) {
                   throw new IllegalArgumentException("child operation identity does not match parent");
@@ -823,11 +836,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
           }
         }
         try (var recoveryQuery = connection.prepareStatement(
-            "SELECT operation_id, copy_uuid FROM recovery_rows "
-                + "WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
-          recoveryQuery.setString(1, operationId.toString());
+            "SELECT operation_id, copy_uuid FROM recovery_rows ORDER BY rowid")) {
           try (var recoveryRows = recoveryQuery.executeQuery()) {
             while (recoveryRows.next()) {
+              if (!operationMatches(operationId, recoveryRows.getString(1))) continue;
               try {
                 if (!operationId.equals(parseCanonicalUuid(recoveryRows.getString(1)))) {
                   throw new IllegalArgumentException("child operation identity does not match parent");
@@ -895,11 +907,11 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     Set<CardCopyId> seen = new HashSet<>();
     try (var query = connection.prepareStatement("""
         SELECT operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status
-        FROM recovery_rows WHERE lower(operation_id) = lower(?)
+        FROM recovery_rows
         """)) {
-      query.setString(1, rawOperationId);
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
+          if (!operationKey(rawOperationId).equals(operationKey(rows.getString(1)))) continue;
           CardCopyId copy;
           try {
             if (!expectedOperation.equals(parseCanonicalUuid(rows.getString(1)))) return false;
@@ -939,10 +951,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       return true;
     }
     try (var query = connection.prepareStatement(
-        "SELECT operation_id, status FROM recovery_rows WHERE lower(operation_id) = lower(?)")) {
-      query.setString(1, rawOperationId);
+        "SELECT operation_id, status FROM recovery_rows")) {
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
+          if (!operationKey(rawOperationId).equals(operationKey(rows.getString(1)))) continue;
           try {
             if (!expectedOperation.equals(parseCanonicalUuid(rows.getString(1)))) return true;
           } catch (RuntimeException exception) {
@@ -1001,11 +1013,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     }
     List<CardCopyId> copies = new ArrayList<>();
     try (var query = connection.prepareStatement(
-        "SELECT operation_id, copy_uuid FROM reservation_copies "
-            + "WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
-      query.setString(1, rawOperationId);
+        "SELECT operation_id, copy_uuid FROM reservation_copies ORDER BY rowid")) {
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
+          if (!operationKey(rawOperationId).equals(operationKey(rows.getString(1)))) continue;
           try {
             if (!expectedOperation.equals(parseCanonicalUuid(rows.getString(1)))) return false;
             CardCopyId copy = new CardCopyId(parseCanonicalUuid(rows.getString(2)));
@@ -1029,11 +1040,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     List<SerializedItemSnapshot> snapshots = new ArrayList<>();
     Set<CardCopyId> snapshotIds = new HashSet<>();
     try (var query = connection.prepareStatement(
-        "SELECT operation_id, copy_uuid, item_bytes FROM escrow_items "
-            + "WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
-      query.setString(1, rawOperationId);
+        "SELECT operation_id, copy_uuid, item_bytes FROM escrow_items ORDER BY rowid")) {
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
+          if (!operationKey(rawOperationId).equals(operationKey(rows.getString(1)))) continue;
           try {
             if (!expectedOperation.equals(parseCanonicalUuid(rows.getString(1)))) return false;
             CardCopyId copy = new CardCopyId(parseCanonicalUuid(rows.getString(2)));
@@ -1049,11 +1059,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     if (!hasExactSnapshots(copies, snapshots)) return false;
     Set<CardCopyId> restored = new HashSet<>();
     try (var query = connection.prepareStatement(
-        "SELECT operation_id, copy_uuid FROM reservation_restored "
-            + "WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
-      query.setString(1, rawOperationId);
+        "SELECT operation_id, copy_uuid FROM reservation_restored ORDER BY rowid")) {
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
+          if (!operationKey(rawOperationId).equals(operationKey(rows.getString(1)))) continue;
           try {
             if (!expectedOperation.equals(parseCanonicalUuid(rows.getString(1)))) return false;
             CardCopyId copy = new CardCopyId(parseCanonicalUuid(rows.getString(2)));
@@ -1118,15 +1127,14 @@ public final class SqliteCardRepository implements CardCustodyJournal {
   private String findStoredReservationCopyUuidInternal(UUID operationId, CardCopyId copyId)
       throws SQLException {
     try (var query = connection.prepareStatement(
-        "SELECT operation_id, copy_uuid FROM reservation_copies "
-            + "WHERE lower(operation_id) = lower(?) AND lower(copy_uuid) = lower(?) ORDER BY rowid")) {
-      query.setString(1, operationId.toString());
-      query.setString(2, copyId.value().toString());
+        "SELECT operation_id, copy_uuid FROM reservation_copies ORDER BY rowid")) {
       try (var rows = query.executeQuery()) {
         String stored = null;
         while (rows.next()) {
           String rawOperationId = rows.getString(1);
           String rawCopyId = rows.getString(2);
+          if (!operationMatches(operationId, rawOperationId)
+              || !copyMatches(copyId, rawCopyId)) continue;
           if (!operationId.equals(parseStoredCanonicalUuid(rawOperationId,
               "invalid stored operation UUID"))
               || !copyId.value().equals(parseStoredCanonicalUuid(rawCopyId,

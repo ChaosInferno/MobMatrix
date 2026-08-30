@@ -614,6 +614,75 @@ public final class SchemaMigrator {
           END
           """);
     }
+    try (var statement = connection.createStatement()) {
+      statement.execute("DROP TRIGGER IF EXISTS active_copy_identity_integrity_guard");
+      String invalidNewOperation = canonicalUuidViolation("NEW.operation_id", false);
+      String invalidNewCopy = canonicalUuidViolation("NEW.copy_uuid", false);
+      String invalidLedgerCopy = canonicalUuidViolation("row.copy_uuid", false);
+      String invalidLedgerOwner = canonicalUuidViolation("row.owner_uuid", true);
+      String invalidReservationOperation = canonicalUuidViolation("row.operation_id", false);
+      String invalidReservationOwner = canonicalUuidViolation("row.owner_uuid", true);
+      String invalidBindingOperation = canonicalUuidViolation("row.one_operation_id", false)
+          + " OR " + canonicalUuidViolation("row.two_operation_id", false);
+      String invalidBindingOwner = canonicalUuidViolation("row.one_owner_uuid", true)
+          + " OR " + canonicalUuidViolation("row.two_owner_uuid", true);
+      String invalidChildOperation = canonicalUuidViolation("row.operation_id", false);
+      String invalidChildCopy = canonicalUuidViolation("row.copy_uuid", false);
+      statement.execute("""
+          CREATE TRIGGER active_copy_identity_integrity_guard
+          BEFORE INSERT ON reservation_copies
+          WHEN %s
+            OR %s
+            OR EXISTS (
+              SELECT 1 FROM card_copies row
+              WHERE %s OR %s
+            )
+            OR EXISTS (
+              SELECT 1 FROM reservations row
+              WHERE %s OR %s
+            )
+            OR EXISTS (
+              SELECT 1 FROM reservation_copies row
+              WHERE %s OR %s
+            )
+            OR EXISTS (
+              SELECT 1 FROM escrow_items row
+              WHERE %s OR %s
+            )
+            OR EXISTS (
+              SELECT 1 FROM reservation_restored row
+              WHERE %s OR %s
+            )
+            OR EXISTS (
+              SELECT 1 FROM match_start_bindings row
+              WHERE %s OR %s
+            )
+            OR EXISTS (
+              SELECT 1 FROM recovery_rows row
+              WHERE %s OR %s OR %s
+            )
+          BEGIN
+            SELECT RAISE(ABORT, 'custody identity is not canonical');
+          END
+          """.formatted(
+          invalidNewOperation,
+          invalidNewCopy,
+          invalidLedgerCopy,
+          invalidLedgerOwner,
+          invalidReservationOperation,
+          invalidReservationOwner,
+          invalidChildOperation,
+          invalidChildCopy,
+          invalidChildOperation,
+          invalidChildCopy,
+          invalidChildOperation,
+          invalidChildCopy,
+          invalidBindingOperation,
+          invalidBindingOwner,
+          invalidChildOperation,
+          invalidChildCopy,
+          invalidReservationOwner));
+    }
   }
   /** Reinstalls the reservation guard for databases already marked through V6. */
   private static void applyV7(Connection connection) throws SQLException {
@@ -631,23 +700,76 @@ public final class SchemaMigrator {
     return false;
   }
 
-  private static void applyV8(Connection connection) throws SQLException {
-    try (var query = connection.createStatement().executeQuery("""
-        SELECT copy_uuid
-        FROM card_copies
-        WHERE copy_uuid IS NULL
-          OR length(copy_uuid) <> 36
-          OR substr(copy_uuid, 9, 1) <> '-'
-          OR substr(copy_uuid, 14, 1) <> '-'
-          OR substr(copy_uuid, 19, 1) <> '-'
-          OR substr(copy_uuid, 24, 1) <> '-'
-          OR copy_uuid GLOB '*[^0-9a-f-]*'
-          OR copy_uuid <> lower(copy_uuid)
-        """)) {
-      if (query.next()) {
-        throw new SQLException("noncanonical card-copy UUID: " + query.getString(1));
+  private record IdentityColumn(String table, String column, boolean nullable) {}
+
+  private static String canonicalUuidViolation(String column, boolean nullable) {
+    String violation = "(" + column + " IS NULL"
+        + " OR length(" + column + ") <> 36"
+        + " OR substr(" + column + ", 9, 1) <> '-'"
+        + " OR substr(" + column + ", 14, 1) <> '-'"
+        + " OR substr(" + column + ", 19, 1) <> '-'"
+        + " OR substr(" + column + ", 24, 1) <> '-'"
+        + " OR length(replace(" + column + ", '-', '')) <> 32"
+        + " OR replace(" + column + ", '-', '') GLOB '*[^0-9a-f]*'"
+        + " OR " + column + " <> lower(" + column + "))";
+    return nullable ? "(" + column + " IS NOT NULL AND " + violation + ")" : violation;
+  }
+
+  private static void rejectInvalidUuidColumns(Connection connection, IdentityColumn... columns)
+      throws SQLException {
+    for (IdentityColumn identity : columns) {
+      String sql = "SELECT " + identity.column() + " FROM " + identity.table()
+          + " WHERE " + canonicalUuidViolation(identity.column(), identity.nullable());
+      try (var query = connection.createStatement(); var rows = query.executeQuery(sql)) {
+        if (rows.next()) {
+          throw new SQLException("noncanonical " + identity.table() + "." + identity.column()
+              + " UUID: " + rows.getString(1));
+        }
       }
     }
+  }
+
+  private static void rejectInvalidCopyListColumns(Connection connection, String... columns)
+      throws SQLException {
+    for (String column : columns) {
+      try (var query = connection.createStatement().executeQuery(
+          "SELECT " + column + " FROM match_start_bindings")) {
+        while (query.next()) {
+          String raw = query.getString(1);
+          if (raw == null || raw.isEmpty()) continue;
+          for (String copy : raw.split(",", -1)) {
+            try {
+              SqliteCardRepository.parseCanonicalUuid(copy);
+            } catch (RuntimeException exception) {
+              throw new SQLException("noncanonical match_start_bindings." + column
+                  + " copy UUID: " + copy, exception);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  private static void applyV8(Connection connection) throws SQLException {
+    rejectInvalidUuidColumns(connection,
+        new IdentityColumn("card_copies", "copy_uuid", false),
+        new IdentityColumn("card_copies", "owner_uuid", true),
+        new IdentityColumn("reservations", "operation_id", false),
+        new IdentityColumn("reservations", "owner_uuid", true),
+        new IdentityColumn("reservation_copies", "operation_id", false),
+        new IdentityColumn("reservation_copies", "copy_uuid", false),
+        new IdentityColumn("escrow_items", "operation_id", false),
+        new IdentityColumn("escrow_items", "copy_uuid", false),
+        new IdentityColumn("reservation_restored", "operation_id", false),
+        new IdentityColumn("reservation_restored", "copy_uuid", false),
+        new IdentityColumn("recovery_rows", "operation_id", false),
+        new IdentityColumn("recovery_rows", "copy_uuid", false),
+        new IdentityColumn("recovery_rows", "owner_uuid", true),
+        new IdentityColumn("match_start_bindings", "one_owner_uuid", true),
+        new IdentityColumn("match_start_bindings", "one_operation_id", false),
+        new IdentityColumn("match_start_bindings", "two_owner_uuid", true),
+        new IdentityColumn("match_start_bindings", "two_operation_id", false));
+    rejectInvalidCopyListColumns(connection, "one_copy_ids", "two_copy_ids");
     try (var query = connection.createStatement().executeQuery("""
         SELECT lower(copy_uuid), COUNT(*)
         FROM card_copies
