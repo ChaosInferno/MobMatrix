@@ -730,6 +730,26 @@ public final class SchemaMigrator {
   /** Reinstalls the reservation guard for databases already marked through V6. */
   private static void applyV7(Connection connection) throws SQLException {
     applyV6(connection);
+    try (var statement = connection.createStatement()) {
+      statement.execute("DROP TRIGGER IF EXISTS active_reservation_terminal_guard");
+      statement.execute("""
+          CREATE TRIGGER active_reservation_terminal_guard
+          BEFORE INSERT ON reservations
+          WHEN EXISTS (
+            SELECT 1
+            FROM reservations terminal
+            WHERE terminal.status IN ('RETURNED', 'ABORTED')
+              AND NOT EXISTS (
+                SELECT 1
+                FROM reservation_copies expected
+                WHERE lower(expected.operation_id) = lower(terminal.operation_id)
+              )
+          )
+          BEGIN
+            SELECT RAISE(ABORT, 'terminal reservation lacks complete custody proof');
+          END
+          """);
+    }
   }
 
   private static boolean hasRequiredCopyUuidIndex(Connection connection) throws SQLException {

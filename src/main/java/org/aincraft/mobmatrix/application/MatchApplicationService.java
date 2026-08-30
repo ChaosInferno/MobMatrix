@@ -793,9 +793,9 @@ public final class MatchApplicationService {
           recoveries.add(recoveryFailure(startupEntry));
         } else if (boundToActiveMatch || (activeMatchesLoadFailed && hasBinding)) {
           if (durableStatus.isEmpty() || !isTerminal(durableStatus.get())) {
-            // PREPARED, ESCROWED, and RETURN_PENDING remain match-bound until terminality is
-            // durably proven. Never reconcile active custody based on a nonterminal row.
-            if (durableStatus.isEmpty()) recoveries.add(recoveryFailure(startupEntry));
+            // A malformed active match still owns every nonterminal reservation bound to it. Keep
+            // the operation pending and report the failure instead of invoking orphan recovery.
+            recoveries.add(recoveryFailure(startupEntry));
           } else {
             recoveries.add(custody.recover(operationId));
           }

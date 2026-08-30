@@ -545,6 +545,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         }
         return;
       }
+      if (hasUnprovenTerminalReservation()) {
+        throw new CustodyIntegrityException(operationId, copies,
+            "terminal reservation lacks complete custody proof", null);
+      }
       java.util.Map<CardCopyId, String> storedCopyIds = new java.util.HashMap<>();
       for (CardCopyId copy : copies) {
         StoredCardCopy ledger;

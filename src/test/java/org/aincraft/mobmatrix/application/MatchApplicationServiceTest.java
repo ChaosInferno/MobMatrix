@@ -240,7 +240,11 @@ final class MatchApplicationServiceTest {
     assertEquals(List.of(healthy), result.matches());
     assertEquals(List.of(new MatchApplicationService.MatchFailure(badMatch,
         CardCustodyPort.Failure.DATABASE_ERROR)), result.matchFailures());
-    assertTrue(result.recoveries().isEmpty());
+    assertEquals(1, result.recoveries().size());
+    assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING,
+        result.recoveries().getFirst().status());
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR,
+        result.recoveries().getFirst().failure());
   }
 
   @Test
@@ -262,7 +266,11 @@ final class MatchApplicationServiceTest {
             Instant.parse("2026-01-01T00:00:00Z"));
 
     assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, result.matchFailure());
-    assertTrue(result.recoveries().isEmpty());
+    assertEquals(1, result.recoveries().size());
+    assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING,
+        result.recoveries().getFirst().status());
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR,
+        result.recoveries().getFirst().failure());
   }
   @Test
   void startupReportsEachMatchRehydrationFailureAndPreservesBoundEscrow() {
@@ -285,7 +293,13 @@ final class MatchApplicationServiceTest {
     assertEquals(List.of(healthy), result.matches());
     assertEquals(List.of(new MatchApplicationService.MatchFailure(failedStart.matchId(),
         CardCustodyPort.Failure.INVALID_STATE)), result.matchFailures());
-    assertTrue(result.recoveries().isEmpty());
+    assertEquals(1, result.recoveries().size());
+    CardCustodyPort.RecoveryResult recovery = result.recoveries().getFirst();
+    assertEquals(failedOperation, recovery.operationId());
+    assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING, recovery.status());
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, recovery.failure());
+    assertTrue(recovery.expectedCopyIds().isEmpty());
+    assertTrue(recovery.pendingCopyIds().isEmpty());
     assertTrue(custody.recovered.isEmpty());
   }
 
@@ -398,7 +412,13 @@ final class MatchApplicationServiceTest {
       MatchApplicationService.StartupRecoveryResult result = new MatchApplicationService(custody,
           new StartupRehydrationRepository(start.matchId(), null, state, false)).recoverStartup(
               id -> start.catalog(), Instant.parse("2026-01-01T00:00:00Z"));
-      assertTrue(result.recoveries().isEmpty());
+      assertEquals(1, result.recoveries().size());
+      assertEquals(expected, result.recoveries().getFirst().expectedCopyIds());
+      assertEquals(expected, result.recoveries().getFirst().pendingCopyIds());
+      assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING,
+          result.recoveries().getFirst().status());
+      assertEquals(CardCustodyPort.Failure.DATABASE_ERROR,
+          result.recoveries().getFirst().failure());
       assertTrue(custody.recovered.isEmpty());
     }
   }
@@ -415,8 +435,13 @@ final class MatchApplicationServiceTest {
         new StartupRehydrationRepository(start.matchId(), null, state, false)).recoverStartup(
             id -> start.catalog(), Instant.parse("2026-01-01T00:00:00Z"));
 
-    assertTrue(result.recoveries().isEmpty());
-    assertTrue(custody.recovered.isEmpty());
+    assertEquals(1, result.recoveries().size());
+    assertEquals(expected, result.recoveries().getFirst().expectedCopyIds());
+    assertEquals(expected, result.recoveries().getFirst().pendingCopyIds());
+    assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING,
+        result.recoveries().getFirst().status());
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR,
+        result.recoveries().getFirst().failure());
   }
 
 
@@ -791,9 +816,11 @@ final class MatchApplicationServiceTest {
             Instant.parse("2026-01-01T00:00:00Z"));
 
     assertEquals(List.of(orphanOperation, failingOperation), custody.recovered);
-    assertEquals(2, result.recoveries().size());
+    assertEquals(3, result.recoveries().size());
+    assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING,
+        result.recoveries().getFirst().status());
     assertEquals(CardCustodyPort.Failure.DATABASE_ERROR,
-        result.recoveries().get(1).failure());
+        result.recoveries().get(2).failure());
   }
 
   @Test

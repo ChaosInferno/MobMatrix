@@ -734,6 +734,61 @@ final class SqliteCustodyTest {
     }
     Files.deleteIfExists(path);
   }
+  @Test
+  void noChildTerminalHistoryBlocksJavaAndTriggerReuse() throws Exception {
+    var path = Files.createTempFile("mobmatrix-no-child-terminal-proof", ".sqlite");
+    UUID firstOperation = UUID.randomUUID();
+    UUID secondOperation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId firstCopy = new CardCopyId(UUID.randomUUID());
+    CardCopyId secondCopy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot firstSnapshot =
+        new SerializedItemSnapshot(firstCopy, new byte[] {9, 4});
+    SerializedItemSnapshot secondSnapshot =
+        new SerializedItemSnapshot(secondCopy, new byte[] {9, 5});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(firstCopy, new CardId(1), owner));
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(secondCopy, new CardId(1), owner));
+      repository.prepare(firstOperation, owner, List.of(firstCopy), List.of(firstSnapshot));
+      repository.transition(firstOperation, OperationStatus.ESCROWED);
+      repository.transition(firstOperation, OperationStatus.RETURN_PENDING);
+      repository.markRestored(firstOperation, firstCopy);
+      repository.transition(firstOperation, OperationStatus.RETURNED);
+      try (var delete = database.connection().createStatement()) {
+        delete.execute("DELETE FROM recovery_rows");
+        delete.execute("DELETE FROM reservation_restored");
+        delete.execute("DELETE FROM escrow_items");
+        delete.execute("DELETE FROM reservation_copies");
+      }
+
+      assertThrows(RuntimeException.class,
+          () -> repository.prepare(secondOperation, owner, List.of(), List.of()));
+      assertThrows(RuntimeException.class,
+          () -> repository.prepare(secondOperation, owner, List.of(secondCopy),
+              List.of(secondSnapshot)));
+      assertThrows(java.sql.SQLException.class, () -> {
+        try (var insert = database.connection().prepareStatement("""
+            INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
+              created_at, updated_at)
+            VALUES (?, 'PLAYER', ?, NULL, 'PREPARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """)) {
+          insert.setString(1, secondOperation.toString());
+          insert.setString(2, owner.playerId().toString());
+          insert.executeUpdate();
+        }
+      });
+      assertThrows(java.sql.SQLException.class, () -> {
+        try (var insert = database.connection().prepareStatement(
+            "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES (?, ?)")) {
+          insert.setString(1, secondOperation.toString());
+          insert.setString(2, secondCopy.value().toString());
+          insert.executeUpdate();
+        }
+      });
+    }
+    Files.deleteIfExists(path);
+  }
 
   @Test
   void terminalTransitionRequiresCompleteRecoveryProof() throws Exception {
@@ -2680,21 +2735,17 @@ final class SqliteCustodyTest {
       assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
           () -> repository.prepare(secondOperation, owner, List.of(copy), List.of(snapshot)));
 
-      try (var insert = database.connection().prepareStatement("""
-          INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
-            created_at, updated_at)
-          VALUES (?, 'PLAYER', ?, NULL, 'PREPARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-          """)) {
-        insert.setString(1, secondOperation.toString());
-        insert.setString(2, owner.playerId().toString());
-        insert.executeUpdate();
-      }
-      try (var insert = database.connection().prepareStatement(
-          "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES (?, ?)")) {
-        insert.setString(1, secondOperation.toString());
-        insert.setString(2, copy.value().toString());
-        assertThrows(java.sql.SQLException.class, insert::executeUpdate);
-      }
+      assertThrows(java.sql.SQLException.class, () -> {
+        try (var insert = database.connection().prepareStatement("""
+            INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
+              created_at, updated_at)
+            VALUES (?, 'PLAYER', ?, NULL, 'PREPARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            """)) {
+          insert.setString(1, secondOperation.toString());
+          insert.setString(2, owner.playerId().toString());
+          insert.executeUpdate();
+        }
+      });
     }
     Files.deleteIfExists(path);
   }
