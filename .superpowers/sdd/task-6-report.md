@@ -2483,3 +2483,96 @@ No formatter, linter, project-wide build, or project-wide test suite was run.
 
 Implementation commits: `df681c6`, `fd39316` (`fix: aggregate recovery identities`).
 Report commit: pending.
+
+# Task 6 fix37 malformed child identity enumeration and exact hexadecimal UUID validation
+
+## Status
+
+Implemented and committed raw child-operation enumeration, strict semantic inspection, terminal-proof
+fail-closed handling, and exact hexadecimal UUID validation for custody migrations and reuse triggers.
+
+Implementation commit: `faed9e8` (`fix: reject malformed child identities`).
+
+## TDD and focused verification
+
+Focused red command after adding the raw child-operation and non-hex UUID regressions, before the
+production implementation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.semanticallyMatchingMalformedChildOperationsCannotHydrateOrProveTerminal --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.malformedChildOperationCannotProveTerminalReuse --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.migrationRejectsNonHexUuidIdentitySegmentsAcrossCustodyTables --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.activeCopyTriggerRejectsMalformedNewAndExistingIdentities --no-daemon
+```
+
+Exact red result:
+
+```text
+> Task :test FAILED
+4 tests completed, 4 failed
+FAILURE: Build failed with an exception.
+```
+
+Focused green command for the new raw-enumeration regressions:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.semanticallyMatchingMalformedChildOperationsCannotHydrateOrProveTerminal --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.malformedChildOperationCannotProveTerminalReuse --no-daemon
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 5s
+4 actionable tasks: 1 executed, 3 up-to-date
+```
+
+Focused green command for migration and trigger validation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.migrationRejectsNonHexUuidIdentitySegmentsAcrossCustodyTables --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.activeCopyTriggerRejectsMalformedNewAndExistingIdentities --no-daemon
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 7s
+4 actionable tasks: 1 executed, 3 up-to-date
+```
+
+Final focused storage/application command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --no-daemon
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 13s
+4 actionable tasks: 1 executed, 3 up-to-date
+```
+
+The final focused selection executed 87 storage tests and 47 application tests with zero failures,
+errors, or skips. SQLite emitted its existing JVM restricted-native-access warning. No formatter,
+linter, project-wide build, or project-wide test suite was run.
+
+## Corrective coverage
+
+- `findReservationInternal`, terminal proof, and copy-reuse preflight enumerate raw child rows rather
+  than SQL-equality-filtering operation IDs. Case and surrounding-whitespace variants are inspected
+  semantically, then strict canonical parsing marks the operation unresolved while retaining every
+  parseable child copy UUID for `CustodyIntegrityException`.
+- Parent reservation lookup also uses semantic raw enumeration and detects duplicate case/trim
+  operation identities. Raw startup identity scans continue to include orphan and malformed child
+  links as unresolved custody.
+- Schema V8 rejects noncanonical identity rows before index creation across card-copy UUIDs,
+  reservation operation/owner UUIDs, every custody child operation/copy UUID, recovery owners, and
+  match-start binding operation/owner UUIDs and serialized copy UUID lists.
+- The V7-installed identity guard rejects malformed new reservation-child operation/copy IDs and
+  fails closed when malformed ledger, parent, child, recovery, or binding identities already exist.
+  Existing semantic terminal-reuse and duplicate-logical-copy protections remain in place.
+
+## Current commits
+
+Implementation commit: `faed9e8` (`fix: reject malformed child identities`).
+Report commit: pending.
