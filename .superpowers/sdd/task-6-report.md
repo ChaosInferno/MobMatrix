@@ -2281,3 +2281,77 @@ The final focused selection completed 146 tests successfully and assumption-skip
 registry-dependent tests (the four codec tests and the four existing inventory tests requiring a
 running Paper item registry). SQLite emitted its existing JVM restricted-native-access warning.
 No formatter, linter, project-wide build, or project-wide test suite was run.
+
+# Task 6 fix35 active-bound startup and strict raw identity proofs
+
+## Status
+
+Implemented and committed with the implementation commit recorded below. Startup now preserves an
+open operation when active matches are loaded but the operation lacks readable durable binding and
+nonterminal/terminal status evidence proving it is unrelated. Such rows remain
+`RETURN_PENDING`/unknown and produce structured `DATABASE_ERROR` recovery results. Durable bindings
+to inactive matches still permit orphan reconciliation, and active-bound nonterminal rows remain
+untouched.
+
+SQLite card-copy and operation identity reads now validate the stored raw text through the strict
+canonical UUID parser before constructing domain records or accepting terminal reuse. Reservation
+parents and every reservation, escrow, restored, and recovery child validate both raw operation and
+copy identities and preserve parseable copy IDs in integrity failures. The SQLite active-copy
+trigger and V8 migration reject uppercase, shorthand, whitespace, malformed, or duplicate logical
+ledger identities before reuse. Existing atomic identity refresh semantics retain the prior
+reserved set and unknown gating when either refresh read fails.
+
+Implementation commit: `eea5ac5` (`fix: fail closed custody identity proofs`).
+
+## TDD and focused verification
+
+Focused red command, before the corrective implementation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest
+```
+
+Exact red result:
+
+```text
+MatchApplicationServiceTest > startupPreservesActiveMatchWhenCustodyMetadataIsUnreadable() FAILED
+SqliteCustodyTest > noncanonicalParentAndChildOperationIdentitiesAreRejected() FAILED
+SqliteCustodyTest > noncanonicalLedgerUuidCannotBeReadOrProvenTerminal() FAILED
+128 tests completed, 3 failed
+BUILD FAILED
+```
+
+Final focused command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 3s
+4 actionable tasks: 1 executed, 3 up-to-date
+```
+
+The focused selection passed, with the existing Paper-registry assumptions skipped where the
+environment has no running Paper item registry. SQLite emitted its existing JVM
+restricted-native-access warning. No formatter, linter, project-wide build, or project-wide test
+suite was run.
+
+## Corrective coverage
+
+- Startup active-match custody protection when operation binding or status metadata is absent,
+  including structured unknown recovery and preservation of available IDs.
+- Canonical lowercase ledger UUID validation in `findCopy`, internal lookup, save/idempotent
+  insertion, terminal proof, and trigger/migration reuse paths.
+- Canonical parent and child operation UUID validation across reservation, escrow, restored, and
+  recovery rows, including case-variant duplicate detection and parseable identity preservation.
+- Existing two-read atomic refresh behavior remains fail closed: a failed second identity read does
+  not clear valid or invalid identity-bearing movement protection.
+
+## Current commits
+
+Implementation commit: `eea5ac5` (`fix: fail closed custody identity proofs`).
+Report commit: pending this report commit.
