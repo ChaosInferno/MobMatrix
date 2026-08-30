@@ -619,6 +619,14 @@ public final class SqliteCardRepository implements CardCustodyJournal {
           && !reservation.restoredCopyIds().containsAll(reservation.copyIds())) {
         throw new IllegalStateException("cannot abort custody with unresolved copies");
       }
+
+      if ((target == OperationStatus.RETURNED || target == OperationStatus.ABORTED)
+          && (!hasValidRecoveryRows(operationId, reservation.owner(), reservation.copyIds(),
+              reservation.snapshots()) || hasPendingRecovery(operationId))) {
+        throw new CustodyIntegrityException(operationId, reservation.copyIds(),
+            "terminal custody is missing complete recovery proof");
+      }
+
       if (!allowed(reservation.status(), target)) {
         throw new IllegalStateException("invalid custody transition " + reservation.status() + " -> " + target);
       }

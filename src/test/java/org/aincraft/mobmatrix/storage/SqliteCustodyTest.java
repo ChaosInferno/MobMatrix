@@ -703,6 +703,14 @@ final class SqliteCustodyTest {
         delete.setString(1, firstOperation.toString());
         delete.executeUpdate();
       }
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA ignore_check_constraints = ON");
+      }
+      try (var update = database.connection().prepareStatement(
+          "UPDATE reservations SET status = 'RETURNED' WHERE operation_id = ?")) {
+        update.setString(1, firstOperation.toString());
+        update.executeUpdate();
+      }
 
       assertThrows(RuntimeException.class,
           () -> repository.prepare(secondOperation, owner, List.of(copy), List.of(snapshot)));
@@ -723,7 +731,31 @@ final class SqliteCustodyTest {
           insert.executeUpdate();
         }
       });
+    }
+    Files.deleteIfExists(path);
+  }
 
+  @Test
+  void terminalTransitionRequiresCompleteRecoveryProof() throws Exception {
+    var path = Files.createTempFile("mobmatrix-terminal-transition-proof", ".sqlite");
+    UUID operation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {8, 8});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(operation, owner, List.of(copy), List.of(snapshot));
+      repository.transition(operation, OperationStatus.ESCROWED);
+      repository.transition(operation, OperationStatus.RETURN_PENDING);
+      repository.markRestored(operation, copy);
+      try (var delete = database.connection().prepareStatement(
+          "DELETE FROM recovery_rows WHERE operation_id = ?")) {
+        delete.setString(1, operation.toString());
+        delete.executeUpdate();
+      }
+      assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+          () -> repository.transition(operation, OperationStatus.RETURNED));
     }
     Files.deleteIfExists(path);
   }

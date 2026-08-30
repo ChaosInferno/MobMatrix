@@ -2576,3 +2576,99 @@ linter, project-wide build, or project-wide test suite was run.
 
 Implementation commit: `faed9e8` (`fix: reject malformed child identities`).
 Report commit: pending.
+
+# Task 6 fix38 complete terminal proof and malformed startup enumeration
+
+## Status
+
+Implemented and committed as `ddedce0` (`fix: complete terminal recovery proof`).
+
+## TDD and focused verification
+
+Focused red command, run after adding the recovery-proof and malformed-startup regressions and
+before adding the corresponding production contracts:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.missingTerminalRecoveryProofBlocksCopyReuse --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest.startupReportsMalformedRawIdentityAsPendingWithoutRecover --no-daemon
+```
+
+Exact red result:
+
+```text
+> Task :compileTestJava
+MatchApplicationServiceTest.java:1689: error: cannot find symbol
+  symbol:   class StartupEntry
+MatchApplicationServiceTest.java:168: error: cannot find symbol
+  symbol:   method rawOperationId()
+4 errors
+FAILURE: Build failed with an exception.
+```
+
+Focused green regression command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.missingTerminalRecoveryProofBlocksCopyReuse --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.startupEnumerationRetainsMalformedRawIdentityAndEveryChildCopy --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest.startupReportsMalformedRawIdentityAsPendingWithoutRecover --no-daemon
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 8s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+Final focused custody/startup command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --no-daemon
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 10s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+SQLite emitted its existing JVM restricted-native-access warning. No formatter, linter, project-wide
+build, or project-wide test suite was run.
+
+## Corrective coverage
+
+- `hasValidRecoveryRows` now requires an exact one-to-one recovery-row set for all escrow
+  snapshots: canonical operation/copy IDs, unique expected copies, exact owner, non-empty
+  byte-for-byte snapshot data, and `PENDING`/`RESTORED` status. Terminal hydration and reuse
+  additionally require every proof row to be `RESTORED`; missing, deleted, duplicate, extra,
+  malformed, pending, or mismatched rows remain unproven.
+- `markRestored` durably writes the exact `RESTORED` proof row in the same SQLite transaction as
+  the restored-copy ledger. The active-copy trigger migration applies the same complete terminal
+  proof, owner, bytes, and status gate as Java preflight.
+- `CardCustodyPort.StartupEntry` and journal/adapter forwarding provide durable startup identity
+  enumeration without requiring UUID hydration. SQLite scans reservation parents and all four child
+  tables in deterministic order, retaining every parseable child `CardCopyId` while preserving
+  malformed raw operation text and marking integrity failures.
+- `MatchApplicationService.recoverStartup` converts malformed or integrity-marked startup entries to
+  `RETURN_PENDING`/`DATABASE_ERROR` recovery results with expected and pending copy IDs and optional
+  raw identity; it never calls `recover` for those entries. Existing UUID-only in-memory adapters use
+  the compatibility default.
+
+## Thread-boundary notes
+
+The new startup records contain immutable UUID/string/value data only. SQLite remains the sole JDBC
+owner; `MatchApplicationService` receives structured values and delegates no live inventory work
+from the database thread. `CardInventoryService` forwards durable enumeration and continues to
+perform custody changes on its primary-thread boundary.
+
+## Concerns
+
+1. Existing databases with terminal rows created before complete `RESTORED` recovery proof now remain
+   fail-closed and must be reconciled rather than reused.
+2. Paper codec tests were not part of this focused fix38 command; the existing environment limitation
+   (no running Paper item registry) remains documented in the earlier report sections.
+
+## Current commits
+
+Implementation commit: `ddedce0` (`fix: complete terminal recovery proof`).
+Report commit: pending.
