@@ -1797,3 +1797,77 @@ BUILD SUCCESSFUL in 5s
 
 Implementation commit: `69625e4` (`fix: reject malformed reservation reuse`).
 Prior report commit: `c482db5` (`docs: record malformed reservation reuse verification`).
+
+## Task 6 malformed-copy identity retention and terminal reuse fix
+
+### Status
+
+Implemented and committed as `579a198` (`fix: protect malformed reservation copies`).
+
+### Corrective coverage
+
+- `SqliteCardRepository.findReservationInternal` now scans every reservation-copy, escrow-snapshot,
+  and restored-ledger row after a decode failure, retains every parseable authoritative copy UUID,
+  and throws one structured `CustodyIntegrityException` only after scanning. Later valid physical
+  copies therefore remain in the fail-closed identity set even when an earlier row is malformed.
+- Startup operation-ID enumeration skips an unrepresentable malformed raw operation ID while
+  continuing to expose later parseable operation IDs; the UUID-based API cannot carry the raw
+  malformed identity.
+- Before inserting reservation copies, SQLite validates every existing reservation containing
+  each UUID through owner/operation identity, terminal status, exact escrow coverage, complete
+  restored proof, and consistency with the card-copy owner. Only proven `RETURNED`/`ABORTED`
+  reservations can be reused; active, unknown, malformed, or unproven rows reject the prepare.
+- Migration V6 recreates the active-copy trigger with fail-closed checks for malformed operation,
+  owner, status, ledger, snapshot, and restored fields, plus exact terminal proof. Trigger
+  protection remains race-safe when a concurrent insert bypasses the Java preflight.
+- Inventory hydration coverage verifies every known malformed-row copy remains reserved until a
+  durable terminal proof is readable.
+
+### TDD and focused verification
+
+Focused red command before the implementation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.malformedReservationCopyRetainsEveryParseableIdentity --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.malformedOperationIdDoesNotHideLaterValidOperationIds --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.triggerRejectsMalformedTerminalOwnersBeforeReuse --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest.malformedOpenCustodyRetainsEveryKnownReservedCopyUntilTerminalProof
+```
+
+Exact red result:
+
+```text
+SqliteCustodyTest > malformedReservationCopyRetainsEveryParseableIdentity() FAILED
+SqliteCustodyTest > triggerRejectsMalformedTerminalOwnersBeforeReuse() FAILED
+SqliteCustodyTest > malformedOperationIdDoesNotHideLaterValidOperationIds() FAILED
+4 tests completed, 3 failed
+FAILURE: Build failed with an exception.
+```
+
+Focused green command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.malformedReservationCopyRetainsEveryParseableIdentity --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.malformedOperationIdDoesNotHideLaterValidOperationIds --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.triggerRejectsMalformedTerminalOwnersBeforeReuse --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest.malformedOpenCustodyRetainsEveryKnownReservedCopyUntilTerminalProof
+```
+
+Exact green result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 1s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+Focused custody/application regression command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 3s
+4 actionable tasks: 1 executed, 3 up-to-date
+```
+
+The focused runs emitted the existing SQLite JDBC restricted-native-access warning. No
+formatter, linter, project-wide build, or project-wide test suite was run.
