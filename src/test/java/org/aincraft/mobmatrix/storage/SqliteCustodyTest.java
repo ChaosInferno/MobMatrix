@@ -1916,6 +1916,51 @@ final class SqliteCustodyTest {
   }
 
   @Test
+  void malformedRecoveryOwnerBlocksTerminalReuseInJavaAndTrigger() throws Exception {
+    var path = Files.createTempFile("mobmatrix-malformed-recovery-owner", ".sqlite");
+    UUID firstOperation = UUID.randomUUID();
+    UUID secondOperation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {2, 9});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(firstOperation, owner, List.of(copy), List.of(snapshot));
+      repository.transition(firstOperation, OperationStatus.ESCROWED);
+      repository.transition(firstOperation, OperationStatus.RETURN_PENDING);
+      repository.addRecovery(firstOperation, owner, snapshot);
+      repository.markRestored(firstOperation, copy);
+      repository.transition(firstOperation, OperationStatus.RETURNED);
+      try (var update = database.connection().prepareStatement(
+          "UPDATE recovery_rows SET owner_uuid = ? WHERE operation_id = ?")) {
+        update.setString(1, UUID.randomUUID().toString());
+        update.setString(2, firstOperation.toString());
+        update.executeUpdate();
+      }
+
+      assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+          () -> repository.prepare(secondOperation, owner, List.of(copy), List.of(snapshot)));
+
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
+            created_at, updated_at)
+          VALUES (?, 'PLAYER', ?, NULL, 'PREPARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          """)) {
+        insert.setString(1, secondOperation.toString());
+        insert.setString(2, owner.playerId().toString());
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES (?, ?)")) {
+        insert.setString(1, secondOperation.toString());
+        insert.setString(2, copy.value().toString());
+        assertThrows(java.sql.SQLException.class, insert::executeUpdate);
+      }
+    }
+    Files.deleteIfExists(path);
+  }
+  @Test
   void identityEnumerationProtectsMalformedOperationCopiesButReleasesProvenTerminalCopies()
       throws Exception {
     var path = Files.createTempFile("mobmatrix-identity-enumeration", ".sqlite");
