@@ -19,4 +19,4 @@
 
 ## Commit
 
-`7ef0cae fix: harden plugin lifecycle and inventory recovery`
+`ec1c0d4 fix: keep catalog provenance out of plugin payload`
