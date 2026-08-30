@@ -64,7 +64,9 @@ public interface CardCustodyPort {
       rawOperationId = Objects.requireNonNull(rawOperationId, "raw operation id is required");
       operationId = Objects.requireNonNull(operationId, "operation id is required");
       copyIds = List.copyOf(Objects.requireNonNull(copyIds, "copy ids are required"));
-      if (rawOperationId.isBlank()) throw new IllegalArgumentException("raw operation id cannot be blank");
+      if (operationId.isPresent() && rawOperationId.isBlank()) {
+        throw new IllegalArgumentException("raw operation id cannot be blank when parsed identity exists");
+      }
       if (operationId.isPresent() && !operationId.get().toString().equals(rawOperationId)) {
         throw new IllegalArgumentException("parsed operation ID does not match raw identity");
       }
@@ -254,7 +256,7 @@ public interface CardCustodyPort {
     }
 
     public RecoveryResult {
-      if (operationId == null && (rawOperationId == null || rawOperationId.isBlank())) {
+      if (operationId == null && rawOperationId == null) {
         throw new NullPointerException("operation or raw operation identity is required");
       }
       if (operationId != null && rawOperationId != null

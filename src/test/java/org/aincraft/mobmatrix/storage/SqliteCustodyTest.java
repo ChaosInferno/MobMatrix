@@ -2123,7 +2123,11 @@ final class SqliteCustodyTest {
         update.executeUpdate();
       }
       assertThrows(IllegalArgumentException.class, () -> repository.find(state.matchId()));
-      assertThrows(IllegalArgumentException.class, repository::activeMatches);
+      MatchRepository.ActiveMatchesResult report = repository.activeMatchesReport();
+      assertTrue(report.matches().isEmpty());
+      assertEquals(List.of(new MatchRepository.ActiveMatchFailure(state.matchId(),
+          MatchRepository.Failure.INVALID_STATE)), report.failures());
+      assertTrue(repository.activeMatches().isEmpty());
     }
     Files.deleteIfExists(path);
   }
@@ -2639,6 +2643,58 @@ final class SqliteCustodyTest {
       }
       assertThrows(IllegalStateException.class,
           () -> repository.prepare(secondOperation, owner, List.of(copy), List.of(snapshot)));
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void missingTerminalHistoryBlocksCopyReuse() throws Exception {
+    var path = Files.createTempFile("mobmatrix-missing-terminal-history", ".sqlite");
+    UUID firstOperation = UUID.randomUUID();
+    UUID secondOperation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {4, 2});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(firstOperation, owner, List.of(copy), List.of(snapshot));
+      repository.transition(firstOperation, OperationStatus.ESCROWED);
+      repository.transition(firstOperation, OperationStatus.RETURN_PENDING);
+      repository.addRecovery(firstOperation, owner, snapshot);
+      repository.markRestored(firstOperation, copy);
+      repository.transition(firstOperation, OperationStatus.RETURNED);
+
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA foreign_keys = OFF");
+      }
+      for (String table : List.of("reservation_copies", "escrow_items",
+          "reservation_restored", "recovery_rows")) {
+        try (var delete = database.connection().prepareStatement(
+            "DELETE FROM " + table + " WHERE operation_id = ?")) {
+          delete.setString(1, firstOperation.toString());
+          delete.executeUpdate();
+        }
+      }
+
+      assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+          () -> repository.prepare(secondOperation, owner, List.of(copy), List.of(snapshot)));
+
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
+            created_at, updated_at)
+          VALUES (?, 'PLAYER', ?, NULL, 'PREPARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          """)) {
+        insert.setString(1, secondOperation.toString());
+        insert.setString(2, owner.playerId().toString());
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES (?, ?)")) {
+        insert.setString(1, secondOperation.toString());
+        insert.setString(2, copy.value().toString());
+        assertThrows(java.sql.SQLException.class, insert::executeUpdate);
+      }
     }
     Files.deleteIfExists(path);
   }

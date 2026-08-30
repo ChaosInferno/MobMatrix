@@ -657,20 +657,28 @@ public final class MatchApplicationService {
   }
 
   private RecoveryResult recoveryFailure(CardCustodyPort.StartupEntry startupEntry) {
+    return recoveryFailure(startupEntry, null);
+  }
+
+  private RecoveryResult recoveryFailure(CardCustodyPort.StartupEntry startupEntry,
+      RuntimeException source) {
     if (startupEntry.operationId().isEmpty()) {
       return RecoveryResult.malformed(startupEntry.rawOperationId(),
           startupEntry.expectedCopyIds());
     }
-    return new RecoveryResult(startupEntry.operationId().orElseThrow(),
-        OperationStatus.RETURN_PENDING, startupEntry.expectedCopyIds(), List.of(),
-        startupEntry.expectedCopyIds(), Failure.DATABASE_ERROR);
+    UUID operationId = startupEntry.operationId().orElseThrow();
+    RecoveryIdentity identity = operationIdentity(operationId, source);
+    List<CardCopyId> copyIds = identity.copyIds().isEmpty()
+        ? startupEntry.expectedCopyIds() : identity.copyIds();
+    return new RecoveryResult(operationId, OperationStatus.RETURN_PENDING, copyIds, List.of(),
+        copyIds, Failure.DATABASE_ERROR);
   }
-
   private RecoveryResult recoveryFailure(UUID operationId, RuntimeException source) {
     RecoveryIdentity identity = operationIdentity(operationId, source);
     return new RecoveryResult(identity.operationId(), OperationStatus.RETURN_PENDING,
         identity.copyIds(), List.of(), identity.copyIds(), Failure.DATABASE_ERROR);
   }
+
 
   private RecoveryIdentity operationIdentity(UUID operationId, RuntimeException source) {
     RecoveryIdentity identity = identityFrom(operationId, source);
@@ -707,6 +715,14 @@ public final class MatchApplicationService {
   private static boolean isTerminal(OperationStatus status) {
     return status == OperationStatus.RETURNED || status == OperationStatus.ABORTED;
   }
+  private static Failure mapMatchFailure(MatchRepository.Failure failure) {
+    return switch (failure) {
+      case NONE -> Failure.NONE;
+      case STALE_REVISION -> Failure.STALE_REVISION;
+      case DATABASE_ERROR -> Failure.DATABASE_ERROR;
+      case INVALID_STATE -> Failure.INVALID_STATE;
+    };
+  }
 
 
   /** Reconciles every durable custody row and active match on plugin startup. */
@@ -718,17 +734,23 @@ public final class MatchApplicationService {
     // Read active match IDs before touching custody. A reservation bound to one of these IDs is
     // still in use and must not be returned during a restart, even if its state is malformed.
     List<MatchRepository.MatchSnapshot> snapshots = List.of();
+    List<MatchFailure> matchFailures = new ArrayList<>();
+    Set<org.aincraft.mobmatrix.domain.MatchId> activeMatchIds = new HashSet<>();
     Failure matchRepositoryFailure = Failure.NONE;
     boolean activeMatchesLoadFailed = false;
     try {
-      snapshots = matches.activeMatches();
+      MatchRepository.ActiveMatchesResult report = matches.activeMatchesReport();
+      snapshots = report.matches();
+      for (MatchRepository.ActiveMatchFailure failure : report.failures()) {
+        activeMatchIds.add(failure.matchId());
+        matchFailures.add(new MatchFailure(failure.matchId(), mapMatchFailure(failure.failure())));
+      }
     } catch (RuntimeException ignored) {
       // A match repository outage must not prevent independent custody recovery. Keep every
       // reservation with a durable binding rather than risking release when active IDs are unreadable.
       activeMatchesLoadFailed = true;
       matchRepositoryFailure = Failure.DATABASE_ERROR;
     }
-    Set<org.aincraft.mobmatrix.domain.MatchId> activeMatchIds = new HashSet<>();
     for (MatchRepository.MatchSnapshot snapshot : snapshots) activeMatchIds.add(snapshot.matchId());
 
     List<RecoveryResult> recoveries = new ArrayList<>();
@@ -768,12 +790,12 @@ public final class MatchApplicationService {
         // terminal. Preserve custody and report an unknown result rather than releasing cards.
         if (!hasBinding && (activeMatchesLoadFailed || durableStatus.isEmpty()
             || !isTerminal(durableStatus.get()))) {
-          recoveries.add(recoveryFailure(operationId));
+          recoveries.add(recoveryFailure(startupEntry));
         } else if (boundToActiveMatch || (activeMatchesLoadFailed && hasBinding)) {
           if (durableStatus.isEmpty() || !isTerminal(durableStatus.get())) {
             // PREPARED, ESCROWED, and RETURN_PENDING remain match-bound until terminality is
             // durably proven. Never reconcile active custody based on a nonterminal row.
-            if (durableStatus.isEmpty()) recoveries.add(recoveryFailure(operationId));
+            if (durableStatus.isEmpty()) recoveries.add(recoveryFailure(startupEntry));
           } else {
             recoveries.add(custody.recover(operationId));
           }
@@ -783,12 +805,11 @@ public final class MatchApplicationService {
           recoveries.add(custody.recover(operationId));
         }
       } catch (RuntimeException exception) {
-        recoveries.add(recoveryFailure(operationId, exception));
+        recoveries.add(recoveryFailure(startupEntry, exception));
       }
     }
 
     List<MatchState> states = new ArrayList<>();
-    List<MatchFailure> matchFailures = new ArrayList<>();
 
     for (MatchRepository.MatchSnapshot snapshot : snapshots) {
       try {

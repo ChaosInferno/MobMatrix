@@ -154,8 +154,8 @@ final class MatchApplicationServiceTest {
     assertTrue(result.recoveries().isEmpty());
   }
   @Test
-  void startupReportsMalformedRawIdentityAsPendingWithoutRecover() {
-    String rawOperation = "not-a-canonical-operation";
+  void startupReportsBlankRawIdentityAsPendingWithoutRecover() {
+    String rawOperation = "";
     List<CardCopyId> expected = copies().subList(0, 3);
     MalformedStartupCustody custody = new MalformedStartupCustody(rawOperation, expected);
 
@@ -171,6 +171,85 @@ final class MatchApplicationServiceTest {
     assertEquals(expected, recovery.expectedCopyIds());
     assertEquals(expected, recovery.pendingCopyIds());
     assertTrue(custody.recovered.isEmpty());
+  }
+
+  @Test
+  void blankRawRecoveryIdentityIsRepresentable() {
+    List<CardCopyId> expected = copies().subList(0, 2);
+    CardCustodyPort.RecoveryResult recovery = CardCustodyPort.RecoveryResult.malformed("", expected);
+    assertTrue(recovery.operationId() == null);
+    assertEquals("", recovery.rawIdentity().orElseThrow());
+    assertEquals(expected, recovery.expectedCopyIds());
+    assertEquals(expected, recovery.pendingCopyIds());
+  }
+
+  @Test
+  void startupGenericMetadataFailureUsesEnumeratedCopyIds() {
+    UUID operation = UUID.randomUUID();
+    List<CardCopyId> expected = copies();
+    GenericStartupFailureCustody custody = new GenericStartupFailureCustody(operation, expected,
+        false);
+
+    MatchApplicationService.StartupRecoveryResult result = new MatchApplicationService(custody,
+        new InMemoryMatchRepository()).recoverStartup(
+            snapshot -> new CardCatalog(List.of(), snapshot), Instant.parse("2026-01-01T00:00:00Z"));
+
+    CardCustodyPort.RecoveryResult recovery = result.recoveries().getFirst();
+    assertEquals(operation, recovery.operationId());
+    assertEquals(expected, recovery.expectedCopyIds());
+    assertEquals(expected, recovery.pendingCopyIds());
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, recovery.failure());
+    assertTrue(custody.recovered.isEmpty());
+  }
+
+  @Test
+  void startupGenericRecoverFailureUsesEnumeratedCopyIds() {
+    UUID operation = UUID.randomUUID();
+    List<CardCopyId> expected = copies();
+    GenericStartupFailureCustody custody = new GenericStartupFailureCustody(operation, expected,
+        true);
+
+    MatchApplicationService.StartupRecoveryResult result = new MatchApplicationService(custody,
+        new InMemoryMatchRepository()).recoverStartup(
+            snapshot -> new CardCatalog(List.of(), snapshot), Instant.parse("2026-01-01T00:00:00Z"));
+
+    CardCustodyPort.RecoveryResult recovery = result.recoveries().getFirst();
+    assertEquals(operation, recovery.operationId());
+    assertEquals(expected, recovery.expectedCopyIds());
+    assertEquals(expected, recovery.pendingCopyIds());
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, recovery.failure());
+    assertEquals(List.of(operation), custody.recovered);
+  }
+
+  @Test
+  void startupRetainsBadMatchRowCustodyAndLoadsHealthyRows() {
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    MatchEngine.StartMatch healthyStart = match("healthy-active-row", owner, copies(), owner,
+        copies());
+    MatchState healthy = MatchEngine.start(healthyStart).state();
+    MatchId badMatch = new MatchId("bad-active-row");
+    UUID operation = UUID.randomUUID();
+    BadRowMatchRepository repository = new BadRowMatchRepository(healthyStart.matchId(), healthy,
+        badMatch);
+    BoundEscrowCustody custody = new BoundEscrowCustody(operation, badMatch);
+
+    MatchApplicationService.StartupRecoveryResult result = new MatchApplicationService(custody,
+        repository).recoverStartup(id -> healthyStart.catalog(),
+            Instant.parse("2026-01-01T00:00:00Z"));
+
+    assertEquals(List.of(healthy), result.matches());
+    assertEquals(List.of(new MatchApplicationService.MatchFailure(badMatch,
+        CardCustodyPort.Failure.DATABASE_ERROR)), result.matchFailures());
+    assertTrue(result.recoveries().isEmpty());
+  }
+
+  @Test
+  void startupEntryAcceptsBlankRawIdentity() {
+    List<CardCopyId> expected = copies().subList(0, 2);
+    CardCustodyPort.StartupEntry entry = CardCustodyPort.StartupEntry.malformed("", expected);
+    assertEquals("", entry.rawOperationId());
+    assertTrue(entry.operationId().isEmpty());
+    assertEquals(expected, entry.expectedCopyIds());
   }
 
   @Test
@@ -1654,9 +1733,56 @@ final class MatchApplicationServiceTest {
     }
   }
 
+  private static final class GenericStartupFailureCustody implements CardCustodyPort {
+    private final UUID operation;
+    private final List<CardCopyId> copies;
+    private final boolean failRecover;
+    private final List<UUID> recovered = new ArrayList<>();
+
+    private GenericStartupFailureCustody(UUID operation, List<CardCopyId> copies,
+        boolean failRecover) {
+      this.operation = operation;
+      this.copies = List.copyOf(copies);
+      this.failRecover = failRecover;
+    }
+
+    @Override
+    public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
+      return PrepareResult.rejected(operationId, owner, copyIds, Failure.DATABASE_ERROR);
+    }
+
+    @Override
+    public CustodyResult escrow(UUID operationId) {
+      return CustodyResult.rejected(operationId, OperationStatus.PREPARED, Failure.DATABASE_ERROR);
+    }
+
+    @Override
+    public ReturnResult returnCopies(UUID operationId) {
+      return ReturnResult.pending(operationId, copies, List.of(), copies, copies);
+    }
+
+    @Override
+    public RecoveryResult recover(UUID operationId) {
+      recovered.add(operationId);
+      if (failRecover) throw new IllegalStateException("recovery unavailable");
+      return RecoveryResult.none(operationId);
+    }
+
+    @Override
+    public List<StartupEntry> startupEntries() {
+      return List.of(StartupEntry.valid(operation, copies));
+    }
+
+    @Override
+    public java.util.Optional<OperationStatus> operationStatus(UUID operationId) {
+      if (!failRecover) throw new IllegalStateException("status unavailable");
+      return java.util.Optional.of(OperationStatus.RETURNED);
+    }
+  }
   private static final class MalformedStartupCustody implements CardCustodyPort {
     private final String rawOperation;
     private final List<CardCopyId> copies;
+
     private final List<UUID> recovered = new ArrayList<>();
 
     private MalformedStartupCustody(String rawOperation, List<CardCopyId> copies) {
@@ -1798,6 +1924,39 @@ final class MatchApplicationServiceTest {
     public java.util.Optional<OperationBinding> operationBinding(UUID operationId) {
       return java.util.Optional.of(new OperationBinding(CopyOwner.player(UUID.randomUUID()),
           copies, OperationStatus.ESCROWED, null));
+    }
+  }
+
+  private static final class BadRowMatchRepository implements MatchRepository {
+    private final MatchSnapshot healthy;
+    private final MatchState healthyState;
+    private final MatchId badMatch;
+
+    private BadRowMatchRepository(MatchId healthyMatch, MatchState state, MatchId badMatch) {
+      this.healthyState = state;
+      this.healthy = new MatchSnapshot(healthyMatch, state.revision(), "ACTIVE", new byte[] {1}, "{}");
+      this.badMatch = badMatch;
+    }
+
+    @Override
+    public SaveResult save(long expectedRevision, MatchState state) {
+      return SaveResult.stale(state.revision());
+    }
+
+    @Override
+    public java.util.Optional<MatchSnapshot> find(MatchId matchId) {
+      return java.util.Optional.empty();
+    }
+    @Override
+    public java.util.Optional<MatchState> rehydrate(MatchSnapshot snapshot,
+        java.util.function.Function<String, CardCatalog> catalogResolver) {
+      return java.util.Optional.of(healthyState);
+    }
+
+    @Override
+    public ActiveMatchesResult activeMatchesReport() {
+      return new ActiveMatchesResult(List.of(healthy),
+          List.of(new ActiveMatchFailure(badMatch, MatchRepository.Failure.DATABASE_ERROR)));
     }
   }
 

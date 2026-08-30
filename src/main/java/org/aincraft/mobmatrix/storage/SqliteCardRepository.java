@@ -797,8 +797,27 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       }
     });
   }
+  private boolean hasUnprovenTerminalReservation() throws SQLException {
+    try (var query = connection.prepareStatement(
+        "SELECT operation_id, owner_kind, owner_uuid, status FROM reservations "
+            + "WHERE status IN ('RETURNED', 'ABORTED') ORDER BY rowid");
+        var rows = query.executeQuery()) {
+      while (rows.next()) {
+        if (!provenTerminal(rows.getString(1), rows.getString(2), rows.getString(3),
+            rows.getString(4))) {
+          return true;
+        }
+      }
+      return false;
+    }
+  }
+
   private void validateCopyReuse(UUID operationId, CopyOwner owner, CardCopyId copy)
       throws SQLException {
+    if (hasUnprovenTerminalReservation()) {
+      throw new CustodyIntegrityException(operationId, List.of(copy),
+          "terminal reservation lacks complete custody proof", null);
+    }
     try (var query = connection.prepareStatement("""
         SELECT operation_id, copy_uuid FROM reservation_copies
         UNION ALL
@@ -1018,6 +1037,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
 
   private boolean hasValidRecoveryRows(String rawOperationId, CopyOwner owner,
       List<CardCopyId> copies, List<SerializedItemSnapshot> snapshots) throws SQLException {
+    if (copies.isEmpty() || snapshots.isEmpty()) return false;
     UUID expectedOperation;
     try {
       expectedOperation = parseCanonicalUuid(rawOperationId);

@@ -67,6 +67,28 @@ public interface MatchRepository {
     return List.of();
   }
 
+  /**
+   * Loads active rows while isolating corruption to the affected row. Implementations that do not
+   * support row-level diagnostics retain the legacy all-or-nothing behavior through this default.
+   */
+  default ActiveMatchesResult activeMatchesReport() {
+    return new ActiveMatchesResult(activeMatches(), List.of());
+  }
+
+  record ActiveMatchesResult(List<MatchSnapshot> matches, List<ActiveMatchFailure> failures) {
+    public ActiveMatchesResult {
+      matches = List.copyOf(Objects.requireNonNull(matches, "matches are required"));
+      failures = List.copyOf(Objects.requireNonNull(failures, "failures are required"));
+    }
+  }
+
+  record ActiveMatchFailure(MatchId matchId, Failure failure) {
+    public ActiveMatchFailure {
+      Objects.requireNonNull(matchId, "match id is required");
+      Objects.requireNonNull(failure, "failure is required");
+    }
+  }
+
   default void delete(MatchId matchId) {}
   /** Rehydrates a snapshot after resolving its catalog snapshot ID. */
   default Optional<MatchState> rehydrate(MatchSnapshot snapshot,

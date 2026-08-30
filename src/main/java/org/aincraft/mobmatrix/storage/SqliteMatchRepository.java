@@ -25,6 +25,7 @@ import org.aincraft.mobmatrix.domain.CardDefinition;
 import org.aincraft.mobmatrix.domain.CardType;
 import org.aincraft.mobmatrix.domain.PlayerSeat;
 import org.aincraft.mobmatrix.domain.Side;
+import org.aincraft.mobmatrix.domain.MatchId;
 
 /** Optimistic-CAS repository for immutable active match snapshots and random transcripts. */
 public final class SqliteMatchRepository implements MatchRepository {
@@ -322,28 +323,39 @@ public final class SqliteMatchRepository implements MatchRepository {
 
 
   @Override
-  public List<MatchSnapshot> activeMatches() {
+  public ActiveMatchesResult activeMatchesReport() {
     try (var query = connection.prepareStatement(
         "SELECT match_id, revision, status, state_bytes, transcript_json, state_digest "
             + "FROM matches ORDER BY match_id")) {
       List<MatchSnapshot> result = new ArrayList<>();
+      List<ActiveMatchFailure> failures = new ArrayList<>();
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
-          MatchSnapshot snapshot = new MatchSnapshot(
-              new org.aincraft.mobmatrix.domain.MatchId(rows.getString(1)), rows.getLong(2),
-              rows.getString(3), rows.getBytes(4), rows.getString(5), rows.getString(6));
-          verifyIntegrity(snapshot);
-          CardCatalog catalog = persistedCatalog(
-              MatchStateSnapshotCodec.catalogSnapshotId(snapshot.stateBytes()));
-          MatchState state = MatchStateSnapshotCodec.decode(snapshot.stateBytes(), catalog);
-          validateSnapshotState(snapshot, state);
-          if (!state.isFinished()) result.add(snapshot);
+          MatchId matchId = null;
+          try {
+            matchId = new org.aincraft.mobmatrix.domain.MatchId(rows.getString(1));
+            MatchSnapshot snapshot = new MatchSnapshot(matchId, rows.getLong(2),
+                rows.getString(3), rows.getBytes(4), rows.getString(5), rows.getString(6));
+            verifyIntegrity(snapshot);
+            CardCatalog catalog = persistedCatalog(
+                MatchStateSnapshotCodec.catalogSnapshotId(snapshot.stateBytes()));
+            MatchState state = MatchStateSnapshotCodec.decode(snapshot.stateBytes(), catalog);
+            validateSnapshotState(snapshot, state);
+            if (!state.isFinished()) result.add(snapshot);
+          } catch (RuntimeException exception) {
+            if (matchId != null) failures.add(new ActiveMatchFailure(matchId, Failure.INVALID_STATE));
+          }
         }
       }
-      return List.copyOf(result);
+      return new ActiveMatchesResult(result, failures);
     } catch (SQLException exception) {
       throw new IllegalStateException("SQLite active match load failed", exception);
     }
+  }
+
+  @Override
+  public List<MatchSnapshot> activeMatches() {
+    return activeMatchesReport().matches();
   }
 
   @Override

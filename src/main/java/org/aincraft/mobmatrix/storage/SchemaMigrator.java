@@ -375,6 +375,23 @@ public final class SchemaMigrator {
           BEFORE INSERT ON reservation_copies
           WHEN EXISTS (
             SELECT 1
+            FROM reservations orphan_terminal
+            WHERE orphan_terminal.status IN ('RETURNED', 'ABORTED')
+              AND lower(orphan_terminal.operation_id) <> lower(NEW.operation_id)
+              AND length(NEW.operation_id) = 36
+              AND substr(NEW.operation_id, 9, 1) = '-'
+              AND substr(NEW.operation_id, 14, 1) = '-'
+              AND substr(NEW.operation_id, 19, 1) = '-'
+              AND substr(NEW.operation_id, 24, 1) = '-'
+              AND lower(NEW.operation_id) = NEW.operation_id
+              AND NOT EXISTS (
+                SELECT 1
+                FROM reservation_copies expected
+                WHERE lower(expected.operation_id) = lower(orphan_terminal.operation_id)
+              )
+          )
+          OR EXISTS (
+            SELECT 1
             FROM (
               SELECT operation_id, copy_uuid FROM reservation_copies
               UNION ALL
