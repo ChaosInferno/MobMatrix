@@ -20,6 +20,8 @@ import org.aincraft.mobmatrix.domain.CopyOwner;
 import org.aincraft.mobmatrix.storage.Database;
 import org.aincraft.mobmatrix.storage.SqliteCardRepository;
 import org.junit.jupiter.api.Test;
+import org.bukkit.inventory.Inventory;
+import org.bukkit.inventory.ItemStack;
 
 final class CardInventoryServiceTest {
   @Test
@@ -347,5 +349,42 @@ final class CardInventoryServiceTest {
       assertTrue(service.isReserved(copy));
     }
     Files.deleteIfExists(path);
+  }
+  @Test
+  void malformedReservedItemInInventoryForcesKeepInventoryScan() {
+    boolean paperAvailable;
+    try {
+      new ItemStack(org.bukkit.Material.PAPER);
+      paperAvailable = true;
+    } catch (Throwable unavailable) {
+      paperAvailable = false;
+    }
+    org.junit.jupiter.api.Assumptions.assumeTrue(paperAvailable,
+        "Paper API item registry requires a running Paper server");
+    CardItemCodec codec = new CardItemCodec("mobmatrix", "0123456789abcdef");
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    ItemStack item = codec.create(
+        new org.aincraft.mobmatrix.domain.CardDefinition(
+            new CardId(1), "No. 1", "Dodo", 1,
+            org.aincraft.mobmatrix.domain.CardType.NORMAL, 4, 2, 3, 4, 0),
+        copy, CopyOwner.player(UUID.randomUUID()));
+    var meta = item.getItemMeta();
+    meta.getPersistentDataContainer().set(codec.integrityKey(),
+        org.bukkit.persistence.PersistentDataType.STRING, "tampered");
+    item.setItemMeta(meta);
+    var journal = new org.aincraft.mobmatrix.application.InMemoryCardCustodyJournal();
+    journal.prepare(UUID.randomUUID(), CopyOwner.player(UUID.randomUUID()), List.of(copy),
+        List.of(new SerializedItemSnapshot(copy, new byte[] {1})));
+    CardInventoryService service = new CardInventoryService(codec, id -> null, journal);
+    Inventory inventory = (Inventory) java.lang.reflect.Proxy.newProxyInstance(
+        Inventory.class.getClassLoader(), new Class<?>[] {Inventory.class},
+        (proxy, method, arguments) -> {
+          if (method.getName().equals("getSize")) return 1;
+          if (method.getName().equals("getItem")) return item;
+          throw new UnsupportedOperationException(method.getName());
+        });
+
+    assertTrue(!codec.read(item).isValid());
+    assertTrue(service.hasReservedInventory(inventory));
   }
 }
