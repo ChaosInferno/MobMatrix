@@ -57,7 +57,8 @@ public final class SqliteCardRepository implements CardCustodyJournal {
           try {
             result.add(UUID.fromString(rawOperationId));
           } catch (RuntimeException exception) {
-            throw new IllegalStateException("invalid operation UUID in reservations", exception);
+            // UUID is the only identity this API can expose. Do not let one unrepresentable
+            // operation hide later valid operation identities during startup enumeration.
           }
         }
       }
@@ -285,6 +286,9 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         if (ledger == null) throw new IllegalStateException("unknown card copy: " + copy);
         if (!ledger.owner().equals(owner)) throw new IllegalStateException("copy owner mismatch");
       }
+      for (CardCopyId copy : copies) {
+        validateCopyReuse(operationId, owner, copy);
+      }
       try (var insert = connection.prepareStatement(
           "INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status, created_at, updated_at) "
               + "VALUES (?, ?, ?, ?, 'PREPARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)")) {
@@ -471,6 +475,40 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       }
     });
   }
+  private void validateCopyReuse(UUID operationId, CopyOwner owner, CardCopyId copy)
+      throws SQLException {
+    try (var query = connection.prepareStatement(
+        "SELECT operation_id FROM reservation_copies WHERE copy_uuid = ? ORDER BY rowid")) {
+      query.setString(1, copy.value().toString());
+      Set<String> seenRawOperationIds = new HashSet<>();
+      try (var rows = query.executeQuery()) {
+        while (rows.next()) {
+          String rawOperationId = rows.getString(1);
+          if (!seenRawOperationIds.add(rawOperationId)) continue;
+          UUID existingOperation;
+          try {
+            existingOperation = UUID.fromString(rawOperationId);
+          } catch (RuntimeException exception) {
+            throw new CustodyIntegrityException(operationId, List.of(copy),
+                "invalid existing reservation operation identity", exception);
+          }
+          if (existingOperation.equals(operationId)) continue;
+          Reservation existing = findReservationInternal(existingOperation);
+          if (existing == null) {
+            throw new IllegalStateException("reservation copy has no reservation");
+          }
+          if (!existing.owner().equals(owner)) {
+            throw new IllegalStateException("existing reservation owner does not match copy owner");
+          }
+          if (existing.status() != OperationStatus.RETURNED
+              && existing.status() != OperationStatus.ABORTED) {
+            throw new IllegalStateException("copy is not proven reusable");
+          }
+        }
+      }
+    }
+  }
+
   private Reservation findReservationInternal(UUID operationId) throws SQLException {
     try (var query = connection.prepareStatement(
         "SELECT owner_kind, owner_uuid, match_id, status FROM reservations WHERE operation_id = ?")) {
@@ -482,39 +520,59 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         String matchId = rows.getString(3);
         String rawStatus = rows.getString(4);
         List<CardCopyId> copies = new ArrayList<>();
-        try {
-          // Decode the authoritative reservation UUIDs before owner/status fields so an integrity
-          // failure in either field still retains every expected physical copy parsed so far.
-          try (var copyQuery = connection.prepareStatement(
-              "SELECT copy_uuid FROM reservation_copies WHERE operation_id = ? ORDER BY rowid")) {
-            copyQuery.setString(1, operationId.toString());
-            try (var copyRows = copyQuery.executeQuery()) {
-              while (copyRows.next()) {
+        RuntimeException decodeFailure = null;
+
+        // Scan every reservation-copy row even when one UUID is malformed. The parseable UUIDs
+        // are the only physical identities that can be retained for fail-closed recovery.
+        try (var copyQuery = connection.prepareStatement(
+            "SELECT copy_uuid FROM reservation_copies WHERE operation_id = ? ORDER BY rowid")) {
+          copyQuery.setString(1, operationId.toString());
+          try (var copyRows = copyQuery.executeQuery()) {
+            while (copyRows.next()) {
+              try {
                 copies.add(new CardCopyId(UUID.fromString(copyRows.getString(1))));
+              } catch (RuntimeException exception) {
+                if (decodeFailure == null) decodeFailure = exception;
               }
             }
           }
-          List<SerializedItemSnapshot> snapshots = new ArrayList<>();
-          try (var snapshotQuery = connection.prepareStatement(
-              "SELECT copy_uuid, item_bytes FROM escrow_items WHERE operation_id = ? ORDER BY rowid")) {
-            snapshotQuery.setString(1, operationId.toString());
-            try (var snapshotRows = snapshotQuery.executeQuery()) {
-              while (snapshotRows.next()) {
+        }
+
+        List<SerializedItemSnapshot> snapshots = new ArrayList<>();
+        try (var snapshotQuery = connection.prepareStatement(
+            "SELECT copy_uuid, item_bytes FROM escrow_items WHERE operation_id = ? ORDER BY rowid")) {
+          snapshotQuery.setString(1, operationId.toString());
+          try (var snapshotRows = snapshotQuery.executeQuery()) {
+            while (snapshotRows.next()) {
+              try {
                 CardCopyId copy = new CardCopyId(UUID.fromString(snapshotRows.getString(1)));
                 snapshots.add(new SerializedItemSnapshot(copy, snapshotRows.getBytes(2)));
+              } catch (RuntimeException exception) {
+                if (decodeFailure == null) decodeFailure = exception;
               }
             }
           }
-          List<CardCopyId> restored = new ArrayList<>();
-          try (var restoredQuery = connection.prepareStatement(
-              "SELECT copy_uuid FROM reservation_restored WHERE operation_id = ? ORDER BY rowid")) {
-            restoredQuery.setString(1, operationId.toString());
-            try (var restoredRows = restoredQuery.executeQuery()) {
-              while (restoredRows.next()) {
+        }
+
+        List<CardCopyId> restored = new ArrayList<>();
+        try (var restoredQuery = connection.prepareStatement(
+            "SELECT copy_uuid FROM reservation_restored WHERE operation_id = ? ORDER BY rowid")) {
+          restoredQuery.setString(1, operationId.toString());
+          try (var restoredRows = restoredQuery.executeQuery()) {
+            while (restoredRows.next()) {
+              try {
                 restored.add(new CardCopyId(UUID.fromString(restoredRows.getString(1))));
+              } catch (RuntimeException exception) {
+                if (decodeFailure == null) decodeFailure = exception;
               }
             }
           }
+        }
+        if (decodeFailure != null) {
+          throw new CustodyIntegrityException(operationId, copies,
+              "invalid reservation identity data", decodeFailure);
+        }
+        try {
           CopyOwner owner = readOwner(ownerKind, ownerUuid);
           OperationStatus status = OperationStatus.valueOf(rawStatus);
           if (!hasExactSnapshots(copies, snapshots)) {

@@ -179,26 +179,28 @@ final class CardInventoryServiceTest {
     assertFalse(CardInventoryService.shouldCancelItemFrameInteraction(false, true, true));
   }
   @Test
-  void malformedOpenCustodyRemainsReservedUntilTerminalProof() {
+  void malformedOpenCustodyRetainsEveryKnownReservedCopyUntilTerminalProof() {
     CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    CardCopyId laterCopy = new CardCopyId(UUID.randomUUID());
     UUID operation = UUID.randomUUID();
-    MalformedJournal journal = new MalformedJournal(operation, copy);
+    MalformedJournal journal = new MalformedJournal(operation, List.of(copy, laterCopy));
     CardInventoryService service = new CardInventoryService(
         new CardItemCodec("test", "0123456789abcdef"), id -> null, journal);
 
-    assertTrue(service.reservedCopyIds().contains(copy));
+    assertTrue(service.reservedCopyIds().containsAll(List.of(copy, laterCopy)));
     journal.terminal = true;
     assertFalse(service.reservedCopyIds().contains(copy));
+    assertFalse(service.reservedCopyIds().contains(laterCopy));
   }
 
   private static final class MalformedJournal implements CardCustodyJournal {
     private final UUID operation;
-    private final CardCopyId copy;
+    private final List<CardCopyId> copies;
     private boolean terminal;
 
-    private MalformedJournal(UUID operation, CardCopyId copy) {
+    private MalformedJournal(UUID operation, List<CardCopyId> copies) {
       this.operation = operation;
-      this.copy = copy;
+      this.copies = List.copyOf(copies);
     }
 
     @Override
@@ -208,11 +210,11 @@ final class CardInventoryServiceTest {
     @Override
     public Optional<Entry> find(UUID operationId) {
       if (terminal) {
-        return Optional.of(new Entry(operation, CopyOwner.player(UUID.randomUUID()), List.of(copy),
-            List.of(new SerializedItemSnapshot(copy, new byte[] {1})), OperationStatus.ABORTED,
-            Set.of(copy)));
+        return Optional.of(new Entry(operation, CopyOwner.player(UUID.randomUUID()), copies,
+            copies.stream().map(copy -> new SerializedItemSnapshot(copy, new byte[] {1})).toList(),
+            OperationStatus.ABORTED, Set.copyOf(copies)));
       }
-      throw new SqliteCardRepository.CustodyIntegrityException(operation, List.of(copy),
+      throw new SqliteCardRepository.CustodyIntegrityException(operation, copies,
           "malformed reservation");
     }
 

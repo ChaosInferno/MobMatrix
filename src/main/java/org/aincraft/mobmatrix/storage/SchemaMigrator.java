@@ -373,8 +373,44 @@ public final class SchemaMigrator {
             JOIN reservations reservation ON reservation.operation_id = existing.operation_id
             WHERE existing.copy_uuid = NEW.copy_uuid
               AND (
-                reservation.status IS NULL
+                reservation.operation_id IS NULL
+                OR length(reservation.operation_id) <> 36
+                OR substr(reservation.operation_id, 9, 1) <> '-'
+                OR substr(reservation.operation_id, 14, 1) <> '-'
+                OR substr(reservation.operation_id, 19, 1) <> '-'
+                OR substr(reservation.operation_id, 24, 1) <> '-'
+                OR reservation.operation_id GLOB '*[^0-9A-Fa-f-]*'
+                OR reservation.status IS NULL
                 OR reservation.status NOT IN ('RETURNED', 'ABORTED')
+                OR reservation.owner_kind IS NULL
+                OR reservation.owner_kind NOT IN ('PLAYER', 'HOUSE')
+                OR (reservation.owner_kind = 'HOUSE' AND reservation.owner_uuid IS NOT NULL)
+                OR (reservation.owner_kind = 'PLAYER' AND (
+                  reservation.owner_uuid IS NULL
+                  OR length(reservation.owner_uuid) <> 36
+                  OR substr(reservation.owner_uuid, 9, 1) <> '-'
+                  OR substr(reservation.owner_uuid, 14, 1) <> '-'
+                  OR substr(reservation.owner_uuid, 19, 1) <> '-'
+                  OR substr(reservation.owner_uuid, 24, 1) <> '-'
+                  OR reservation.owner_uuid GLOB '*[^0-9A-Fa-f-]*'
+                ))
+                OR NOT EXISTS (
+                  SELECT 1
+                  FROM card_copies ledger
+                  WHERE ledger.copy_uuid = existing.copy_uuid
+                    AND ledger.owner_kind = reservation.owner_kind
+                    AND (
+                      (ledger.owner_kind = 'HOUSE' AND ledger.owner_uuid IS NULL)
+                      OR (ledger.owner_kind = 'PLAYER'
+                        AND ledger.owner_uuid = reservation.owner_uuid
+                        AND length(ledger.owner_uuid) = 36
+                        AND substr(ledger.owner_uuid, 9, 1) = '-'
+                        AND substr(ledger.owner_uuid, 14, 1) = '-'
+                        AND substr(ledger.owner_uuid, 19, 1) = '-'
+                        AND substr(ledger.owner_uuid, 24, 1) = '-'
+                        AND ledger.owner_uuid NOT GLOB '*[^0-9A-Fa-f-]*')
+                    )
+                )
                 OR EXISTS (
                   SELECT 1
                   FROM reservation_copies expected
@@ -382,7 +418,9 @@ public final class SchemaMigrator {
                     ON snapshot.operation_id = expected.operation_id
                     AND snapshot.copy_uuid = expected.copy_uuid
                   WHERE expected.operation_id = existing.operation_id
-                    AND snapshot.copy_uuid IS NULL
+                    AND (snapshot.copy_uuid IS NULL
+                      OR snapshot.item_bytes IS NULL
+                      OR length(snapshot.item_bytes) = 0)
                 )
                 OR EXISTS (
                   SELECT 1
@@ -391,7 +429,9 @@ public final class SchemaMigrator {
                     ON expected.operation_id = snapshot.operation_id
                     AND expected.copy_uuid = snapshot.copy_uuid
                   WHERE snapshot.operation_id = existing.operation_id
-                    AND expected.copy_uuid IS NULL
+                    AND (expected.copy_uuid IS NULL
+                      OR snapshot.item_bytes IS NULL
+                      OR length(snapshot.item_bytes) = 0)
                 )
                 OR EXISTS (
                   SELECT 1
