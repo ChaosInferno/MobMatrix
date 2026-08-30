@@ -33,6 +33,13 @@ public interface CardCustodyJournal {
   default List<UUID> openOperationIds() {
     return openEntries().stream().map(Entry::operationId).toList();
   }
+  /**
+   * Enumerates parseable physical-copy identities that remain reserved until durable terminal
+   * proof is complete. This identity-only view is independent of operation UUID decoding.
+   */
+  default Set<CardCopyId> reservedCopyIds() {
+    return Set.of();
+  }
 
 
   void transition(UUID operationId, CardCustodyPort.OperationStatus status);

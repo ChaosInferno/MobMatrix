@@ -10,7 +10,7 @@ import java.util.Set;
 
 /** Explicit, repeatable schema migrations for custody and active-match state. */
 public final class SchemaMigrator {
-  public static final int CURRENT_VERSION = 6;
+  public static final int CURRENT_VERSION = 7;
 
   private SchemaMigrator() {}
 
@@ -47,7 +47,7 @@ public final class SchemaMigrator {
         case 4 -> applyV4(connection);
         case 5 -> applyV5(connection);
         case 6 -> applyV6(connection);
-        default -> throw new SQLException("unsupported schema migration: " + version);
+        case 7 -> applyV7(connection);
       }
       try (var insert = connection.prepareStatement(
           "INSERT INTO schema_migrations(version, applied_at) VALUES (?, CURRENT_TIMESTAMP)")) {
@@ -371,7 +371,7 @@ public final class SchemaMigrator {
             SELECT 1
             FROM reservation_copies existing
             JOIN reservations reservation ON reservation.operation_id = existing.operation_id
-            WHERE existing.copy_uuid = NEW.copy_uuid
+            WHERE lower(existing.copy_uuid) = lower(NEW.copy_uuid)
               AND (
                 reservation.operation_id IS NULL
                 OR length(reservation.operation_id) <> 36
@@ -397,12 +397,12 @@ public final class SchemaMigrator {
                 OR NOT EXISTS (
                   SELECT 1
                   FROM card_copies ledger
-                  WHERE ledger.copy_uuid = existing.copy_uuid
+                  WHERE lower(ledger.copy_uuid) = lower(existing.copy_uuid)
                     AND ledger.owner_kind = reservation.owner_kind
                     AND (
                       (ledger.owner_kind = 'HOUSE' AND ledger.owner_uuid IS NULL)
                       OR (ledger.owner_kind = 'PLAYER'
-                        AND ledger.owner_uuid = reservation.owner_uuid
+                        AND lower(ledger.owner_uuid) = lower(reservation.owner_uuid)
                         AND length(ledger.owner_uuid) = 36
                         AND substr(ledger.owner_uuid, 9, 1) = '-'
                         AND substr(ledger.owner_uuid, 14, 1) = '-'
@@ -415,9 +415,9 @@ public final class SchemaMigrator {
                   SELECT 1
                   FROM reservation_copies expected
                   LEFT JOIN escrow_items snapshot
-                    ON snapshot.operation_id = expected.operation_id
-                    AND snapshot.copy_uuid = expected.copy_uuid
-                  WHERE expected.operation_id = existing.operation_id
+                    ON lower(snapshot.operation_id) = lower(expected.operation_id)
+                    AND lower(snapshot.copy_uuid) = lower(expected.copy_uuid)
+                  WHERE lower(expected.operation_id) = lower(existing.operation_id)
                     AND (snapshot.copy_uuid IS NULL
                       OR snapshot.item_bytes IS NULL
                       OR length(snapshot.item_bytes) = 0)
@@ -426,9 +426,9 @@ public final class SchemaMigrator {
                   SELECT 1
                   FROM escrow_items snapshot
                   LEFT JOIN reservation_copies expected
-                    ON expected.operation_id = snapshot.operation_id
-                    AND expected.copy_uuid = snapshot.copy_uuid
-                  WHERE snapshot.operation_id = existing.operation_id
+                    ON lower(expected.operation_id) = lower(snapshot.operation_id)
+                    AND lower(expected.copy_uuid) = lower(snapshot.copy_uuid)
+                  WHERE lower(snapshot.operation_id) = lower(existing.operation_id)
                     AND (expected.copy_uuid IS NULL
                       OR snapshot.item_bytes IS NULL
                       OR length(snapshot.item_bytes) = 0)
@@ -437,19 +437,92 @@ public final class SchemaMigrator {
                   SELECT 1
                   FROM reservation_copies expected
                   LEFT JOIN reservation_restored restored
-                    ON restored.operation_id = expected.operation_id
-                    AND restored.copy_uuid = expected.copy_uuid
-                  WHERE expected.operation_id = existing.operation_id
+                    ON lower(restored.operation_id) = lower(expected.operation_id)
+                    AND lower(restored.copy_uuid) = lower(expected.copy_uuid)
+                  WHERE lower(expected.operation_id) = lower(existing.operation_id)
                     AND restored.copy_uuid IS NULL
                 )
                 OR EXISTS (
                   SELECT 1
                   FROM reservation_restored restored
                   LEFT JOIN reservation_copies expected
-                    ON expected.operation_id = restored.operation_id
-                    AND expected.copy_uuid = restored.copy_uuid
-                  WHERE restored.operation_id = existing.operation_id
+                    ON lower(expected.operation_id) = lower(restored.operation_id)
+                    AND lower(expected.copy_uuid) = lower(restored.copy_uuid)
+                  WHERE lower(restored.operation_id) = lower(existing.operation_id)
                     AND expected.copy_uuid IS NULL
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM reservation_copies first_copy
+                  JOIN reservation_copies duplicate_copy
+                    ON lower(first_copy.operation_id) = lower(duplicate_copy.operation_id)
+                    AND lower(first_copy.copy_uuid) = lower(duplicate_copy.copy_uuid)
+                    AND first_copy.rowid < duplicate_copy.rowid
+                  WHERE lower(first_copy.operation_id) = lower(existing.operation_id)
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM escrow_items first_snapshot
+                  JOIN escrow_items duplicate_snapshot
+                    ON lower(first_snapshot.operation_id) = lower(duplicate_snapshot.operation_id)
+                    AND lower(first_snapshot.copy_uuid) = lower(duplicate_snapshot.copy_uuid)
+                    AND first_snapshot.rowid < duplicate_snapshot.rowid
+                  WHERE lower(first_snapshot.operation_id) = lower(existing.operation_id)
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM reservation_restored first_restored
+                  JOIN reservation_restored duplicate_restored
+                    ON lower(first_restored.operation_id) = lower(duplicate_restored.operation_id)
+                    AND lower(first_restored.copy_uuid) = lower(duplicate_restored.copy_uuid)
+                    AND first_restored.rowid < duplicate_restored.rowid
+                  WHERE lower(first_restored.operation_id) = lower(existing.operation_id)
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM recovery_rows first_recovery
+                  JOIN recovery_rows duplicate_recovery
+                    ON lower(first_recovery.operation_id) = lower(duplicate_recovery.operation_id)
+                    AND lower(first_recovery.copy_uuid) = lower(duplicate_recovery.copy_uuid)
+                    AND first_recovery.rowid < duplicate_recovery.rowid
+                  WHERE lower(first_recovery.operation_id) = lower(existing.operation_id)
+                )
+                OR EXISTS (
+                  SELECT 1
+                  FROM recovery_rows recovery
+                  WHERE lower(recovery.operation_id) = lower(existing.operation_id)
+                    AND (
+                      recovery.status IS NULL
+                      OR recovery.status NOT IN ('PENDING', 'RESTORED')
+                      OR recovery.status = 'PENDING'
+                      OR NOT EXISTS (
+                        SELECT 1
+                        FROM reservation_copies expected
+                        WHERE lower(expected.operation_id) = lower(existing.operation_id)
+                          AND lower(expected.copy_uuid) = lower(recovery.copy_uuid)
+                      )
+                      OR NOT EXISTS (
+                        SELECT 1
+                        FROM reservations owner_check
+                        WHERE lower(owner_check.operation_id) = lower(existing.operation_id)
+                          AND recovery.owner_kind = owner_check.owner_kind
+                          AND (
+                            (owner_check.owner_kind = 'HOUSE' AND recovery.owner_uuid IS NULL)
+                            OR (owner_check.owner_kind = 'PLAYER'
+                              AND recovery.owner_uuid IS NOT NULL
+                              AND lower(recovery.owner_uuid) = lower(owner_check.owner_uuid))
+                          )
+                      )
+                      OR NOT EXISTS (
+                        SELECT 1
+                        FROM escrow_items snapshot
+                        WHERE lower(snapshot.operation_id) = lower(existing.operation_id)
+                          AND lower(snapshot.copy_uuid) = lower(recovery.copy_uuid)
+                          AND snapshot.item_bytes = recovery.item_bytes
+                          AND recovery.item_bytes IS NOT NULL
+                          AND length(recovery.item_bytes) > 0
+                      )
+                    )
                 )
               )
           )
@@ -458,5 +531,9 @@ public final class SchemaMigrator {
           END
           """);
     }
+  }
+  /** Reinstalls the reservation guard for databases already marked through V6. */
+  private static void applyV7(Connection connection) throws SQLException {
+    applyV6(connection);
   }
 }

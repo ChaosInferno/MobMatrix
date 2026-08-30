@@ -35,6 +35,7 @@ public final class CardInventoryService implements CardCustodyPort {
   private final org.aincraft.mobmatrix.application.CardCustodyJournal journal;
   private final Map<UUID, PreparedOperation> operations = new HashMap<>();
   private final Map<UUID, Set<CardCopyId>> malformedOperations = new HashMap<>();
+  private final Set<CardCopyId> durableReservedCopyIds = new HashSet<>();
 
   /** Production constructor: the journal must be durable and is hydrated before use. */
   public CardInventoryService(CardItemCodec codec, PlayerLookup players,
@@ -57,6 +58,7 @@ public final class CardInventoryService implements CardCustodyPort {
   }
 
   private void hydrate() {
+    refreshDurableReservedCopyIds();
     for (UUID operationId : journal.openOperationIds()) {
       try {
         var entry = journal.find(operationId).orElse(null);
@@ -73,6 +75,16 @@ public final class CardInventoryService implements CardCustodyPort {
         // Keep malformed durable rows out of the in-memory cache. Startup recovery will query the
         // journal again and convert the structured integrity failure into a pending result.
       }
+    }
+  }
+
+  private void refreshDurableReservedCopyIds() {
+    try {
+      durableReservedCopyIds.clear();
+      durableReservedCopyIds.addAll(journal.reservedCopyIds());
+    } catch (RuntimeException ignored) {
+      // A failed identity refresh cannot prove that prior reservations are terminal. Keep the
+      // last known set and fail closed for movement checks.
     }
   }
 
@@ -374,7 +386,9 @@ public final class CardInventoryService implements CardCustodyPort {
     return List.copyOf(result);
   }
   public synchronized boolean isReserved(CardCopyId copyId) {
+    refreshDurableReservedCopyIds();
     refreshMalformedOperations();
+    if (durableReservedCopyIds.contains(copyId)) return true;
     for (PreparedOperation operation : operations.values()) {
       if (operation.status == OperationStatus.PREPARED || operation.status == OperationStatus.ESCROWED
           || operation.status == OperationStatus.RETURN_PENDING) {
@@ -396,8 +410,9 @@ public final class CardInventoryService implements CardCustodyPort {
   }
 
   public synchronized Set<CardCopyId> reservedCopyIds() {
+    refreshDurableReservedCopyIds();
     refreshMalformedOperations();
-    Set<CardCopyId> result = new HashSet<>();
+    Set<CardCopyId> result = new HashSet<>(durableReservedCopyIds);
     for (PreparedOperation operation : operations.values()) {
       if (operation.status == OperationStatus.PREPARED || operation.status == OperationStatus.ESCROWED
           || operation.status == OperationStatus.RETURN_PENDING) result.addAll(operation.copyIds);
@@ -405,6 +420,7 @@ public final class CardInventoryService implements CardCustodyPort {
     for (Set<CardCopyId> copies : malformedOperations.values()) result.addAll(copies);
     return Set.copyOf(result);
   }
+
 
 
   public boolean handleInventoryClick(org.bukkit.event.inventory.InventoryClickEvent event) {

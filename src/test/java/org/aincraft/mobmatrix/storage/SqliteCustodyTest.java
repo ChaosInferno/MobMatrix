@@ -19,6 +19,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.Set;
 import org.aincraft.mobmatrix.application.CardCustodyPort.OperationStatus;
 import org.aincraft.mobmatrix.application.MatchRepository;
 import org.aincraft.mobmatrix.application.SerializedItemSnapshot;
@@ -449,7 +450,7 @@ final class SqliteCustodyTest {
             )
             BEGIN SELECT RAISE(ABORT, 'old guard'); END
             """);
-        statement.execute("DELETE FROM schema_migrations WHERE version = 6");
+        statement.execute("DELETE FROM schema_migrations WHERE version >= 6");
         SchemaMigrator.migrate(database.connection());
       }
       assertThrows(RuntimeException.class,
@@ -1821,6 +1822,150 @@ final class SqliteCustodyTest {
       }
       assertThrows(IllegalArgumentException.class, () -> repository.find(state.matchId()));
       assertThrows(IllegalArgumentException.class, repository::activeMatches);
+    }
+    Files.deleteIfExists(path);
+  }
+  @Test
+  void canonicalCopyUuidReuseBlocksCaseVariantActiveReservation() throws Exception {
+    var path = Files.createTempFile("mobmatrix-canonical-copy-guard", ".sqlite");
+    UUID firstOperation = UUID.randomUUID();
+    UUID secondOperation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.fromString("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"));
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {9, 1});
+    String upperCopy = copy.value().toString().toUpperCase(java.util.Locale.ROOT);
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(firstOperation, owner, List.of(copy), List.of(snapshot));
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA foreign_keys = OFF");
+      }
+      try (var update = database.connection().prepareStatement(
+          "UPDATE reservation_copies SET copy_uuid = ? WHERE operation_id = ?")) {
+        update.setString(1, upperCopy);
+        update.setString(2, firstOperation.toString());
+        update.executeUpdate();
+      }
+
+      assertThrows(IllegalStateException.class,
+          () -> repository.prepare(secondOperation, owner, List.of(copy), List.of(snapshot)));
+
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
+            created_at, updated_at)
+          VALUES (?, 'PLAYER', ?, NULL, 'PREPARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          """)) {
+        insert.setString(1, secondOperation.toString());
+        insert.setString(2, owner.playerId().toString());
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES (?, ?)")) {
+        insert.setString(1, secondOperation.toString());
+        insert.setString(2, copy.value().toString());
+        assertThrows(java.sql.SQLException.class, insert::executeUpdate);
+      }
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void pendingRecoveryBlocksTerminalReuseInJavaAndTrigger() throws Exception {
+    var path = Files.createTempFile("mobmatrix-pending-recovery-guard", ".sqlite");
+    UUID firstOperation = UUID.randomUUID();
+    UUID secondOperation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot snapshot = new SerializedItemSnapshot(copy, new byte[] {8, 4});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      repository.prepare(firstOperation, owner, List.of(copy), List.of(snapshot));
+      repository.transition(firstOperation, OperationStatus.ESCROWED);
+      repository.transition(firstOperation, OperationStatus.RETURN_PENDING);
+      repository.addRecovery(firstOperation, owner, snapshot);
+      repository.markRestored(firstOperation, copy);
+      repository.transition(firstOperation, OperationStatus.RETURNED);
+      try (var update = database.connection().prepareStatement(
+          "UPDATE recovery_rows SET status = 'PENDING' WHERE operation_id = ?")) {
+        update.setString(1, firstOperation.toString());
+        update.executeUpdate();
+      }
+
+      assertThrows(IllegalStateException.class,
+          () -> repository.prepare(secondOperation, owner, List.of(copy), List.of(snapshot)));
+
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
+            created_at, updated_at)
+          VALUES (?, 'PLAYER', ?, NULL, 'PREPARED', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          """)) {
+        insert.setString(1, secondOperation.toString());
+        insert.setString(2, owner.playerId().toString());
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES (?, ?)")) {
+        insert.setString(1, secondOperation.toString());
+        insert.setString(2, copy.value().toString());
+        assertThrows(java.sql.SQLException.class, insert::executeUpdate);
+      }
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void identityEnumerationProtectsMalformedOperationCopiesButReleasesProvenTerminalCopies()
+      throws Exception {
+    var path = Files.createTempFile("mobmatrix-identity-enumeration", ".sqlite");
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId activeCopy = new CardCopyId(UUID.randomUUID());
+    CardCopyId terminalCopy = new CardCopyId(UUID.randomUUID());
+    SerializedItemSnapshot terminalSnapshot = new SerializedItemSnapshot(terminalCopy, new byte[] {5, 5});
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(activeCopy, new CardId(1), owner));
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(terminalCopy, new CardId(1), owner));
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA foreign_keys = OFF");
+      }
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
+            created_at, updated_at)
+          VALUES (?, 'PLAYER', ?, NULL, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          """)) {
+        insert.setString(1, "malformed-operation");
+        insert.setString(2, owner.playerId().toString());
+        insert.setString(3, "PREPARED");
+        insert.executeUpdate();
+        insert.setString(1, "terminal-operation");
+        insert.setString(3, "RETURNED");
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES (?, ?)")) {
+        insert.setString(1, "malformed-operation");
+        insert.setString(2, activeCopy.value().toString());
+        insert.executeUpdate();
+        insert.setString(1, "terminal-operation");
+        insert.setString(2, terminalCopy.value().toString());
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO escrow_items(operation_id, copy_uuid, item_bytes) VALUES (?, ?, ?)")) {
+        insert.setString(1, "terminal-operation");
+        insert.setString(2, terminalCopy.value().toString());
+        insert.setBytes(3, terminalSnapshot.bytes());
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO reservation_restored(operation_id, copy_uuid) VALUES (?, ?)")) {
+        insert.setString(1, "terminal-operation");
+        insert.setString(2, terminalCopy.value().toString());
+        insert.executeUpdate();
+      }
+      assertEquals(Set.of(activeCopy), repository.reservedCopyIds());
     }
     Files.deleteIfExists(path);
   }

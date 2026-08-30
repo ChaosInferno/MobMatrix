@@ -237,4 +237,37 @@ final class CardInventoryServiceTest {
     @Override
     public void addRecovery(UUID operationId, CopyOwner owner, SerializedItemSnapshot snapshot) {}
   }
+  @Test
+  void hydratesDurableReservedIdentitiesWhenOperationIdIsMalformed() throws Exception {
+    var path = Files.createTempFile("mobmatrix-durable-reserved-identities", ".sqlite");
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA foreign_keys = OFF");
+      }
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,
+            created_at, updated_at)
+          VALUES ('malformed-operation', 'PLAYER', ?, NULL, 'PREPARED',
+            CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+          """)) {
+        insert.setString(1, owner.playerId().toString());
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES ('malformed-operation', ?)")) {
+        insert.setString(1, copy.value().toString());
+        insert.executeUpdate();
+      }
+
+      CardInventoryService service = new CardInventoryService(
+          new CardItemCodec("test", "0123456789abcdef"), id -> null, repository);
+      assertTrue(service.reservedCopyIds().contains(copy));
+      assertTrue(service.isReserved(copy));
+    }
+    Files.deleteIfExists(path);
+  }
 }

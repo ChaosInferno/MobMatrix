@@ -70,6 +70,18 @@ public final class InMemoryCardCustodyJournal implements CardCustodyJournal {
     }
     return List.copyOf(result);
   }
+  @Override
+  public synchronized Set<CardCopyId> reservedCopyIds() {
+    Set<CardCopyId> result = new HashSet<>();
+    for (MutableEntry entry : entries.values()) {
+      if (entry.status == CardCustodyPort.OperationStatus.PREPARED
+          || entry.status == CardCustodyPort.OperationStatus.ESCROWED
+          || entry.status == CardCustodyPort.OperationStatus.RETURN_PENDING) {
+        result.addAll(entry.copyIds);
+      }
+    }
+    return Set.copyOf(result);
+  }
 
   @Override
   public synchronized void transition(UUID operationId, CardCustodyPort.OperationStatus status) {
