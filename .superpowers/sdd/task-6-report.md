@@ -2705,3 +2705,125 @@ perform custody changes on its primary-thread boundary.
 
 Implementation commits: `ddedce0`, `5a9d7b8` (`fix: complete terminal recovery proof`).
 Report commit: pending.
+# Task 6 final custody completeness correction
+
+## Status
+
+Implemented startup identity enumeration, complete terminal recovery proof, per-row active-match
+reporting, and fallback retention of already-enumerated custody copy IDs.
+
+Implementation is committed as `1f25f52` (`fix: preserve complete custody recovery`).
+
+## TDD and focused verification
+
+The focused red regressions for missing terminal proof, blank/malformed startup identities, active
+match row isolation, and startup fallback identities were run before the production correction.
+The final focused package command was:
+
+```text
+cmd /c gradlew.bat test --tests "org.aincraft.mobmatrix.storage.*" --tests "org.aincraft.mobmatrix.application.*" --tests "org.aincraft.mobmatrix.inventory.*" --no-daemon
+```
+
+Exact result:
+
+```text
+BUILD SUCCESSFUL
+159 completed, 2 Paper-registry assumptions skipped
+```
+
+SQLite emitted the existing restricted-native-access warning. No formatter, linter, project-wide
+build, or project-wide suite was run.
+
+## Corrective coverage
+
+- `hasValidRecoveryRows` requires exact one-to-one recovery proof for every expected escrow snapshot;
+  missing or deleted rows cannot prove terminal reuse or release.
+- Blank raw operation identities remain structured malformed startup entries. Every parseable child
+  copy UUID is retained, and startup emits pending `DATABASE_ERROR` recovery without calling
+  `recover`.
+- Active match enumeration isolates malformed rows and continues returning healthy snapshots.
+- Startup metadata/recovery failures retain copy IDs already supplied by `StartupEntry` rather than
+  returning empty pending identity lists.
+- Terminal reservations with no complete custody child history fail closed for new reuse; complete
+  terminal proof remains the only release path.
+
+## Current commits
+
+Implementation commit: `1f25f52` (`fix: preserve complete custody recovery`).
+Report commit: pending.
+# Task 6 final active-match custody isolation
+
+## Status
+
+Implemented and committed as `8d63b1d` (`fix: isolate malformed active matches`).
+Malformed or missing-catalog active match IDs are now retained as active/unknown during startup
+custody reconciliation. Every bound nonterminal operation is reported as structured
+`RETURN_PENDING`/`DATABASE_ERROR` and is never passed to orphan recovery. SQLite Java preflight
+and a recurring migration trigger now fail closed when any terminal reservation has no
+reservation-copy history, including no-child histories with all child rows deleted.
+
+## TDD and focused verification
+
+Active-match custody isolation red run:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest.startupReportsEachMatchRehydrationFailureAndPreservesBoundEscrow --no-daemon
+```
+
+```text
+MatchApplicationServiceTest > startupReportsEachMatchRehydrationFailureAndPreservesBoundEscrow() FAILED
+1 test completed, 1 failed
+```
+
+No-child terminal preflight red run:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.noChildTerminalHistoryBlocksJavaAndTriggerReuse --no-daemon
+```
+
+```text
+SqliteCustodyTest > noChildTerminalHistoryBlocksJavaAndTriggerReuse() FAILED
+1 test completed, 1 failed
+```
+
+Focused green regression run:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.noChildTerminalHistoryBlocksJavaAndTriggerReuse --no-daemon
+```
+
+```text
+BUILD SUCCESSFUL
+```
+
+Focused storage/application verification:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --no-daemon
+```
+
+```text
+BUILD SUCCESSFUL
+```
+
+SQLite emitted the JVM restricted-native-access warning. No formatter, linter, project-wide build,
+or project-wide suite was run.
+
+## Corrective coverage
+
+- Active-match report failures contribute their match IDs to the custody protection set; healthy
+  snapshots continue independently.
+- Bound nonterminal custody for malformed active rows remains pending with database failure and
+  preserves startup-enumerated expected/pending copy IDs; `recover` is not called.
+- Blank raw startup/recovery identities remain representable and preserve parseable child IDs in
+  structured pending failures.
+- `SqliteCardRepository.prepare` checks for any unproven terminal reservation before iterating
+  requested copies, so an empty new reservation cannot bypass the global fail-closed preflight.
+- A recurring SQLite `BEFORE INSERT ON reservations` guard rejects a terminal reservation with no
+  `reservation_copies`; the existing child trigger continues to reject missing escrow, restored,
+  ledger, and recovery proof for nonempty histories. Complete terminal proof remains reusable.
+
+## Current commits
+
+Implementation commit: `8d63b1d` (`fix: isolate malformed active matches`).
+Report commit: pending.
