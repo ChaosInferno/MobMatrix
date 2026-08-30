@@ -921,14 +921,23 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     String ownerUuid = null;
     String status = null;
     try (var query = connection.prepareStatement(
-        "SELECT owner_kind, owner_uuid, status FROM reservations "
+        "SELECT operation_id, owner_kind, owner_uuid, status FROM reservations "
             + "WHERE lower(operation_id) = lower(?)")) {
       query.setString(1, rawOperationId);
       try (var rows = query.executeQuery()) {
         if (!rows.next()) return false;
-        ownerKind = rows.getString(1);
-        ownerUuid = rows.getString(2);
-        status = rows.getString(3);
+        String storedOperationId = rows.getString(1);
+        try {
+          if (!parseCanonicalUuid(storedOperationId).toString().equals(storedOperationId)
+              || !storedOperationId.equals(rawOperationId)) {
+            return false;
+          }
+        } catch (RuntimeException exception) {
+          return false;
+        }
+        ownerKind = rows.getString(2);
+        ownerUuid = rows.getString(3);
+        status = rows.getString(4);
         if (rows.next()) return false;
       }
     }
