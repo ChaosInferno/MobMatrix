@@ -784,6 +784,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
                 if (!operationId.equals(parseCanonicalUuid(snapshotRows.getString(1)))) {
                   throw new IllegalArgumentException("child operation identity does not match parent");
                 }
+              } catch (RuntimeException exception) {
+                if (decodeFailure == null) decodeFailure = exception;
+              }
+              try {
                 UUID copyUuid = parseCanonicalUuid(snapshotRows.getString(2));
                 addCopyId(copies, copyUuid);
                 snapshots.add(new SerializedItemSnapshot(new CardCopyId(copyUuid), snapshotRows.getBytes(3)));
@@ -805,6 +809,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
                 if (!operationId.equals(parseCanonicalUuid(restoredRows.getString(1)))) {
                   throw new IllegalArgumentException("child operation identity does not match parent");
                 }
+              } catch (RuntimeException exception) {
+                if (decodeFailure == null) decodeFailure = exception;
+              }
+              try {
                 CardCopyId copy = new CardCopyId(parseCanonicalUuid(restoredRows.getString(2)));
                 addCopyId(copies, copy.value());
                 restored.add(copy);
@@ -824,6 +832,10 @@ public final class SqliteCardRepository implements CardCustodyJournal {
                 if (!operationId.equals(parseCanonicalUuid(recoveryRows.getString(1)))) {
                   throw new IllegalArgumentException("child operation identity does not match parent");
                 }
+              } catch (RuntimeException exception) {
+                if (decodeFailure == null) decodeFailure = exception;
+              }
+              try {
                 addCopyId(copies, parseCanonicalUuid(recoveryRows.getString(2)));
               } catch (RuntimeException exception) {
                 if (decodeFailure == null) decodeFailure = exception;

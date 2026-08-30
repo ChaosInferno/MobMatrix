@@ -2648,6 +2648,29 @@ final class SqliteCustodyTest {
         insert.setBytes(4, new byte[] {6});
         insert.executeUpdate();
       }
+      String uppercaseOperation = operation.toString().toUpperCase(java.util.Locale.ROOT);
+      try (var update = database.connection().prepareStatement(
+          "UPDATE escrow_items SET operation_id = ? WHERE operation_id = ? AND copy_uuid = ?")) {
+        update.setString(1, uppercaseOperation);
+        update.setString(2, operation.toString());
+        update.setString(3, escrowCopy.value().toString());
+        update.executeUpdate();
+      }
+      try (var update = database.connection().prepareStatement(
+          "UPDATE reservation_restored SET operation_id = ? WHERE operation_id = ? AND copy_uuid = ?")) {
+        update.setString(1, uppercaseOperation);
+        update.setString(2, operation.toString());
+        update.setString(3, restoredCopy.value().toString());
+        update.executeUpdate();
+      }
+      try (var update = database.connection().prepareStatement(
+          "UPDATE recovery_rows SET operation_id = ? WHERE operation_id = ? AND copy_uuid = ?")) {
+        update.setString(1, uppercaseOperation);
+        update.setString(2, operation.toString());
+        update.setString(3, recoveryCopy.value().toString());
+        update.executeUpdate();
+      }
+
 
       var failure = assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
           () -> repository.findReservation(operation));
