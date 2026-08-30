@@ -561,6 +561,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
           try {
             existingOperation = UUID.fromString(rawOperationId);
           } catch (RuntimeException exception) {
+            if (provenTerminal(rawOperationId)) continue;
             throw new CustodyIntegrityException(operationId, List.of(copy),
                 "invalid existing reservation operation identity", exception);
           }
@@ -737,6 +738,26 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         return rows.next();
       }
     }
+  }
+
+  private boolean provenTerminal(String rawOperationId) throws SQLException {
+    if (rawOperationId == null) return false;
+    String ownerKind = null;
+    String ownerUuid = null;
+    String status = null;
+    try (var query = connection.prepareStatement(
+        "SELECT owner_kind, owner_uuid, status FROM reservations "
+            + "WHERE lower(operation_id) = lower(?)")) {
+      query.setString(1, rawOperationId);
+      try (var rows = query.executeQuery()) {
+        if (!rows.next()) return false;
+        ownerKind = rows.getString(1);
+        ownerUuid = rows.getString(2);
+        status = rows.getString(3);
+        if (rows.next()) return false;
+      }
+    }
+    return provenTerminal(rawOperationId, ownerKind, ownerUuid, status);
   }
 
   private boolean provenTerminal(String rawOperationId, String ownerKind, String ownerUuid,

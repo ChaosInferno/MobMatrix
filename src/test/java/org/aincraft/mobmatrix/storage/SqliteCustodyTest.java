@@ -1966,6 +1966,9 @@ final class SqliteCustodyTest {
         insert.executeUpdate();
       }
       assertEquals(Set.of(activeCopy), repository.reservedCopyIds());
+      UUID reusableOperation = UUID.randomUUID();
+      repository.prepare(reusableOperation, owner, List.of(terminalCopy), List.of(terminalSnapshot));
+      assertEquals(Set.of(activeCopy, terminalCopy), repository.reservedCopyIds());
     }
     Files.deleteIfExists(path);
   }

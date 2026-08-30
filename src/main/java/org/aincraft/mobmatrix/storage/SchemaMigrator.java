@@ -373,14 +373,7 @@ public final class SchemaMigrator {
             JOIN reservations reservation ON reservation.operation_id = existing.operation_id
             WHERE lower(existing.copy_uuid) = lower(NEW.copy_uuid)
               AND (
-                reservation.operation_id IS NULL
-                OR length(reservation.operation_id) <> 36
-                OR substr(reservation.operation_id, 9, 1) <> '-'
-                OR substr(reservation.operation_id, 14, 1) <> '-'
-                OR substr(reservation.operation_id, 19, 1) <> '-'
-                OR substr(reservation.operation_id, 24, 1) <> '-'
-                OR reservation.operation_id GLOB '*[^0-9A-Fa-f-]*'
-                OR reservation.status IS NULL
+                reservation.status IS NULL
                 OR reservation.status NOT IN ('RETURNED', 'ABORTED')
                 OR reservation.owner_kind IS NULL
                 OR reservation.owner_kind NOT IN ('PLAYER', 'HOUSE')
