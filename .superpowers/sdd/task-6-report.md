@@ -2133,3 +2133,72 @@ The added malformed-item death scan regression is assumption-skipped when Paper'
 unavailable; the class compiled and the remaining focused inventory tests passed. The additional
 test commit is `6c82840` (`test: cover malformed death protection`). Report update commits are
 `3a2bdf2` and this update.
+
+## Task 6 fix33 strict custody identities and atomic refresh publication
+
+Implementation commit: `026bc95` (`fix: enforce strict custody identities`).
+
+### Corrective coverage
+
+- SQLite now uses one strict canonical UUID parser for operation, copy, recovery, snapshot, and
+  player-owner identities. Short-form and noncanonical UUID text is never treated as proven or
+  reusable; canonical parent rows with malformed owner/status or incomplete terminal proof set the
+  unresolved-identity state even when no parseable copy UUID is available.
+- Java copy-reuse preflight rejects ambiguous case-variant operation spellings instead of
+  deduplicating them silently. The trigger migration is reapplied on startup and mirrors strict
+  lowercase identity checks across parent and custody-child rows, including orphan, snapshot,
+  restored, and recovery identities.
+- Added the requested refresh regression: an empty/incomplete first identity read followed by a
+  throwing uncertainty read retains the previous durable reserved-copy set and remains unknown.
+  Terminal identity enumeration continues to release a genuinely proven canonical terminal
+  reservation while active malformed identities remain protected.
+
+### TDD and focused verification
+
+Focused red command before the implementation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.canonicalOperationWithMalformedOwnerOrStatusIsUnresolvedWithoutCopyIds --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.noncanonicalOperationTextIsUnresolvedEvenWhenJavaParsesIt --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest.refreshRetainsPriorCopiesWhenEmptyReadPrecedesSecondReadFailure --no-daemon
+```
+
+Exact red result:
+
+```text
+> Task :test FAILED
+CardInventoryServiceTest > refreshRetainsPriorCopiesWhenEmptyReadPrecedesSecondReadFailure() FAILED
+SqliteCustodyTest > noncanonicalOperationTextIsUnresolvedEvenWhenJavaParsesIt() FAILED
+SqliteCustodyTest > canonicalOperationWithMalformedOwnerOrStatusIsUnresolvedWithoutCopyIds() FAILED
+3 tests completed, 3 failed
+BUILD FAILED
+```
+
+Focused green command after implementation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.canonicalOperationWithMalformedOwnerOrStatusIsUnresolvedWithoutCopyIds --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.noncanonicalOperationTextIsUnresolvedEvenWhenJavaParsesIt --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest.refreshRetainsPriorCopiesWhenEmptyReadPrecedesSecondReadFailure --no-daemon
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 7s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+Final focused custody command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.inventory.CardItemCodecTest --tests org.aincraft.mobmatrix.inventory.CardInventoryServiceTest --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --tests org.aincraft.mobmatrix.application.MatchApplicationServiceTest --no-daemon
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 7s
+4 actionable tasks: 1 executed, 3 up-to-date
+```
+
+The focused runs emitted SQLite's existing JVM restricted-native-access warning. No formatter,
+linter, or project-wide suite was run.
