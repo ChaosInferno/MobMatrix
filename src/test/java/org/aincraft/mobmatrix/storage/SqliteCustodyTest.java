@@ -21,6 +21,8 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.Set;
 import org.aincraft.mobmatrix.application.CardCustodyPort.OperationStatus;
+import org.aincraft.mobmatrix.application.CardCustodyPort;
+import org.aincraft.mobmatrix.application.MatchApplicationService;
 import org.aincraft.mobmatrix.application.MatchRepository;
 import org.aincraft.mobmatrix.application.SerializedItemSnapshot;
 import org.aincraft.mobmatrix.domain.Board;
@@ -93,7 +95,7 @@ final class SqliteCustodyTest {
 
       var failure = assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
           () -> repository.findReservation(operation));
-      assertEquals(List.of(second, third), failure.expectedCopyIds());
+      assertEquals(List.of(second, third, first), failure.expectedCopyIds());
       assertEquals(operation, failure.operationId());
     }
     Files.deleteIfExists(path);
@@ -2584,6 +2586,102 @@ final class SqliteCustodyTest {
       }
       assertThrows(java.sql.SQLException.class,
           () -> SchemaMigrator.migrate(database.connection()));
+    }
+    Files.deleteIfExists(path);
+  }
+
+  @Test
+  void malformedReservationCopiesAggregateParseableChildIdentities() throws Exception {
+    var path = Files.createTempFile("mobmatrix-aggregate-recovery-identities", ".sqlite");
+    UUID operation = UUID.randomUUID();
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId original = new CardCopyId(UUID.randomUUID());
+    CardCopyId escrowCopy = new CardCopyId(UUID.randomUUID());
+    CardCopyId restoredCopy = new CardCopyId(UUID.randomUUID());
+    CardCopyId recoveryCopy = new CardCopyId(UUID.randomUUID());
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      repository.saveCopy(new SqliteCardRepository.StoredCardCopy(original, new CardId(1), owner));
+      repository.prepare(operation, owner, List.of(original),
+          List.of(new SerializedItemSnapshot(original, new byte[] {1})));
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA foreign_keys = OFF");
+      }
+      try (var delete = database.connection().prepareStatement(
+          "DELETE FROM reservation_copies WHERE operation_id = ?")) {
+        delete.setString(1, operation.toString());
+        delete.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO escrow_items(operation_id, copy_uuid, item_bytes) VALUES (?, ?, ?)")) {
+        insert.setString(1, operation.toString());
+        insert.setString(2, escrowCopy.value().toString());
+        insert.setBytes(3, new byte[] {2});
+        insert.executeUpdate();
+        insert.setString(2, "malformed-escrow-copy");
+        insert.setBytes(3, new byte[] {3});
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO reservation_restored(operation_id, copy_uuid) VALUES (?, ?)")) {
+        insert.setString(1, operation.toString());
+        insert.setString(2, restoredCopy.value().toString());
+        insert.executeUpdate();
+        insert.setString(2, escrowCopy.value().toString());
+        insert.executeUpdate();
+        insert.setString(2, "malformed-restored-copy");
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO recovery_rows(operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status)
+          VALUES (?, ?, 'PLAYER', ?, ?, 'PENDING')
+          """)) {
+        insert.setString(1, operation.toString());
+        insert.setString(2, recoveryCopy.value().toString());
+        insert.setString(3, owner.playerId().toString());
+        insert.setBytes(4, new byte[] {4});
+        insert.executeUpdate();
+        insert.setString(2, restoredCopy.value().toString());
+        insert.setBytes(4, new byte[] {5});
+        insert.executeUpdate();
+        insert.setString(2, "malformed-recovery-copy");
+        insert.setBytes(4, new byte[] {6});
+        insert.executeUpdate();
+      }
+
+      var failure = assertThrows(SqliteCardRepository.CustodyIntegrityException.class,
+          () -> repository.findReservation(operation));
+      assertEquals(List.of(original, escrowCopy, restoredCopy, recoveryCopy),
+          failure.expectedCopyIds());
+      assertEquals(operation, failure.operationId());
+      var recovery = new MatchApplicationService(new CardCustodyPort() {
+        @Override
+        public CardCustodyPort.PrepareResult prepare(CopyOwner ignoredOwner,
+            List<CardCopyId> ignoredCopies, UUID ignoredOperation) {
+          throw new AssertionError("prepare is not part of recovery");
+        }
+
+        @Override
+        public CardCustodyPort.CustodyResult escrow(UUID ignoredOperation) {
+          throw new AssertionError("escrow is not part of recovery");
+        }
+
+        @Override
+        public CardCustodyPort.ReturnResult returnCopies(UUID ignoredOperation) {
+          throw new AssertionError("return is not part of recovery");
+        }
+
+        @Override
+        public CardCustodyPort.RecoveryResult recover(UUID recoveryOperation) {
+          repository.findReservation(recoveryOperation);
+          throw new AssertionError("corrupt reservation unexpectedly hydrated");
+        }
+      }).recover(operation);
+      assertEquals(List.of(original, escrowCopy, restoredCopy, recoveryCopy),
+          recovery.expectedCopyIds());
+      assertEquals(List.of(original, escrowCopy, restoredCopy, recoveryCopy),
+          recovery.pendingCopyIds());
+      assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, recovery.failure());
     }
     Files.deleteIfExists(path);
   }

@@ -204,6 +204,11 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       return null;
     }
   }
+  private static void addCopyId(List<CardCopyId> copies, UUID copyUuid) {
+    CardCopyId copy = new CardCopyId(copyUuid);
+    if (!copies.contains(copy)) copies.add(copy);
+  }
+
 
   private record ReservationRow(String operationId, String ownerKind, String ownerUuid,
       String status) {}
@@ -732,6 +737,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         String matchId = rows.getString(4);
         String rawStatus = rows.getString(5);
         List<CardCopyId> copies = new ArrayList<>();
+        List<CardCopyId> reservationCopies = new ArrayList<>();
         RuntimeException decodeFailure = null;
         try {
           if (!operationId.equals(parseCanonicalUuid(rawParentOperationId))) {
@@ -757,7 +763,9 @@ public final class SqliteCardRepository implements CardCustodyJournal {
                 if (decodeFailure == null) decodeFailure = exception;
               }
               try {
-                copies.add(new CardCopyId(parseCanonicalUuid(copyRows.getString(2))));
+                UUID copyUuid = parseCanonicalUuid(copyRows.getString(2));
+                addCopyId(reservationCopies, copyUuid);
+                addCopyId(copies, copyUuid);
               } catch (RuntimeException exception) {
                 if (decodeFailure == null) decodeFailure = exception;
               }
@@ -776,8 +784,9 @@ public final class SqliteCardRepository implements CardCustodyJournal {
                 if (!operationId.equals(parseCanonicalUuid(snapshotRows.getString(1)))) {
                   throw new IllegalArgumentException("child operation identity does not match parent");
                 }
-                CardCopyId copy = new CardCopyId(parseCanonicalUuid(snapshotRows.getString(2)));
-                snapshots.add(new SerializedItemSnapshot(copy, snapshotRows.getBytes(3)));
+                UUID copyUuid = parseCanonicalUuid(snapshotRows.getString(2));
+                addCopyId(copies, copyUuid);
+                snapshots.add(new SerializedItemSnapshot(new CardCopyId(copyUuid), snapshotRows.getBytes(3)));
               } catch (RuntimeException exception) {
                 if (decodeFailure == null) decodeFailure = exception;
               }
@@ -796,7 +805,26 @@ public final class SqliteCardRepository implements CardCustodyJournal {
                 if (!operationId.equals(parseCanonicalUuid(restoredRows.getString(1)))) {
                   throw new IllegalArgumentException("child operation identity does not match parent");
                 }
-                restored.add(new CardCopyId(parseCanonicalUuid(restoredRows.getString(2))));
+                CardCopyId copy = new CardCopyId(parseCanonicalUuid(restoredRows.getString(2)));
+                addCopyId(copies, copy.value());
+                restored.add(copy);
+              } catch (RuntimeException exception) {
+                if (decodeFailure == null) decodeFailure = exception;
+              }
+            }
+          }
+        }
+        try (var recoveryQuery = connection.prepareStatement(
+            "SELECT operation_id, copy_uuid FROM recovery_rows "
+                + "WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
+          recoveryQuery.setString(1, operationId.toString());
+          try (var recoveryRows = recoveryQuery.executeQuery()) {
+            while (recoveryRows.next()) {
+              try {
+                if (!operationId.equals(parseCanonicalUuid(recoveryRows.getString(1)))) {
+                  throw new IllegalArgumentException("child operation identity does not match parent");
+                }
+                addCopyId(copies, parseCanonicalUuid(recoveryRows.getString(2)));
               } catch (RuntimeException exception) {
                 if (decodeFailure == null) decodeFailure = exception;
               }
@@ -811,23 +839,23 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         try {
           CopyOwner owner = readOwner(ownerKind, ownerUuid);
           OperationStatus status = OperationStatus.valueOf(rawStatus);
-          if (!hasExactSnapshots(copies, snapshots)) {
+          if (!hasExactSnapshots(reservationCopies, snapshots)) {
             throw new CustodyIntegrityException(operationId, copies,
                 "reservation is missing exact escrow snapshots");
           }
           if (status == OperationStatus.RETURNED
-              && !new HashSet<>(restored).containsAll(copies)) {
+              && !new HashSet<>(restored).containsAll(reservationCopies)) {
             throw new IllegalStateException("cannot hydrate returned custody with unresolved copies");
           }
           if (status == OperationStatus.ABORTED
-              && !new HashSet<>(restored).containsAll(copies)) {
+              && !new HashSet<>(restored).containsAll(reservationCopies)) {
             throw new IllegalStateException("cannot hydrate aborted custody with unresolved copies");
           }
-          if (!hasValidRecoveryRows(operationId, owner, copies, snapshots)) {
+          if (!hasValidRecoveryRows(operationId, owner, reservationCopies, snapshots)) {
             throw new CustodyIntegrityException(operationId, copies,
                 "reservation has invalid recovery row identity");
           }
-          return new Reservation(operationId, owner, copies, snapshots, status, restored, matchId);
+          return new Reservation(operationId, owner, reservationCopies, snapshots, status, restored, matchId);
         } catch (CustodyIntegrityException exception) {
           throw exception;
         } catch (RuntimeException exception) {
