@@ -26,6 +26,7 @@ public final class RuleSet {
     if (copy.contains(Rule.ORDER) && copy.contains(Rule.CHAOS)) incompatible("ORDER", "CHAOS");
     if (copy.contains(Rule.ASCENSION) && copy.contains(Rule.DESCENSION))
       incompatible("ASCENSION", "DESCENSION");
+    if (copy.contains(Rule.DRAFT) && copy.contains(Rule.RANDOM)) incompatible("DRAFT", "RANDOM");
     this.rules = Set.copyOf(copy);
   }
 

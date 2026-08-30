@@ -73,11 +73,12 @@ public final class MobMatrixPlugin extends JavaPlugin {
   private static final int EX_CARD_COUNT = 15;
   private static final int DEFAULT_MAX_GIVE = 64;
   private static final int MAX_PENDING_CHALLENGES = 128;
+  private static final String DEFAULT_SERVER_SECRET =
+      "change-this-to-a-stable-random-secret-at-least-16-bytes";
 
   private final Map<UUID, PendingChallenge> pendingChallenges = new HashMap<>();
   private final Map<UUID, List<CardCopyId>> selectedDecks = new HashMap<>();
   private final Map<MatchId, ActiveMatch> activeMatches = new HashMap<>();
-  private final Map<UUID, BukkitTask> disconnectTasks = new HashMap<>();
   private BukkitTask botTask;
   private Database database;
   private SqliteCardRepository cards;
@@ -103,6 +104,7 @@ public final class MobMatrixPlugin extends JavaPlugin {
           Math.max(1L, getConfig().getLong("challenge-expiry-seconds", 60L) * 1_000L);
       timeoutOnDisconnect =
           !"none".equalsIgnoreCase(getConfig().getString("disconnect-policy", "timeout"));
+      new MatchRules(configuredRules());
 
       database =
           new Database(
@@ -153,8 +155,6 @@ public final class MobMatrixPlugin extends JavaPlugin {
   public void onDisable() {
     if (botTask != null) botTask.cancel();
     botTask = null;
-    for (BukkitTask task : disconnectTasks.values()) task.cancel();
-    disconnectTasks.clear();
     for (Player player : Bukkit.getOnlinePlayers()) player.closeInventory();
     closeResources();
   }
@@ -260,8 +260,12 @@ public final class MobMatrixPlugin extends JavaPlugin {
   }
 
   private static String requireSecret(String secret) {
-    if (secret == null || secret.isBlank() || secret.length() < 16) {
-      throw new IllegalStateException("server-secret must contain at least 16 characters");
+    if (secret == null
+        || secret.isBlank()
+        || secret.length() < 16
+        || DEFAULT_SERVER_SECRET.equals(secret)) {
+      throw new IllegalStateException(
+          "server-secret must be replaced with a stable random secret of at least 16 characters");
     }
     return secret;
   }
@@ -405,9 +409,8 @@ public final class MobMatrixPlugin extends JavaPlugin {
 
   private List<LocatedItem> locate(Inventory inventory, CardCopyId copyId) {
     List<LocatedItem> found = new ArrayList<>();
-    ItemStack[] contents = inventory.getStorageContents();
-    for (int slot = 0; slot < contents.length; slot++) {
-      ItemStack item = contents[slot];
+    for (int slot = 0; slot < inventory.getSize(); slot++) {
+      ItemStack item = inventory.getItem(slot);
       if (item != null && containsCopyIdentity(item, copyId))
         found.add(new LocatedItem(slot, item));
     }
@@ -431,14 +434,21 @@ public final class MobMatrixPlugin extends JavaPlugin {
   public List<HandCard> ownedCards(Player player) {
     Objects.requireNonNull(player, "player is required");
     Map<CardCopyId, HandCard> found = new HashMap<>();
-    for (ItemStack item : player.getInventory().getStorageContents()) {
+    for (int slot = 0; slot < player.getInventory().getSize(); slot++) {
+      ItemStack item = player.getInventory().getItem(slot);
       if (item == null) continue;
       CardItemCodec.ReadResult result = codec().read(item);
+      if (!result.isValid()) continue;
       if (!result
           .data()
           .owner()
           .equals(org.aincraft.mobmatrix.domain.CopyOwner.player(player.getUniqueId()))) continue;
-      CardDefinition definition = catalog().require(result.data().catalogId());
+      CardDefinition definition;
+      try {
+        definition = catalog().require(result.data().catalogId());
+      } catch (IllegalArgumentException exception) {
+        continue;
+      }
       HandCard card =
           new HandCard(
               new CardCopy(
@@ -530,7 +540,8 @@ public final class MobMatrixPlugin extends JavaPlugin {
             id,
             from.getUniqueId(),
             to.getUniqueId(),
-            System.currentTimeMillis() + challengeExpiryMillis);
+            System.currentTimeMillis() + challengeExpiryMillis,
+            null);
     pendingChallenges.put(id, pending);
     to.sendMessage(from.getName() + " challenged you to MobMatrix. Use /mobmatrix accept.");
     return new ChallengeResult(true, "Challenge sent to " + to.getName() + ".");
@@ -554,6 +565,11 @@ public final class MobMatrixPlugin extends JavaPlugin {
     if (one.size() != 5 || two.size() != 5)
       return new ChallengeResult(false, "Selected cards are missing from inventory.");
     MatchId matchId = new MatchId(pending.id);
+    Instant startTime = stableChallengeStartTime(pending.startTime, Instant.now());
+    if (pending.startTime == null) {
+      pending = pending.withStartTime(startTime);
+      pendingChallenges.put(pending.id, pending);
+    }
     Set<Rule> configuredRules = configuredRules();
     MatchRules rules = new MatchRules(configuredRules);
     MatchEngine.StartMatch match =
@@ -564,7 +580,7 @@ public final class MobMatrixPlugin extends JavaPlugin {
             catalog(),
             rules,
             seedFor(matchId),
-            Instant.now(),
+            startTime,
             one,
             two);
     UUID oneOperation = operation(matchId, "one");
@@ -718,6 +734,52 @@ public final class MobMatrixPlugin extends JavaPlugin {
     return new MatchId(UUID.randomUUID().toString());
   }
 
+  static Instant stableChallengeStartTime(Instant captured, Instant fallback) {
+    return captured == null
+        ? Objects.requireNonNull(fallback, "fallback time is required")
+        : captured;
+  }
+
+  static boolean isDisconnectedTurnDue(
+      boolean timeoutEnabled,
+      boolean botMatch,
+      boolean playerOnline,
+      boolean finished,
+      PlayerSeat currentSeat,
+      PlayerSeat participantSeat,
+      Instant deadline,
+      Instant now) {
+    Objects.requireNonNull(currentSeat, "current seat is required");
+    Objects.requireNonNull(participantSeat, "participant seat is required");
+    Objects.requireNonNull(deadline, "deadline is required");
+    Objects.requireNonNull(now, "time is required");
+    return timeoutEnabled
+        && !botMatch
+        && !playerOnline
+        && !finished
+        && currentSeat == participantSeat
+        && !now.isBefore(deadline);
+  }
+
+  private void timeoutDisconnectedIfDue(ActiveMatch active, Instant now) {
+    if (active.bot || active.state.isFinished()) return;
+    PlayerSeat seat = active.state.currentSeat();
+    UUID playerId = seat == PlayerSeat.ONE ? active.onePlayer : active.twoPlayer;
+    if (playerId == null) return;
+    boolean playerOnline = Bukkit.getPlayer(playerId) != null;
+    if (isDisconnectedTurnDue(
+        timeoutOnDisconnect,
+        active.bot,
+        playerOnline,
+        active.state.isFinished(),
+        active.state.currentSeat(),
+        seat,
+        active.state.turnDeadline(),
+        now)) {
+      timeoutDisconnected(active.state.matchId(), seat);
+    }
+  }
+
   private ChallengeResult reportStartFailure(MatchStartResult result) {
     if (!result.pendingRecoveryCopyIds().isEmpty() || !result.missingCopyIds().isEmpty()) {
       return new ChallengeResult(
@@ -731,12 +793,17 @@ public final class MobMatrixPlugin extends JavaPlugin {
   }
 
   private void tickBots() {
+    Instant now = Instant.now();
     for (ActiveMatch active : List.copyOf(activeMatches.values())) {
-      if (!active.bot || active.state.isFinished() || active.state.currentSeat() != PlayerSeat.TWO)
-        continue;
-      applyBotTurn(active, Instant.now());
-      if (activeMatches.containsKey(active.state.matchId()) && !active.state.isFinished()) {
-        refreshMatch(active);
+      if (active.bot
+          && !active.state.isFinished()
+          && active.state.currentSeat() == PlayerSeat.TWO) {
+        applyBotTurn(active, now);
+        if (activeMatches.containsKey(active.state.matchId()) && !active.state.isFinished()) {
+          refreshMatch(active);
+        }
+      } else if (activeMatches.containsKey(active.state.matchId())) {
+        timeoutDisconnectedIfDue(active, now);
       }
     }
   }
@@ -824,24 +891,7 @@ public final class MobMatrixPlugin extends JavaPlugin {
 
   public void handlePlayerQuit(Player player) {
     closeMatch(player);
-    if (!timeoutOnDisconnect) return;
-    for (ActiveMatch active : activeMatches.values()) {
-      if (active.bot
-          ? !player.getUniqueId().equals(active.onePlayer)
-          : (!player.getUniqueId().equals(active.onePlayer)
-              && !player.getUniqueId().equals(active.twoPlayer))) continue;
-      PlayerSeat seat =
-          player.getUniqueId().equals(active.onePlayer) ? PlayerSeat.ONE : PlayerSeat.TWO;
-      if (active.state.currentSeat() != seat || active.state.isFinished()) continue;
-      long delay = Math.max(1L, active.state.remainingTurnMillis(seat, Instant.now()) / 50L + 1L);
-      BukkitTask prior =
-          disconnectTasks.put(
-              player.getUniqueId(),
-              Bukkit.getScheduler()
-                  .runTaskLater(
-                      this, () -> timeoutDisconnected(active.state.matchId(), seat), delay));
-      if (prior != null) prior.cancel();
-    }
+    selectedDecks.remove(player.getUniqueId());
   }
 
   private void timeoutDisconnected(MatchId matchId, PlayerSeat seat) {
@@ -869,8 +919,6 @@ public final class MobMatrixPlugin extends JavaPlugin {
   }
 
   public void handlePlayerJoin(Player player) {
-    BukkitTask task = disconnectTasks.remove(player.getUniqueId());
-    if (task != null) task.cancel();
     reconcilePendingIssuances(player);
     for (UUID operation : custody().openOperationIds()) {
       try {
@@ -900,11 +948,14 @@ public final class MobMatrixPlugin extends JavaPlugin {
                         || player.getUniqueId().equals(match.twoPlayer))
             .findFirst()
             .orElse(null);
-    if (active != null && !active.state.isFinished()) {
-      PlayerSeat seat =
-          player.getUniqueId().equals(active.onePlayer) ? PlayerSeat.ONE : PlayerSeat.TWO;
-      openMatch(player, active.state, seat);
+    if (active == null) return;
+    if (active.state.isFinished()) {
+      finishIfNeeded(active);
+      return;
     }
+    PlayerSeat seat =
+        player.getUniqueId().equals(active.onePlayer) ? PlayerSeat.ONE : PlayerSeat.TWO;
+    openMatch(player, active.state, seat);
   }
 
   private void openMatch(Player player, MatchState state, PlayerSeat seat) {
@@ -1014,7 +1065,11 @@ public final class MobMatrixPlugin extends JavaPlugin {
 
   private record CatalogLoad(CardCatalog catalog, SqliteCardRepository.CatalogSnapshot snapshot) {}
 
-  private record PendingChallenge(UUID id, UUID from, UUID to, long expiresAt) {}
+  private record PendingChallenge(UUID id, UUID from, UUID to, long expiresAt, Instant startTime) {
+    private PendingChallenge withStartTime(Instant value) {
+      return new PendingChallenge(id, from, to, expiresAt, Objects.requireNonNull(value));
+    }
+  }
 
   private static final class ActiveMatch {
     private MatchState state;

@@ -96,6 +96,7 @@ final class CommandValidationTest {
     assertTrue(descriptor.contains("load: BEFORE"));
     assertTrue(descriptor.contains("required: true"));
     assertTrue(descriptor.contains("join-classpath: true"));
+    assertFalse(descriptor.contains("${version}"));
   }
 
   private static CardCatalog currentCatalog() throws IOException {

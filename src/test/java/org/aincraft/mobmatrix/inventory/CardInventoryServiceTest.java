@@ -5,6 +5,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
 import java.nio.file.Files;
 import java.util.List;
 import java.util.Optional;
@@ -48,6 +50,23 @@ final class CardInventoryServiceTest {
     CardCustodyPort.PrepareResult duplicateResult =
         service.prepare(owner, duplicateCopies, UUID.randomUUID());
     assertEquals(CardCustodyPort.Failure.INVALID_COPY_SET, duplicateResult.failure());
+  }
+
+  @Test
+  void nullInventoryContentsAreTreatedAsNoReservedCards() throws Exception {
+    CardInventoryService service =
+        new CardInventoryService(new CardItemCodec("test", "0123456789abcdef"), id -> null);
+    Inventory inventory =
+        (Inventory)
+            Proxy.newProxyInstance(
+                getClass().getClassLoader(),
+                new Class<?>[] {Inventory.class},
+                (proxy, method, args) -> null);
+    Method containsReserved =
+        CardInventoryService.class.getDeclaredMethod("containsReserved", Inventory.class);
+    containsReserved.setAccessible(true);
+
+    assertFalse((boolean) containsReserved.invoke(service, inventory));
   }
 
   @Test

@@ -50,6 +50,12 @@ tasks.withType<Test>().configureEach {
     systemProperty("file.encoding", StandardCharsets.UTF_8.name())
 }
 
+tasks.processResources {
+    filesMatching("paper-plugin.yml") {
+        expand("version" to project.version)
+    }
+}
+
 tasks.runServer {
     minecraftVersion("26.2")
 }

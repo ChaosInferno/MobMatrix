@@ -65,7 +65,7 @@ public final class MobMatrixCommand implements CommandExecutor, TabCompleter, Ba
       case "decline" -> transition(sender, args, Transition.DECLINE);
       case "cancel" -> transition(sender, args, Transition.CANCEL);
       default -> {
-        sender.sendMessage("Unknown MobMatrix command. Use /mobmatrix help.");
+        sender.sendMessage("Unknown MobMatrix command. Use /mobmatrix.");
         yield true;
       }
     };

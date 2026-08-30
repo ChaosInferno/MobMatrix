@@ -16,6 +16,7 @@ final class AdvancedRulesTest {
     assertThrows(IllegalArgumentException.class, () -> new RuleSet(Rule.ORDER, Rule.CHAOS));
     assertThrows(
         IllegalArgumentException.class, () -> new RuleSet(Rule.ASCENSION, Rule.DESCENSION));
+    assertThrows(IllegalArgumentException.class, () -> new RuleSet(Rule.DRAFT, Rule.RANDOM));
     assertThrows(IllegalArgumentException.class, () -> new RuleSet(Rule.SAME, Rule.SAME));
     assertThrows(NullPointerException.class, () -> new RuleSet((Rule) null));
   }

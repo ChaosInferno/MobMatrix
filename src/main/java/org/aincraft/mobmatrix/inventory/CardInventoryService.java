@@ -680,7 +680,9 @@ public final class CardInventoryService implements CardCustodyPort {
 
   private boolean containsReserved(Inventory inventory) {
     Objects.requireNonNull(inventory, "inventory is required");
-    for (ItemStack item : inventory.getContents()) {
+    ItemStack[] contents = inventory.getContents();
+    if (contents == null) return false;
+    for (ItemStack item : contents) {
       if (item != null && isReserved(item)) return true;
     }
     return false;
