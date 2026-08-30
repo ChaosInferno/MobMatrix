@@ -2061,3 +2061,56 @@ when no UUID can be returned. Invalid identity-bearing items are blocked while t
 while ordinary items without card PDC identity remain movable. The flag is cleared only after a
 successful refresh proves no unresolved identity remains. SQLite emitted its existing restricted
 native-access warning. No formatter, linter, or project-wide suite was run.
+
+## Task 6 fix32 orphan custody and malformed death protection
+
+Implementation commit: `5c3f275` (`fix: block orphan custody reuse`).
+
+### Corrective coverage
+
+- `SqliteCardRepository.validateCopyReuse` now inspects semantic copy identities across
+  `reservation_copies`, `escrow_items`, `reservation_restored`, and `recovery_rows`. Orphan,
+  malformed, active/incomplete, duplicate, and unproven operation identities fail closed instead
+  of being hidden by a reservation-copies-only scan.
+- Case-insensitive duplicate reservation operation rows are rejected by Java preflight and by the
+  SQLite reservation trigger. Terminal reuse requires a unique valid owner, exact snapshots, a
+  complete restored-copy ledger, and no pending recovery.
+- The SQLite trigger now starts from the union of all custody child tables, preserving canonical
+  case-insensitive copy matching while blocking orphan child custody.
+- `CardInventoryService.hasReservedInventory` checks every inventory slot with identity-aware
+  `isReserved(ItemStack)`, so malformed identity-bearing items still force keep-inventory during
+  death handling.
+
+### TDD and focused verification
+
+Focused red command before the implementation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --no-daemon
+```
+
+Exact red result:
+
+```text
+SqliteCustodyTest > orphanChildRowsBlockCopyReuseInJavaAndTrigger() FAILED
+73 tests completed, 1 failed
+BUILD FAILED in 9s
+```
+
+Focused green command after implementation:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest --no-daemon
+```
+
+Exact green result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 8s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
+
+The focused storage class selected 73 tests and passed. The SQLite restricted-native-access warning
+was emitted by the environment. No formatter, linter, project-wide build, or project-wide test
+suite was run.
