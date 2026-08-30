@@ -2581,7 +2581,7 @@ Report commit: pending.
 
 ## Status
 
-Implemented and committed as `ddedce0` (`fix: complete terminal recovery proof`).
+Implemented and committed as `ddedce0` and `5a9d7b8` (`fix: complete terminal recovery proof`).
 
 ## TDD and focused verification
 
@@ -2654,6 +2654,39 @@ build, or project-wide test suite was run.
   raw identity; it never calls `recover` for those entries. Existing UUID-only in-memory adapters use
   the compatibility default.
 
+### Terminal-transition TDD regression
+
+Focused red command after adding the transition-level proof regression and before adding the
+terminal transition gate:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.terminalTransitionRequiresCompleteRecoveryProof --no-daemon
+```
+
+Exact red result:
+
+```text
+> Task :test FAILED
+SqliteCustodyTest > terminalTransitionRequiresCompleteRecoveryProof() FAILED
+    org.opentest4j.AssertionFailedError at SqliteCustodyTest.java:757
+1 test completed, 1 failed
+FAILURE: Build failed with an exception.
+```
+
+Focused green command:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.terminalTransitionRequiresCompleteRecoveryProof --no-daemon
+```
+
+Exact result:
+
+```text
+> Task :test
+BUILD SUCCESSFUL in 7s
+4 actionable tasks: 1 executed, 2 up-to-date
+```
+
 ## Thread-boundary notes
 
 The new startup records contain immutable UUID/string/value data only. SQLite remains the sole JDBC
@@ -2670,5 +2703,5 @@ perform custody changes on its primary-thread boundary.
 
 ## Current commits
 
-Implementation commit: `ddedce0` (`fix: complete terminal recovery proof`).
+Implementation commits: `ddedce0`, `5a9d7b8` (`fix: complete terminal recovery proof`).
 Report commit: pending.
