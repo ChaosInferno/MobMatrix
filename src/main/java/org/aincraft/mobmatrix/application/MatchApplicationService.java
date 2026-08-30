@@ -656,6 +656,16 @@ public final class MatchApplicationService {
     return recoveryFailure(operationId, null);
   }
 
+  private RecoveryResult recoveryFailure(CardCustodyPort.StartupEntry startupEntry) {
+    if (startupEntry.operationId().isEmpty()) {
+      return RecoveryResult.malformed(startupEntry.rawOperationId(),
+          startupEntry.expectedCopyIds());
+    }
+    return new RecoveryResult(startupEntry.operationId().orElseThrow(),
+        OperationStatus.RETURN_PENDING, startupEntry.expectedCopyIds(), List.of(),
+        startupEntry.expectedCopyIds(), Failure.DATABASE_ERROR);
+  }
+
   private RecoveryResult recoveryFailure(UUID operationId, RuntimeException source) {
     RecoveryIdentity identity = operationIdentity(operationId, source);
     return new RecoveryResult(identity.operationId(), OperationStatus.RETURN_PENDING,
@@ -723,16 +733,21 @@ public final class MatchApplicationService {
 
     List<RecoveryResult> recoveries = new ArrayList<>();
     Failure custodyEnumerationFailure = Failure.NONE;
-    List<UUID> openOperations;
+    List<CardCustodyPort.StartupEntry> startupEntries;
     try {
-      openOperations = custody.openOperationIds();
+      startupEntries = custody.startupEntries();
     } catch (RuntimeException exception) {
       // Do not invent an operation ID for an unavailable enumeration. Active escrow remains
       // untouched, while active match rehydration below can proceed independently.
-      openOperations = List.of();
+      startupEntries = List.of();
       custodyEnumerationFailure = Failure.DATABASE_ERROR;
     }
-    for (UUID operationId : openOperations) {
+    for (CardCustodyPort.StartupEntry startupEntry : startupEntries) {
+      if (startupEntry.malformed() || startupEntry.operationId().isEmpty()) {
+        recoveries.add(recoveryFailure(startupEntry));
+        continue;
+      }
+      UUID operationId = startupEntry.operationId().orElseThrow();
       try {
         Optional<OperationStatus> status = custody.operationStatus(operationId);
         Optional<org.aincraft.mobmatrix.domain.MatchId> binding =

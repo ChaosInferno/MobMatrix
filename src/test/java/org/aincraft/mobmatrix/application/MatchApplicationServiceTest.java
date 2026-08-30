@@ -154,6 +154,26 @@ final class MatchApplicationServiceTest {
     assertTrue(result.recoveries().isEmpty());
   }
   @Test
+  void startupReportsMalformedRawIdentityAsPendingWithoutRecover() {
+    String rawOperation = "not-a-canonical-operation";
+    List<CardCopyId> expected = copies().subList(0, 3);
+    MalformedStartupCustody custody = new MalformedStartupCustody(rawOperation, expected);
+
+    MatchApplicationService.StartupRecoveryResult result = new MatchApplicationService(custody,
+        new InMemoryMatchRepository()).recoverStartup(
+            snapshot -> new CardCatalog(List.of(), snapshot), Instant.parse("2026-01-01T00:00:00Z"));
+
+    CardCustodyPort.RecoveryResult recovery = result.recoveries().getFirst();
+    assertTrue(recovery.operationId() == null);
+    assertEquals(rawOperation, recovery.rawOperationId());
+    assertEquals(CardCustodyPort.OperationStatus.RETURN_PENDING, recovery.status());
+    assertEquals(CardCustodyPort.Failure.DATABASE_ERROR, recovery.failure());
+    assertEquals(expected, recovery.expectedCopyIds());
+    assertEquals(expected, recovery.pendingCopyIds());
+    assertTrue(custody.recovered.isEmpty());
+  }
+
+  @Test
   void startupReportsActiveMatchRepositoryFailureWithoutReleasingBoundEscrow() {
     UUID operation = UUID.randomUUID();
     MatchId matchId = new MatchId("active-match");
@@ -1631,6 +1651,43 @@ final class MatchApplicationServiceTest {
     public java.util.Optional<OperationBinding> operationBinding(UUID operationId) {
       return java.util.Optional.of(new OperationBinding(owner, copies,
           status == null ? OperationStatus.PREPARED : status, matchId));
+    }
+  }
+
+  private static final class MalformedStartupCustody implements CardCustodyPort {
+    private final String rawOperation;
+    private final List<CardCopyId> copies;
+    private final List<UUID> recovered = new ArrayList<>();
+
+    private MalformedStartupCustody(String rawOperation, List<CardCopyId> copies) {
+      this.rawOperation = rawOperation;
+      this.copies = List.copyOf(copies);
+    }
+
+    @Override
+    public PrepareResult prepare(CopyOwner owner, List<CardCopyId> copyIds, UUID operationId) {
+      return PrepareResult.rejected(operationId, owner, copyIds, Failure.DATABASE_ERROR);
+    }
+
+    @Override
+    public CustodyResult escrow(UUID operationId) {
+      return CustodyResult.rejected(operationId, OperationStatus.PREPARED, Failure.DATABASE_ERROR);
+    }
+
+    @Override
+    public ReturnResult returnCopies(UUID operationId) {
+      throw new AssertionError("must preserve malformed custody");
+    }
+
+    @Override
+    public RecoveryResult recover(UUID operationId) {
+      recovered.add(operationId);
+      throw new AssertionError("must preserve malformed custody");
+    }
+
+    @Override
+    public List<StartupEntry> startupEntries() {
+      return List.of(StartupEntry.malformed(rawOperation, copies));
     }
   }
 

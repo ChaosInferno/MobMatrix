@@ -607,6 +607,32 @@ public final class SchemaMigrator {
                       )
                     )
                 )
+                OR (reservation.status IN ('RETURNED', 'ABORTED')
+                    AND EXISTS (
+                      SELECT 1
+                      FROM reservation_copies expected
+                      LEFT JOIN recovery_rows proof
+                        ON lower(proof.operation_id) = lower(expected.operation_id)
+                        AND lower(proof.copy_uuid) = lower(expected.copy_uuid)
+                        AND proof.status = 'RESTORED'
+                        AND proof.owner_kind = reservation.owner_kind
+                        AND (
+                          (reservation.owner_kind = 'HOUSE' AND proof.owner_uuid IS NULL)
+                          OR (reservation.owner_kind = 'PLAYER'
+                            AND lower(proof.owner_uuid) = lower(reservation.owner_uuid))
+                        )
+                        AND EXISTS (
+                          SELECT 1
+                          FROM escrow_items snapshot
+                          WHERE lower(snapshot.operation_id) = lower(expected.operation_id)
+                            AND lower(snapshot.copy_uuid) = lower(expected.copy_uuid)
+                            AND snapshot.item_bytes = proof.item_bytes
+                            AND proof.item_bytes IS NOT NULL
+                            AND length(proof.item_bytes) > 0
+                        )
+                      WHERE lower(expected.operation_id) = lower(existing.operation_id)
+                        AND proof.copy_uuid IS NULL
+                    ))
               )
           )
           BEGIN

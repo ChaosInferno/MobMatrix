@@ -70,6 +70,61 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       throw failure(exception);
     }
   }
+  @Override
+  public List<CardCustodyPort.StartupEntry> startupEntries() {
+    try {
+      List<StartupBuilder> entries = new ArrayList<>();
+      Map<String, List<StartupBuilder>> byOperation = new java.util.LinkedHashMap<>();
+      try (var query = connection.prepareStatement(
+          "SELECT operation_id FROM reservations ORDER BY created_at, rowid");
+          var rows = query.executeQuery()) {
+        while (rows.next()) {
+          String rawOperationId = rows.getString(1);
+          StartupBuilder entry = StartupBuilder.parent(rawOperationId);
+          entries.add(entry);
+          byOperation.computeIfAbsent(operationKey(rawOperationId), ignored -> new ArrayList<>())
+              .add(entry);
+        }
+      }
+      for (List<StartupBuilder> duplicates : byOperation.values()) {
+        if (duplicates.size() > 1) {
+          for (StartupBuilder duplicate : duplicates) duplicate.integrityFailure = true;
+        }
+      }
+
+      for (String table : List.of("reservation_copies", "escrow_items",
+          "reservation_restored", "recovery_rows")) {
+        try (var query = connection.prepareStatement(
+            "SELECT operation_id, copy_uuid FROM " + table + " ORDER BY rowid");
+            var rows = query.executeQuery()) {
+          while (rows.next()) {
+            String rawOperationId = rows.getString(1);
+            List<StartupBuilder> matches = byOperation.get(operationKey(rawOperationId));
+            if (matches == null || matches.isEmpty()) {
+              StartupBuilder orphan = StartupBuilder.orphan(rawOperationId);
+              entries.add(orphan);
+              byOperation.computeIfAbsent(operationKey(rawOperationId),
+                  ignored -> new ArrayList<>()).add(orphan);
+              matches = List.of(orphan);
+            }
+            CardCopyId copy = parseCopyId(rows.getString(2));
+            for (StartupBuilder entry : matches) {
+              if (!Objects.equals(entry.rawOperationId, rawOperationId)) entry.integrityFailure = true;
+              if (copy == null) {
+                entry.integrityFailure = true;
+              } else if (!entry.copyIds.contains(copy)) {
+                entry.copyIds.add(copy);
+              }
+            }
+          }
+        }
+      }
+      return entries.stream().map(StartupBuilder::build).toList();
+    } catch (SQLException exception) {
+      throw failure(exception);
+    }
+  }
+
   /**
    * Returns parseable copy identities from every reservation that is not durably proven terminal.
    * This deliberately reads raw operation IDs so malformed operation text cannot hide custody.
@@ -229,6 +284,43 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       return null;
     }
   }
+  private static final class StartupBuilder {
+    private final String rawOperationId;
+    private final Optional<UUID> operationId;
+    private final List<CardCopyId> copyIds = new ArrayList<>();
+    private boolean integrityFailure;
+
+    private StartupBuilder(String rawOperationId, Optional<UUID> operationId,
+        boolean integrityFailure) {
+      this.rawOperationId = rawOperationId == null ? "<null>" : rawOperationId;
+      this.operationId = operationId;
+      this.integrityFailure = integrityFailure;
+    }
+
+    private static StartupBuilder parent(String rawOperationId) {
+      try {
+        UUID operationId = parseCanonicalUuid(rawOperationId);
+        return new StartupBuilder(rawOperationId, Optional.of(operationId), false);
+      } catch (RuntimeException exception) {
+        return new StartupBuilder(rawOperationId, Optional.empty(), true);
+      }
+    }
+
+    private static StartupBuilder orphan(String rawOperationId) {
+      try {
+        UUID operationId = parseCanonicalUuid(rawOperationId);
+        return new StartupBuilder(rawOperationId, Optional.of(operationId), true);
+      } catch (RuntimeException exception) {
+        return new StartupBuilder(rawOperationId, Optional.empty(), true);
+      }
+    }
+
+    private CardCustodyPort.StartupEntry build() {
+      return new CardCustodyPort.StartupEntry(rawOperationId, operationId, copyIds,
+          integrityFailure);
+    }
+  }
+
   private static void addCopyId(List<CardCopyId> copies, UUID copyUuid) {
     CardCopyId copy = new CardCopyId(copyUuid);
     if (!copies.contains(copy)) copies.add(copy);
@@ -662,6 +754,25 @@ public final class SqliteCardRepository implements CardCustodyJournal {
       }
       String storedOperationId = findStoredReservationOperationIdInternal(operationId);
       String storedCopyId = findStoredReservationCopyUuidInternal(operationId, copyId);
+      SerializedItemSnapshot snapshot = reservation.snapshots().stream()
+          .filter(value -> value.copyId().equals(copyId)).findFirst().orElse(null);
+      if (snapshot == null || snapshot.bytes().length == 0) {
+        throw new CustodyIntegrityException(operationId, List.of(copyId),
+            "missing exact escrow snapshot");
+      }
+      try (var insert = connection.prepareStatement("""
+          INSERT INTO recovery_rows(operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status)
+          VALUES (?, ?, ?, ?, ?, 'RESTORED')
+          ON CONFLICT(operation_id, copy_uuid) DO UPDATE SET owner_kind = excluded.owner_kind,
+            owner_uuid = excluded.owner_uuid, item_bytes = excluded.item_bytes, status = 'RESTORED'
+          """)) {
+        insert.setString(1, storedOperationId);
+        insert.setString(2, storedCopyId);
+        writeOwner(insert, 3, 4, reservation.owner());
+        insert.setBytes(5, snapshot.bytes());
+        insert.executeUpdate();
+      }
+
       try (var insert = connection.prepareStatement(
           "INSERT INTO reservation_restored(operation_id, copy_uuid) VALUES (?, ?) "
               + "ON CONFLICT(operation_id, copy_uuid) DO NOTHING")) {
@@ -875,9 +986,12 @@ public final class SqliteCardRepository implements CardCustodyJournal {
               && !new HashSet<>(restored).containsAll(reservationCopies)) {
             throw new IllegalStateException("cannot hydrate aborted custody with unresolved copies");
           }
-          if (!hasValidRecoveryRows(operationId, owner, reservationCopies, snapshots)) {
-            throw new CustodyIntegrityException(operationId, copies,
-                "reservation has invalid recovery row identity");
+          if (status == OperationStatus.RETURNED || status == OperationStatus.ABORTED) {
+            if (!hasValidRecoveryRows(operationId, owner, reservationCopies, snapshots)
+                || hasPendingRecovery(operationId)) {
+              throw new CustodyIntegrityException(operationId, copies,
+                  "reservation has invalid recovery row identity");
+            }
           }
           return new Reservation(operationId, owner, reservationCopies, snapshots, status, restored, matchId);
         } catch (CustodyIntegrityException exception) {
@@ -937,7 +1051,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
         }
       }
     }
-    return true;
+    return seen.equals(expected.keySet());
   }
 
   private boolean hasPendingRecovery(UUID operationId) throws SQLException {

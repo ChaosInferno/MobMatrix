@@ -352,6 +352,7 @@ final class CardInventoryServiceTest {
       repository.saveCopy(new SqliteCardRepository.StoredCardCopy(copy, new CardId(1), owner));
       try (var pragma = database.connection().createStatement()) {
         pragma.execute("PRAGMA foreign_keys = OFF");
+        pragma.execute("DROP TRIGGER active_copy_identity_integrity_guard");
       }
       try (var insert = database.connection().prepareStatement("""
           INSERT INTO reservations(operation_id, owner_kind, owner_uuid, match_id, status,

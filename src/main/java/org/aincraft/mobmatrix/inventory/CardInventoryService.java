@@ -343,6 +343,11 @@ public final class CardInventoryService implements CardCustodyPort {
     return journal.openOperationIds();
   }
   @Override
+  public synchronized java.util.List<CardCustodyPort.StartupEntry> startupEntries() {
+    return journal.startupEntries();
+  }
+
+  @Override
   public synchronized java.util.Optional<org.aincraft.mobmatrix.domain.MatchId> operationMatchId(
       UUID operationId) {
     var entry = journal.find(Objects.requireNonNull(operationId)).orElse(null);

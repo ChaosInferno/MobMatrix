@@ -34,6 +34,16 @@ public interface CardCustodyJournal {
     return openEntries().stream().map(Entry::operationId).toList();
   }
   /**
+   * Enumerates startup identities without requiring row hydration. Durable implementations may
+   * return malformed raw operation identities and parseable child-copy identities.
+   */
+  default List<CardCustodyPort.StartupEntry> startupEntries() {
+    return openEntries().stream()
+        .map(entry -> CardCustodyPort.StartupEntry.valid(entry.operationId(), entry.copyIds()))
+        .toList();
+  }
+
+  /**
    * Enumerates parseable physical-copy identities that remain reserved until durable terminal
    * proof is complete. This identity-only view is independent of operation UUID decoding.
    */
