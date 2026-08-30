@@ -4,8 +4,10 @@ import java.sql.Connection;
 import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
@@ -74,86 +76,120 @@ public final class SqliteCardRepository implements CardCustodyJournal {
    */
   @Override
   public Set<CardCopyId> reservedCopyIds() {
-    try (var query = connection.prepareStatement("""
-        SELECT reservations.operation_id, reservations.owner_kind, reservations.owner_uuid,
-          reservations.status, reservation_copies.copy_uuid
-        FROM reservations
-        LEFT JOIN reservation_copies
-          ON reservation_copies.operation_id = reservations.operation_id
-        ORDER BY reservations.rowid, reservation_copies.rowid
-        """)) {
-      Set<CardCopyId> result = new HashSet<>();
-      java.util.Map<String, Boolean> terminalProof = new java.util.HashMap<>();
-      try (var rows = query.executeQuery()) {
-        while (rows.next()) {
-          String rawCopyId = rows.getString(5);
-          if (rawCopyId == null) continue;
-          CardCopyId copy;
-          try {
-            copy = new CardCopyId(UUID.fromString(rawCopyId));
-          } catch (RuntimeException ignored) {
-            continue;
-          }
-          String rawOperationId = rows.getString(1);
-          boolean proven = terminalProof.computeIfAbsent(rawOperationId, ignored -> {
-            try {
-              return provenTerminal(rawOperationId, rows.getString(2), rows.getString(3),
-                  rows.getString(4));
-            } catch (SQLException exception) {
-              throw failure(exception);
-            }
-          });
-          if (!proven) result.add(copy);
-        }
-      }
-      return Set.copyOf(result);
+    try {
+      return scanReservationIdentities().copyIds();
     } catch (SQLException exception) {
       throw failure(exception);
     }
   }
+
   @Override
   public boolean hasUnresolvedReservationIdentity() {
-    try (var query = connection.prepareStatement("""
-        SELECT reservations.operation_id, reservations.owner_kind, reservations.owner_uuid,
-          reservations.status, reservation_copies.copy_uuid
-        FROM reservations
-        LEFT JOIN reservation_copies
-          ON reservation_copies.operation_id = reservations.operation_id
-        ORDER BY reservations.rowid, reservation_copies.rowid
-        """)) {
-      java.util.Map<String, Boolean> terminalProof = new java.util.HashMap<>();
-      try (var rows = query.executeQuery()) {
-        while (rows.next()) {
-          String rawOperationId = rows.getString(1);
-          boolean proven = terminalProof.computeIfAbsent(rawOperationId, ignored -> {
-            try {
-              return provenTerminal(rawOperationId, rows.getString(2), rows.getString(3),
-                  rows.getString(4));
-            } catch (SQLException exception) {
-              throw failure(exception);
-            }
-          });
-          if (proven) continue;
-          try {
-            UUID.fromString(rawOperationId);
-          } catch (RuntimeException exception) {
-            return true;
-          }
-          String rawCopyId = rows.getString(5);
-          if (rawCopyId != null) {
-            try {
-              UUID.fromString(rawCopyId);
-            } catch (RuntimeException exception) {
-              return true;
-            }
-          }
-        }
-      }
-      return false;
+    try {
+      return scanReservationIdentities().unresolved();
     } catch (SQLException exception) {
       throw failure(exception);
     }
   }
+
+  private IdentityScan scanReservationIdentities() throws SQLException {
+    Map<String, ReservationRow> reservations = new HashMap<>();
+    Set<String> duplicateOperations = new HashSet<>();
+    try (var query = connection.prepareStatement(
+        "SELECT operation_id, owner_kind, owner_uuid, status FROM reservations ORDER BY rowid");
+        var rows = query.executeQuery()) {
+      while (rows.next()) {
+        ReservationRow row = new ReservationRow(rows.getString(1), rows.getString(2),
+            rows.getString(3), rows.getString(4));
+        String key = operationKey(row.operationId());
+        if (reservations.putIfAbsent(key, row) != null) duplicateOperations.add(key);
+      }
+    }
+    Set<CardCopyId> copies = new HashSet<>();
+    boolean unresolved = false;
+    Map<String, Boolean> terminal = new HashMap<>();
+    for (ReservationRow row : reservations.values()) {
+      String key = operationKey(row.operationId());
+      boolean proven = !duplicateOperations.contains(key)
+          && provenTerminal(row.operationId(), row.ownerKind(), row.ownerUuid(), row.status());
+      terminal.put(key, proven);
+      if (!proven && !isUuid(row.operationId())) unresolved = true;
+    }
+    unresolved |= scanRawChildTable("reservation_copies", reservations, duplicateOperations, terminal,
+        copies, true);
+    unresolved |= scanRawChildTable("escrow_items", reservations, duplicateOperations, terminal,
+        copies, false);
+    unresolved |= scanRawChildTable("reservation_restored", reservations, duplicateOperations,
+        terminal, copies, false);
+    unresolved |= scanRawChildTable("recovery_rows", reservations, duplicateOperations, terminal,
+        copies, false);
+    return new IdentityScan(Set.copyOf(copies), unresolved);
+  }
+
+  private boolean scanRawChildTable(String table, Map<String, ReservationRow> reservations,
+      Set<String> duplicateOperations, Map<String, Boolean> terminal, Set<CardCopyId> copies,
+      boolean reservationCopies) throws SQLException {
+    boolean unresolved = false;
+    try (var query = connection.prepareStatement(
+        "SELECT operation_id, copy_uuid FROM " + table + " ORDER BY rowid");
+        var rows = query.executeQuery()) {
+      while (rows.next()) {
+        String operationId = rows.getString(1);
+        String rawCopyId = rows.getString(2);
+        String key = operationKey(operationId);
+        ReservationRow parent = reservations.get(key);
+        boolean linked = parent != null
+            && (reservationCopies || hasReservationCopy(operationId, rawCopyId));
+        boolean proven = linked && !duplicateOperations.contains(key) && terminal.getOrDefault(key, false);
+        CardCopyId copy = parseCopyId(rawCopyId);
+        if (copy != null && !proven) copies.add(copy);
+        if (!isUuid(operationId) || copy == null || !linked) unresolved = true;
+      }
+    }
+    return unresolved;
+  }
+
+  private boolean hasReservationCopy(String operationId, String copyId) throws SQLException {
+    if (operationId == null || copyId == null) return false;
+    try (var query = connection.prepareStatement(
+        "SELECT 1 FROM reservation_copies "
+            + "WHERE lower(operation_id) = lower(?) AND lower(copy_uuid) = lower(?)")) {
+      query.setString(1, operationId);
+      query.setString(2, copyId);
+      try (var rows = query.executeQuery()) {
+        return rows.next();
+      }
+    }
+  }
+
+  private static String operationKey(String operationId) {
+    return operationId == null ? null : operationId.toLowerCase(java.util.Locale.ROOT);
+  }
+
+  private static boolean isUuid(String value) {
+    if (value == null) return false;
+    try {
+      UUID.fromString(value);
+      return true;
+    } catch (RuntimeException exception) {
+      return false;
+    }
+  }
+
+  private static CardCopyId parseCopyId(String value) {
+    if (value == null) return null;
+    try {
+      return new CardCopyId(UUID.fromString(value));
+    } catch (RuntimeException exception) {
+      return null;
+    }
+  }
+
+  private record ReservationRow(String operationId, String ownerKind, String ownerUuid,
+      String status) {}
+
+  private record IdentityScan(Set<CardCopyId> copyIds, boolean unresolved) {}
+
 
 
   public void saveCopy(StoredCardCopy copy) {
@@ -816,7 +852,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     }
     List<CardCopyId> copies = new ArrayList<>();
     try (var query = connection.prepareStatement(
-        "SELECT copy_uuid FROM reservation_copies WHERE operation_id = ? ORDER BY rowid")) {
+        "SELECT copy_uuid FROM reservation_copies WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
       query.setString(1, rawOperationId);
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
@@ -842,7 +878,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     List<SerializedItemSnapshot> snapshots = new ArrayList<>();
     Set<CardCopyId> snapshotIds = new HashSet<>();
     try (var query = connection.prepareStatement(
-        "SELECT copy_uuid, item_bytes FROM escrow_items WHERE operation_id = ? ORDER BY rowid")) {
+        "SELECT copy_uuid, item_bytes FROM escrow_items WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
       query.setString(1, rawOperationId);
       try (var rows = query.executeQuery()) {
         while (rows.next()) {
@@ -860,7 +896,7 @@ public final class SqliteCardRepository implements CardCustodyJournal {
     if (!hasExactSnapshots(copies, snapshots)) return false;
     Set<CardCopyId> restored = new HashSet<>();
     try (var query = connection.prepareStatement(
-        "SELECT copy_uuid FROM reservation_restored WHERE operation_id = ? ORDER BY rowid")) {
+        "SELECT copy_uuid FROM reservation_restored WHERE lower(operation_id) = lower(?) ORDER BY rowid")) {
       query.setString(1, rawOperationId);
       try (var rows = query.executeQuery()) {
         while (rows.next()) {

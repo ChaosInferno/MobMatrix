@@ -400,6 +400,7 @@ public final class CardInventoryService implements CardCustodyPort {
   public synchronized boolean isReserved(CardCopyId copyId) {
     refreshDurableReservedCopyIds();
     refreshMalformedOperations();
+    if (unresolvedReservationIdentity) return true;
     if (durableReservedCopyIds.contains(copyId)) return true;
     for (PreparedOperation operation : operations.values()) {
       if (operation.status == OperationStatus.PREPARED || operation.status == OperationStatus.ESCROWED

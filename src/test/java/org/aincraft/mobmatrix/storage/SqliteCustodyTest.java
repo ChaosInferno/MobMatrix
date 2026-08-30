@@ -174,13 +174,63 @@ final class SqliteCustodyTest {
         update.executeUpdate();
       }
 
-      assertTrue(repository.reservedCopyIds().isEmpty());
+      assertTrue(repository.reservedCopyIds().contains(copy));
       assertTrue(repository.hasUnresolvedReservationIdentity());
     }
     Files.deleteIfExists(path);
   }
 
 
+
+  @Test
+  void orphanIdentityRowsAcrossCustodyTablesRemainProtected() throws Exception {
+    var path = Files.createTempFile("mobmatrix-orphan-identities", ".sqlite");
+    CopyOwner owner = CopyOwner.player(UUID.randomUUID());
+    CardCopyId reservationCopy = new CardCopyId(UUID.randomUUID());
+    CardCopyId escrowCopy = new CardCopyId(UUID.randomUUID());
+    CardCopyId restoredCopy = new CardCopyId(UUID.randomUUID());
+    CardCopyId recoveryCopy = new CardCopyId(UUID.randomUUID());
+    try (Database database = new Database(path)) {
+      SqliteCardRepository repository = new SqliteCardRepository(database);
+      try (var pragma = database.connection().createStatement()) {
+        pragma.execute("PRAGMA foreign_keys = OFF");
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO reservation_copies(operation_id, copy_uuid) VALUES (?, ?)")) {
+        insert.setString(1, "orphan-reservation");
+        insert.setString(2, reservationCopy.value().toString());
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO escrow_items(operation_id, copy_uuid, item_bytes) VALUES (?, ?, ?)")) {
+        insert.setString(1, "orphan-escrow");
+        insert.setString(2, escrowCopy.value().toString());
+        insert.setBytes(3, new byte[] {1});
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement(
+          "INSERT INTO reservation_restored(operation_id, copy_uuid) VALUES (?, ?)")) {
+        insert.setString(1, "orphan-restored");
+        insert.setString(2, restoredCopy.value().toString());
+        insert.executeUpdate();
+      }
+      try (var insert = database.connection().prepareStatement("""
+          INSERT INTO recovery_rows(operation_id, copy_uuid, owner_kind, owner_uuid, item_bytes, status)
+          VALUES (?, ?, 'PLAYER', ?, ?, 'PENDING')
+          """)) {
+        insert.setString(1, "orphan-recovery");
+        insert.setString(2, recoveryCopy.value().toString());
+        insert.setString(3, owner.playerId().toString());
+        insert.setBytes(4, new byte[] {2});
+        insert.executeUpdate();
+      }
+
+      assertEquals(Set.of(reservationCopy, escrowCopy, restoredCopy, recoveryCopy),
+          repository.reservedCopyIds());
+      assertTrue(repository.hasUnresolvedReservationIdentity());
+    }
+    Files.deleteIfExists(path);
+  }
 
   @Test
   void reservationsHaveUniqueCopiesAndDurableStatusTransitions() throws Exception {

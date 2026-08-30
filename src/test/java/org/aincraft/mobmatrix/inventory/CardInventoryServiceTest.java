@@ -238,6 +238,21 @@ final class CardInventoryServiceTest {
     public void addRecovery(UUID operationId, CopyOwner owner, SerializedItemSnapshot snapshot) {}
   }
   @Test
+  void unknownIdentityStateBlocksEveryCopyIdentity() {
+    CardCopyId copy = new CardCopyId(UUID.randomUUID());
+    CardCopyId unrelatedCopy = new CardCopyId(UUID.randomUUID());
+    FlakyIdentityJournal journal = new FlakyIdentityJournal(Set.of(copy));
+    CardInventoryService service = new CardInventoryService(
+        new CardItemCodec("test", "0123456789abcdef"), id -> null, journal);
+
+    assertTrue(service.isReserved(copy));
+    journal.unresolved = true;
+    assertTrue(service.isReserved(copy));
+    assertTrue(service.isReserved(unrelatedCopy));
+    assertTrue(service.reservedCopyIds().contains(copy));
+  }
+
+  @Test
   void identityRefreshRetainsPriorCopiesAndMarksUnknown() {
     CardCopyId copy = new CardCopyId(UUID.randomUUID());
     FlakyIdentityJournal journal = new FlakyIdentityJournal(Set.of(copy));
@@ -258,6 +273,7 @@ final class CardInventoryServiceTest {
   private static final class FlakyIdentityJournal implements CardCustodyJournal {
     private Set<CardCopyId> identities;
     private boolean failRefresh;
+    private boolean unresolved;
 
     private FlakyIdentityJournal(Set<CardCopyId> identities) {
       this.identities = Set.copyOf(identities);
@@ -267,6 +283,11 @@ final class CardInventoryServiceTest {
     public Set<CardCopyId> reservedCopyIds() {
       if (failRefresh) throw new IllegalStateException("identity refresh failed");
       return identities;
+    }
+
+    @Override
+    public boolean hasUnresolvedReservationIdentity() {
+      return unresolved;
     }
 
     @Override
@@ -292,6 +313,7 @@ final class CardInventoryServiceTest {
     @Override
     public void addRecovery(UUID operationId, CopyOwner owner, SerializedItemSnapshot snapshot) {}
   }
+
 
   @Test
   void hydratesDurableReservedIdentitiesWhenOperationIdIsMalformed() throws Exception {
