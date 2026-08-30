@@ -1969,3 +1969,13 @@ BUILD SUCCESSFUL in 2s
 
 Current fix29 implementation commits are `7a8d663` and `2518208`; the report commit is
 `f67cc87`. No formatter, linter, project-wide build, or project-wide test suite was run.
+
+The malformed recovery-owner regression is covered by test commit `edce20e` and passed with:
+
+```text
+cmd /c gradlew.bat test --tests org.aincraft.mobmatrix.storage.SqliteCustodyTest.malformedRecoveryOwnerBlocksTerminalReuseInJavaAndTrigger
+
+> Task :test
+BUILD SUCCESSFUL in 1s
+4 actionable tasks: 2 executed, 2 up-to-date
+```
