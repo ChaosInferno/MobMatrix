@@ -70,6 +70,17 @@ final class BotTurnIntegrationTest {
   }
 
   @Test
+  void botTurnWaitsForThreeSecondPacingWindow() {
+    MatchState state = started().withCurrentSeat(PlayerSeat.TWO);
+    Instant notBefore = START.plusSeconds(3);
+
+    assertFalse(MobMatrixPlugin.botTurnDue(state, notBefore, START.plusSeconds(2).plusMillis(999)));
+    assertTrue(MobMatrixPlugin.botTurnDue(state, notBefore, notBefore));
+    assertFalse(
+        MobMatrixPlugin.botTurnDue(state.withCurrentSeat(PlayerSeat.ONE), Instant.MIN, notBefore));
+  }
+
+  @Test
   void noLegalBotMoveWaitsUntilDeadlineThenReportsRejectedTimeout() {
     MatchState state = started();
     for (int index = 0; index < 5; index++) {

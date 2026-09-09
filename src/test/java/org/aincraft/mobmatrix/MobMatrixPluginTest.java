@@ -13,9 +13,12 @@ import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 import org.aincraft.mobmatrix.domain.CardCatalog;
+import org.aincraft.mobmatrix.domain.CardCopyId;
 import org.aincraft.mobmatrix.domain.CardDefinition;
 import org.aincraft.mobmatrix.domain.CardId;
 import org.aincraft.mobmatrix.domain.CardType;
+import org.aincraft.mobmatrix.domain.CopyOwner;
+import org.aincraft.mobmatrix.domain.HandCard;
 import org.aincraft.mobmatrix.domain.PlayerSeat;
 import org.aincraft.mobmatrix.inventory.CardItemCodec;
 import org.bukkit.Material;
@@ -90,6 +93,41 @@ final class MobMatrixPluginTest {
   }
 
   @Test
+  void ownedCardsKeepsOneCopyPerCatalogCard() throws Exception {
+    Assumptions.assumeTrue(
+        paperAvailable(), "Paper API item registry requires a running Paper server");
+    UUID playerId = UUID.randomUUID();
+    CardDefinition first =
+        new CardDefinition(new CardId(1), "No. 1", "First", 1, CardType.NORMAL, 1, 1, 1, 1, 100);
+    CardDefinition second =
+        new CardDefinition(new CardId(2), "No. 2", "Second", 1, CardType.NORMAL, 1, 1, 1, 1, 100);
+    MobMatrixPlugin plugin =
+        pluginWithCatalog(new CardCatalog(List.of(first, second), "duplicate-types"));
+    CardItemCodec codec = new CardItemCodec("test", "stable-server-secret");
+    setField(plugin, "codec", codec);
+    ItemStack firstCopy =
+        codec.create(first, new CardCopyId(new UUID(0L, 1L)), CopyOwner.player(playerId));
+    ItemStack duplicateFirst =
+        codec.create(first, new CardCopyId(new UUID(0L, 2L)), CopyOwner.player(playerId));
+    ItemStack secondCopy =
+        codec.create(second, new CardCopyId(new UUID(0L, 3L)), CopyOwner.player(playerId));
+    PlayerStub player = playerStub(playerId, firstCopy, duplicateFirst, secondCopy);
+
+    assertEquals(
+        List.of(new CardId(1), new CardId(2)),
+        plugin.ownedCards(player.player()).stream().map(HandCard::cardId).toList());
+  }
+
+  @Test
+  void resultScreenClosureWaitsFiveSeconds() {
+    Instant endedAt = Instant.parse("2026-01-01T00:00:00Z");
+
+    assertTrue(
+        !MobMatrixPlugin.resultScreenCloseDue(endedAt, endedAt.plusSeconds(4).plusMillis(999)));
+    assertTrue(MobMatrixPlugin.resultScreenCloseDue(endedAt, endedAt.plusSeconds(5)));
+  }
+
+  @Test
   void ignoresMalformedPhysicalItemsWhileReadingOwnedCards() throws Exception {
     Assumptions.assumeTrue(
         paperAvailable(), "Paper API item registry requires a running Paper server");
@@ -138,16 +176,22 @@ final class MobMatrixPluginTest {
         "single");
   }
 
-  private static PlayerStub playerStub(UUID playerId, ItemStack item) {
+  private static PlayerStub playerStub(UUID playerId, ItemStack... items) {
+    ItemStack[] inventoryItems = items.clone();
     Inventory inventory =
         (Inventory)
             Proxy.newProxyInstance(
                 MobMatrixPluginTest.class.getClassLoader(),
                 new Class<?>[] {Inventory.class},
                 (proxy, method, args) -> {
-                  if (method.getName().equals("getStorageContents")) return new ItemStack[] {item};
-                  if (method.getName().equals("getSize")) return 1;
-                  if (method.getName().equals("getItem")) return item;
+                  if (method.getName().equals("getStorageContents")) {
+                    return inventoryItems.clone();
+                  }
+                  if (method.getName().equals("getSize")) return inventoryItems.length;
+                  if (method.getName().equals("getItem")) {
+                    int slot = (Integer) args[0];
+                    return slot >= 0 && slot < inventoryItems.length ? inventoryItems[slot] : null;
+                  }
                   return defaultValue(method.getReturnType());
                 });
     org.bukkit.entity.Player player =

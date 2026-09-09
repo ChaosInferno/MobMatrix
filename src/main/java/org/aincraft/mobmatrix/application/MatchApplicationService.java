@@ -23,6 +23,7 @@ import org.aincraft.mobmatrix.domain.CopyOwner;
 import org.aincraft.mobmatrix.domain.MatchCommand;
 import org.aincraft.mobmatrix.domain.MatchEngine;
 import org.aincraft.mobmatrix.domain.MatchErrorCode;
+import org.aincraft.mobmatrix.domain.MatchId;
 import org.aincraft.mobmatrix.domain.MatchRejection;
 import org.aincraft.mobmatrix.domain.MatchState;
 import org.aincraft.mobmatrix.domain.PlayerSeat;
@@ -272,6 +273,36 @@ public final class MatchApplicationService {
 
   public synchronized ReturnResult settle(String operationId) {
     return settle(UUID.fromString(Objects.requireNonNull(operationId)));
+  }
+
+  /**
+   * Returns the supplied player custody operations and removes the durable match row after every
+   * return completes. Repeating the call is safe because custody returns and deletion are
+   * idempotent.
+   */
+  public synchronized CancelResult cancel(MatchId matchId, List<UUID> operationIds) {
+    Objects.requireNonNull(matchId, "match id is required");
+    List<UUID> uniqueOperations =
+        Objects.requireNonNull(operationIds, "operation ids are required").stream()
+            .map(operation -> Objects.requireNonNull(operation, "operation id is required"))
+            .distinct()
+            .toList();
+    List<ReturnResult> settlements = new ArrayList<>(uniqueOperations.size());
+    for (UUID operationId : uniqueOperations) settlements.add(settle(operationId));
+    ReturnResult incomplete =
+        settlements.stream()
+            .filter(result -> !result.accepted() || !result.complete())
+            .findFirst()
+            .orElse(null);
+    if (incomplete != null) {
+      return CancelResult.failed(matchId, settlements, incomplete.failure());
+    }
+    try {
+      matches.delete(matchId);
+      return CancelResult.cancelled(matchId, settlements);
+    } catch (RuntimeException exception) {
+      return CancelResult.failed(matchId, settlements, Failure.DATABASE_ERROR);
+    }
   }
 
   /**
@@ -1174,6 +1205,30 @@ public final class MatchApplicationService {
 
     public boolean accepted() {
       return active;
+    }
+  }
+
+  public record CancelResult(MatchId matchId, List<ReturnResult> settlements, Failure failure) {
+    public CancelResult {
+      Objects.requireNonNull(matchId, "match id is required");
+      settlements = List.copyOf(Objects.requireNonNull(settlements, "settlements are required"));
+      Objects.requireNonNull(failure, "failure is required");
+    }
+
+    static CancelResult cancelled(MatchId matchId, List<ReturnResult> settlements) {
+      return new CancelResult(matchId, settlements, Failure.NONE);
+    }
+
+    static CancelResult failed(MatchId matchId, List<ReturnResult> settlements, Failure failure) {
+      return new CancelResult(matchId, settlements, failure);
+    }
+
+    public boolean cancelled() {
+      return failure == Failure.NONE;
+    }
+
+    public boolean complete() {
+      return cancelled() && settlements.stream().allMatch(ReturnResult::complete);
     }
   }
 

@@ -317,7 +317,9 @@ public final class MatchStateSnapshotCodec {
         }
       }
       for (CardCopy copy : activeCopies.values()) {
-        if (copy.owner().isHouse() && !offeringCopies.containsKey(copy.copyId())) {
+        if (rules.contains(Rule.DRAFT)
+            && copy.owner().isHouse()
+            && !offeringCopies.containsKey(copy.copyId())) {
           throw new IllegalArgumentException("active house copy is outside draft offerings");
         }
       }
@@ -420,7 +422,7 @@ public final class MatchStateSnapshotCodec {
       Map<UUID, PlayerSeat> originalSeatByOwner = new HashMap<>();
       for (var entry : activeCopies.entrySet()) {
         CardCopy copy = entry.getValue();
-        if (!copy.owner().isPlayer()) continue;
+        if (draft && copy.owner().isHouse()) continue;
         expectedOriginalOwners.add(copy.copyId());
         PlayerSeat originalSeat = originalOwners.get(copy.copyId());
         PlayerSeat priorSeat =

@@ -13,6 +13,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.aincraft.mobmatrix.application.CardCustodyPort.OperationStatus;
 import org.aincraft.mobmatrix.domain.CardCatalog;
 import org.aincraft.mobmatrix.domain.CardCopy;
 import org.aincraft.mobmatrix.domain.CardCopyId;
@@ -54,6 +55,72 @@ final class MatchApplicationServiceTest {
 
     service.settle(operation);
     assertEquals(List.of("prepare", "escrow", "return"), custody.calls);
+  }
+
+  @Test
+  void cancellationReturnsBothReservedOperationsDeletesMatchAndIsIdempotent() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = copies();
+    UUID oneOperation = UUID.randomUUID();
+    UUID twoOperation = UUID.randomUUID();
+    MatchEngine.StartMatch start = match("cancel", oneOwner, oneCopies, twoOwner, twoCopies);
+    RecordingCustody custody = new RecordingCustody();
+    InMemoryMatchRepository repository = new InMemoryMatchRepository();
+    MatchApplicationService service = new MatchApplicationService(custody, repository);
+    assertTrue(
+        service
+            .start(
+                new MatchApplicationService.StartMatchRequest(
+                    start, oneOwner, oneCopies, oneOperation, twoOwner, twoCopies, twoOperation))
+            .accepted());
+
+    MatchApplicationService.CancelResult first =
+        service.cancel(start.matchId(), List.of(oneOperation, twoOperation));
+
+    assertTrue(first.cancelled());
+    assertTrue(first.complete());
+    assertEquals(OperationStatus.RETURNED, custody.statuses.get(oneOperation));
+    assertEquals(OperationStatus.RETURNED, custody.statuses.get(twoOperation));
+    assertTrue(repository.activeMatches().isEmpty());
+
+    MatchApplicationService.CancelResult repeated =
+        service.cancel(start.matchId(), List.of(oneOperation, twoOperation));
+
+    assertTrue(repeated.cancelled());
+    assertTrue(repeated.complete());
+    assertEquals(List.of("prepare", "escrow", "return"), custody.calls);
+  }
+
+  @Test
+  void cancellationRetainsMatchWhenCardReturnIsPending() {
+    CopyOwner oneOwner = CopyOwner.player(UUID.randomUUID());
+    CopyOwner twoOwner = CopyOwner.player(UUID.randomUUID());
+    List<CardCopyId> oneCopies = copies();
+    List<CardCopyId> twoCopies = copies();
+    UUID oneOperation = UUID.randomUUID();
+    UUID twoOperation = UUID.randomUUID();
+    MatchEngine.StartMatch start =
+        match("cancel-pending", oneOwner, oneCopies, twoOwner, twoCopies);
+    RecordingCustody custody = new RecordingCustody(false, true);
+    InMemoryMatchRepository repository = new InMemoryMatchRepository();
+    MatchApplicationService service = new MatchApplicationService(custody, repository);
+    assertTrue(
+        service
+            .start(
+                new MatchApplicationService.StartMatchRequest(
+                    start, oneOwner, oneCopies, oneOperation, twoOwner, twoCopies, twoOperation))
+            .accepted());
+
+    MatchApplicationService.CancelResult result =
+        service.cancel(start.matchId(), List.of(oneOperation, twoOperation));
+
+    assertTrue(!result.cancelled());
+    assertTrue(!result.complete());
+    assertEquals(
+        List.of(start.matchId()),
+        repository.activeMatches().stream().map(MatchRepository.MatchSnapshot::matchId).toList());
   }
 
   @Test
@@ -1722,6 +1789,7 @@ final class MatchApplicationServiceTest {
 
   private static final class RecordingCustody implements CardCustodyPort {
     private final boolean rejectPrepare;
+    private final boolean pendingReturn;
     private final Map<UUID, Binding> matchBindings = new java.util.HashMap<>();
     private final Map<UUID, OperationStatus> statuses = new java.util.HashMap<>();
 
@@ -1744,7 +1812,12 @@ final class MatchApplicationServiceTest {
     }
 
     private RecordingCustody(boolean rejectPrepare) {
+      this(rejectPrepare, false);
+    }
+
+    private RecordingCustody(boolean rejectPrepare, boolean pendingReturn) {
       this.rejectPrepare = rejectPrepare;
+      this.pendingReturn = pendingReturn;
     }
 
     @Override
@@ -1789,6 +1862,11 @@ final class MatchApplicationServiceTest {
     @Override
     public ReturnResult returnCopies(UUID operationId) {
       if (!calls.contains("return")) calls.add("return");
+      if (pendingReturn) {
+        Binding binding = matchBindings.get(operationId);
+        List<CardCopyId> expected = binding == null ? List.of() : binding.copyIds();
+        return ReturnResult.pending(operationId, expected, List.of(), expected, expected);
+      }
       statuses.put(operationId, OperationStatus.RETURNED);
       return ReturnResult.returned(operationId, List.of());
     }

@@ -24,6 +24,7 @@ import java.util.UUID;
 import org.aincraft.mobmatrix.application.CardCustodyPort;
 import org.aincraft.mobmatrix.application.MatchApplicationService;
 import org.aincraft.mobmatrix.application.MatchApplicationService.ApplyResult;
+import org.aincraft.mobmatrix.application.MatchApplicationService.CancelResult;
 import org.aincraft.mobmatrix.application.MatchApplicationService.MatchStartResult;
 import org.aincraft.mobmatrix.application.MatchRepository;
 import org.aincraft.mobmatrix.application.MatchView;
@@ -73,6 +74,9 @@ public final class MobMatrixPlugin extends JavaPlugin {
   private static final int EX_CARD_COUNT = 15;
   private static final int DEFAULT_MAX_GIVE = 64;
   private static final int MAX_PENDING_CHALLENGES = 128;
+  private static final long BOT_DELAY_MILLIS = 3_000L;
+  private static final long RESULT_SCREEN_CLOSE_MILLIS = 5_000L;
+  private static final long RESULT_SCREEN_CLOSE_TICKS = 100L;
   private static final String DEFAULT_SERVER_SECRET =
       "change-this-to-a-stable-random-secret-at-least-16-bytes";
 
@@ -155,6 +159,10 @@ public final class MobMatrixPlugin extends JavaPlugin {
   public void onDisable() {
     if (botTask != null) botTask.cancel();
     botTask = null;
+    for (ActiveMatch active : activeMatches.values()) {
+      active.botNotBefore = null;
+      active.cancelResultScreenCloseTasks();
+    }
     for (Player player : Bukkit.getOnlinePlayers()) player.closeInventory();
     closeResources();
   }
@@ -433,7 +441,8 @@ public final class MobMatrixPlugin extends JavaPlugin {
 
   public List<HandCard> ownedCards(Player player) {
     Objects.requireNonNull(player, "player is required");
-    Map<CardCopyId, HandCard> found = new HashMap<>();
+    Map<CardId, HandCard> found = new HashMap<>();
+    Set<CardCopyId> physicalIds = new HashSet<>();
     for (int slot = 0; slot < player.getInventory().getSize(); slot++) {
       ItemStack item = player.getInventory().getItem(slot);
       if (item == null) continue;
@@ -443,6 +452,7 @@ public final class MobMatrixPlugin extends JavaPlugin {
           .data()
           .owner()
           .equals(org.aincraft.mobmatrix.domain.CopyOwner.player(player.getUniqueId()))) continue;
+      if (!physicalIds.add(result.data().copyId())) return List.of();
       CardDefinition definition;
       try {
         definition = catalog().require(result.data().catalogId());
@@ -454,7 +464,7 @@ public final class MobMatrixPlugin extends JavaPlugin {
               new CardCopy(
                   result.data().copyId(), result.data().catalogId(), result.data().owner()),
               definition);
-      if (found.put(result.data().copyId(), card) != null) return List.of();
+      found.putIfAbsent(result.data().catalogId(), card);
     }
     return found.values().stream()
         .sorted(Comparator.comparing(card -> card.copyId().value()))
@@ -624,10 +634,47 @@ public final class MobMatrixPlugin extends JavaPlugin {
   }
 
   public ChallengeResult cancel(Player player) {
+    Objects.requireNonNull(player, "player is required");
+    ActiveMatch active = activeMatch(player.getUniqueId());
+    if (active != null) return cancelActiveMatch(player, active);
+
     PendingChallenge pending = outgoing(player.getUniqueId());
     if (pending == null) return new ChallengeResult(false, "You have no outgoing challenge.");
     pendingChallenges.remove(pending.id);
     return new ChallengeResult(true, "Challenge cancelled.");
+  }
+
+  private ActiveMatch activeMatch(UUID playerId) {
+    return activeMatches.values().stream()
+        .filter(match -> playerId.equals(match.onePlayer) || playerId.equals(match.twoPlayer))
+        .findFirst()
+        .orElse(null);
+  }
+
+  private ChallengeResult cancelActiveMatch(Player player, ActiveMatch active) {
+    List<UUID> playerOperations = new ArrayList<>(2);
+    if (!active.state.rules().has(Rule.DRAFT)) {
+      playerOperations.add(active.oneOperation);
+      if (!active.bot) playerOperations.add(active.twoOperation);
+    }
+    CancelResult result = application().cancel(active.state.matchId(), playerOperations);
+    if (!result.cancelled() || !result.complete()) {
+      return new ChallengeResult(
+          false,
+          "Match cancellation is waiting for card recovery. Free inventory space and try again.");
+    }
+
+    active.botNotBefore = null;
+    active.cancelResultScreenCloseTasks();
+    activeMatches.remove(active.state.matchId());
+    UUID opponentId =
+        player.getUniqueId().equals(active.onePlayer) ? active.twoPlayer : active.onePlayer;
+    Player opponent = opponentId == null ? null : Bukkit.getPlayer(opponentId);
+    if (opponent != null) {
+      closeMatch(opponent);
+      opponent.sendMessage("Your opponent cancelled the match. Your reserved cards were returned.");
+    }
+    return new ChallengeResult(true, "Match cancelled. Your reserved cards were returned.");
   }
 
   public ChallengeResult startBot(Player player) {
@@ -761,6 +808,21 @@ public final class MobMatrixPlugin extends JavaPlugin {
         && !now.isBefore(deadline);
   }
 
+  static boolean botTurnDue(MatchState state, Instant notBefore, Instant now) {
+    Objects.requireNonNull(state, "state is required");
+    Objects.requireNonNull(now, "time is required");
+    return !state.isFinished()
+        && state.currentSeat() == PlayerSeat.TWO
+        && notBefore != null
+        && !now.isBefore(notBefore);
+  }
+
+  static boolean resultScreenCloseDue(Instant endedAt, Instant now) {
+    Objects.requireNonNull(endedAt, "ended time is required");
+    Objects.requireNonNull(now, "time is required");
+    return !now.isBefore(endedAt.plusMillis(RESULT_SCREEN_CLOSE_MILLIS));
+  }
+
   private void timeoutDisconnectedIfDue(ActiveMatch active, Instant now) {
     if (active.bot || active.state.isFinished()) return;
     PlayerSeat seat = active.state.currentSeat();
@@ -795,9 +857,7 @@ public final class MobMatrixPlugin extends JavaPlugin {
   private void tickBots() {
     Instant now = Instant.now();
     for (ActiveMatch active : List.copyOf(activeMatches.values())) {
-      if (active.bot
-          && !active.state.isFinished()
-          && active.state.currentSeat() == PlayerSeat.TWO) {
+      if (active.bot && botTurnDue(active.state, active.botNotBefore, now)) {
         applyBotTurn(active, now);
         if (activeMatches.containsKey(active.state.matchId()) && !active.state.isFinished()) {
           refreshMatch(active);
@@ -809,11 +869,13 @@ public final class MobMatrixPlugin extends JavaPlugin {
   }
 
   private void applyBotTurn(ActiveMatch active, Instant now) {
+    if (!botTurnDue(active.state, active.botNotBefore, now)) return;
     BotTurnResult result =
         advanceBotTurn(
             active.state, bot, now, command -> application().apply(active.state, command));
     if (result.applied()) {
       active.state = result.state();
+      active.botNotBefore = active.state.isFinished() ? null : now.plusMillis(BOT_DELAY_MILLIS);
       finishIfNeeded(active);
     } else if (!result.waiting() && result.result() != null) {
       getLogger()
@@ -822,6 +884,14 @@ public final class MobMatrixPlugin extends JavaPlugin {
                   + active.state.matchId()
                   + ": "
                   + result.result().failure());
+    }
+  }
+
+  private void armBotDelay(ActiveMatch active, Instant now) {
+    if (active.bot && !active.state.isFinished() && active.state.currentSeat() == PlayerSeat.TWO) {
+      active.botNotBefore = now.plusMillis(BOT_DELAY_MILLIS);
+    } else if (!active.bot || active.state.isFinished()) {
+      active.botNotBefore = null;
     }
   }
 
@@ -861,6 +931,16 @@ public final class MobMatrixPlugin extends JavaPlugin {
 
   private void finishIfNeeded(ActiveMatch active) {
     if (!active.state.isFinished()) return;
+    active.botNotBefore = null;
+    if (active.resultEndedAt == null) {
+      active.resultEndedAt = Instant.now();
+      refreshMatch(active);
+    } else {
+      openMissingResultScreens(active);
+    }
+    scheduleResultScreenClose(active, PlayerSeat.ONE, active.oneScreen);
+    scheduleResultScreenClose(active, PlayerSeat.TWO, active.twoScreen);
+
     boolean playerCopies = !active.state.rules().has(Rule.DRAFT);
     CardCustodyPort.ReturnResult one =
         playerCopies
@@ -889,6 +969,43 @@ public final class MobMatrixPlugin extends JavaPlugin {
     }
   }
 
+  private void openMissingResultScreens(ActiveMatch active) {
+    Player one = active.onePlayer == null ? null : Bukkit.getPlayer(active.onePlayer);
+    if (one != null && active.oneScreen == null) openMatch(one, active.state, PlayerSeat.ONE);
+    Player two = active.twoPlayer == null ? null : Bukkit.getPlayer(active.twoPlayer);
+    if (two != null && active.twoScreen == null) openMatch(two, active.state, PlayerSeat.TWO);
+  }
+
+  private void scheduleResultScreenClose(ActiveMatch active, PlayerSeat seat, MatchScreen screen) {
+    if (screen == null || active.resultScreenCloseTask(seat) != null) return;
+    scheduleResultScreenClose(
+        active,
+        seat,
+        screen,
+        Objects.requireNonNull(active.resultEndedAt),
+        RESULT_SCREEN_CLOSE_TICKS);
+  }
+
+  private void scheduleResultScreenClose(
+      ActiveMatch active, PlayerSeat seat, MatchScreen screen, Instant endedAt, long delayTicks) {
+    BukkitTask task =
+        Bukkit.getScheduler()
+            .runTaskLater(
+                this,
+                () -> {
+                  if (active.resultScreen(seat) != screen) return;
+                  if (!resultScreenCloseDue(endedAt, Instant.now())) {
+                    scheduleResultScreenClose(active, seat, screen, endedAt, 1L);
+                    return;
+                  }
+                  screen.closeView();
+                  active.clearResultScreen(seat, screen);
+                  active.clearResultScreenCloseTask(seat);
+                },
+                delayTicks);
+    active.setResultScreenCloseTask(seat, task);
+  }
+
   public void handlePlayerQuit(Player player) {
     closeMatch(player);
     selectedDecks.remove(player.getUniqueId());
@@ -897,6 +1014,7 @@ public final class MobMatrixPlugin extends JavaPlugin {
   private void timeoutDisconnected(MatchId matchId, PlayerSeat seat) {
     ActiveMatch active = activeMatches.get(matchId);
     if (active == null || active.state.isFinished() || active.state.currentSeat() != seat) return;
+    Instant now = Instant.now();
     MatchCommand.Timeout timeout =
         new MatchCommand.Timeout(
             seat,
@@ -904,15 +1022,16 @@ public final class MobMatrixPlugin extends JavaPlugin {
             UUID.nameUUIDFromBytes(
                 ("disconnect-timeout:" + matchId.value() + ":" + active.state.revision())
                     .getBytes(StandardCharsets.UTF_8)),
-            Instant.now());
+            now);
     ApplyResult result = application().apply(active.state, timeout);
     if (result.accepted()) {
       active.state = result.transition().state();
+      armBotDelay(active, now);
       finishIfNeeded(active);
       if (activeMatches.containsKey(matchId)
           && active.bot
-          && active.state.currentSeat() == PlayerSeat.TWO) {
-        applyBotTurn(active, Instant.now());
+          && botTurnDue(active.state, active.botNotBefore, now)) {
+        applyBotTurn(active, now);
       }
       if (activeMatches.containsKey(matchId) && !active.state.isFinished()) refreshMatch(active);
     }
@@ -965,8 +1084,13 @@ public final class MobMatrixPlugin extends JavaPlugin {
         MatchView.from(
             org.aincraft.mobmatrix.domain.MatchProjection.forViewer(state, seat, Instant.now()),
             state.rules());
-    MapGui.get()
-        .open(player, new MatchScreen(view, seat, intent -> handleMatchIntent(player, intent)));
+    MatchScreen screen = new MatchScreen(view, seat, intent -> handleMatchIntent(player, intent));
+    if (seat == PlayerSeat.ONE) {
+      active.oneScreen = screen;
+    } else {
+      active.twoScreen = screen;
+    }
+    MapGui.get().open(player, screen);
   }
 
   private record LocatedItem(int slot, ItemStack item) {}
@@ -1017,6 +1141,7 @@ public final class MobMatrixPlugin extends JavaPlugin {
       player.sendMessage("That is not your turn.");
       return;
     }
+    Instant now = Instant.now();
     ApplyResult applied = application().apply(active.state, command);
     if (!applied.accepted()) {
       player.sendMessage("Move rejected: " + applied.failure());
@@ -1026,11 +1151,12 @@ public final class MobMatrixPlugin extends JavaPlugin {
       return;
     }
     active.state = applied.transition().state();
+    armBotDelay(active, now);
     finishIfNeeded(active);
     if (activeMatches.containsKey(active.state.matchId())
         && active.bot
-        && active.state.currentSeat() == PlayerSeat.TWO) {
-      applyBotTurn(active, Instant.now());
+        && botTurnDue(active.state, active.botNotBefore, now)) {
+      applyBotTurn(active, now);
     }
     if (activeMatches.containsKey(active.state.matchId()) && !active.state.isFinished()) {
       refreshMatch(active);
@@ -1078,6 +1204,12 @@ public final class MobMatrixPlugin extends JavaPlugin {
     private final UUID oneOperation;
     private final UUID twoOperation;
     private final boolean bot;
+    private Instant botNotBefore;
+    private Instant resultEndedAt;
+    private MatchScreen oneScreen;
+    private MatchScreen twoScreen;
+    private BukkitTask oneResultScreenCloseTask;
+    private BukkitTask twoResultScreenCloseTask;
 
     private ActiveMatch(
         MatchState state,
@@ -1092,6 +1224,45 @@ public final class MobMatrixPlugin extends JavaPlugin {
       this.oneOperation = Objects.requireNonNull(oneOperation);
       this.twoOperation = Objects.requireNonNull(twoOperation);
       this.bot = bot;
+      this.botNotBefore =
+          bot && state.currentSeat() == PlayerSeat.TWO
+              ? Instant.now().plusMillis(BOT_DELAY_MILLIS)
+              : null;
+    }
+
+    private MatchScreen resultScreen(PlayerSeat seat) {
+      return seat == PlayerSeat.ONE ? oneScreen : twoScreen;
+    }
+
+    private void clearResultScreen(PlayerSeat seat, MatchScreen screen) {
+      if (seat == PlayerSeat.ONE) {
+        if (oneScreen == screen) oneScreen = null;
+      } else if (twoScreen == screen) {
+        twoScreen = null;
+      }
+    }
+
+    private BukkitTask resultScreenCloseTask(PlayerSeat seat) {
+      return seat == PlayerSeat.ONE ? oneResultScreenCloseTask : twoResultScreenCloseTask;
+    }
+
+    private void setResultScreenCloseTask(PlayerSeat seat, BukkitTask task) {
+      if (seat == PlayerSeat.ONE) {
+        oneResultScreenCloseTask = task;
+      } else {
+        twoResultScreenCloseTask = task;
+      }
+    }
+
+    private void clearResultScreenCloseTask(PlayerSeat seat) {
+      setResultScreenCloseTask(seat, null);
+    }
+
+    private void cancelResultScreenCloseTasks() {
+      if (oneResultScreenCloseTask != null) oneResultScreenCloseTask.cancel();
+      if (twoResultScreenCloseTask != null) twoResultScreenCloseTask.cancel();
+      oneResultScreenCloseTask = null;
+      twoResultScreenCloseTask = null;
     }
   }
 
